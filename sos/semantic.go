@@ -20,7 +20,7 @@ import (
 const (
 	semanticAnalysisVersion = 5
 	semanticRegistryVersion = "4"
-	semanticPromptVersion   = "2"
+	semanticPromptVersion   = "3"
 	// semanticMinConfidence is the conservative acceptance policy for model
 	// selections. It is evidence, not a correctness guarantee.
 	semanticMinConfidence   = 0.8
@@ -428,8 +428,8 @@ func (a *semanticAnalysis) chooseInterpretation(n *semNode, cands []semCandidate
 	labels := map[string]any{"reject": "None of the listed meanings matches the sentence."}
 	views := make([]map[string]any, 0, len(cands))
 	for _, c := range cands {
-		labels[c.id] = c.meaning
-		views = append(views, map[string]any{"id": c.id, "meaning": c.meaning, "canonical": strings.Join(indentApply(n.line.indent, c.lines), "\n"), "matches": c.matches})
+		labels[c.id] = maskSemanticStringLiterals(c.meaning)
+		views = append(views, map[string]any{"id": c.id, "meaning": maskSemanticStringLiterals(c.meaning), "canonical": maskSemanticStringLiterals(strings.Join(indentApply(n.line.indent, c.lines), "\n")), "matches": c.matches})
 	}
 	visible := make([]map[string]any, 0, len(scope.collections))
 	for _, name := range scope.collectionNames() {
@@ -437,7 +437,7 @@ func (a *semanticAnalysis) chooseInterpretation(n *semNode, cands []semCandidate
 	}
 	state := map[string]any{
 		"role":                "SysOneScript source interpretation",
-		"sentence":            n.text,
+		"sentence":            maskSemanticStringLiterals(n.text),
 		"line":                n.line.num,
 		"visible_collections": visible,
 		"visible_bindings":    scope.bindings,
@@ -497,6 +497,36 @@ func (a *semanticAnalysis) chooseInterpretation(n *semNode, cands []semCandidate
 	a.diagAt(n.line.num, "provider selected unknown candidate %q", value)
 	a.stopped = true
 	return semCandidate{}, 0, false
+}
+
+// maskSemanticStringLiterals keeps already-tokenized data out of the model's
+// grammatical decision. The host retains the original candidate and restores
+// it after selection; Jev sees only stable, typed placeholders.
+func maskSemanticStringLiterals(text string) string {
+	var out strings.Builder
+	literal := 0
+	for i := 0; i < len(text); {
+		if text[i] != '"' {
+			out.WriteByte(text[i])
+			i++
+			continue
+		}
+		literal++
+		out.WriteString(fmt.Sprintf("<text-literal-%d>", literal))
+		i++
+		for i < len(text) {
+			if text[i] == '\\' && i+1 < len(text) {
+				i += 2
+				continue
+			}
+			if text[i] == '"' {
+				i++
+				break
+			}
+			i++
+		}
+	}
+	return out.String()
 }
 
 func semanticChoiceInstructions() string {

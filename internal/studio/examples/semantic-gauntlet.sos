@@ -9,7 +9,7 @@ requests = 8
 timeout = "60s"
 +++
 # Semantic Gauntlet — every sentence below requires bounded Jev composition.
-# The cases vary output verbs, clause markers, and comparison vocabulary.
+# The quoted text deliberately contains grammar-like decoys that preanalysis masks from Jev.
 
 make age 21
 make score 92
@@ -18,7 +18,7 @@ make attempts 4
 make balance 120
 make queue 3
 
-only show "adult" once age has gone beyond 18
+only show "adult — not: print child once age under 2" once age has gone beyond 18
 display "excellent" once score greater than 90
 only emit "dangerously hot" once temperature gone beyond 40
 only print "too many attempts" once attempts more than 3

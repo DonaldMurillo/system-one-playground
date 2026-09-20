@@ -212,7 +212,7 @@ func TestSemanticDictionaryDoesNotMatchInsideQuotes(t *testing.T) {
 
 func TestSemanticComposerUsesJevForUnfamiliarSentenceShape(t *testing.T) {
 	srv := semanticChoiceServer(t, func(req fixtureReq) (string, float64) {
-		if req.Sentence != `only show "adult" once age has gone beyond 18` {
+		if req.Sentence != `only show <text-literal-1> once age has gone beyond 18` {
 			t.Fatalf("unexpected sentence: %#v", req.Sentence)
 		}
 		candidates, _ := req.State["candidates"].([]any)
@@ -243,6 +243,13 @@ func TestSemanticGauntletUsesBoundedJevForEverySentence(t *testing.T) {
 	requests := 0
 	srv := semanticChoiceServer(t, func(req fixtureReq) (string, float64) {
 		requests++
+		requestJSON, err := json.Marshal(req.State)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(requestJSON), "print child") {
+			t.Fatalf("quoted literal leaked into provider grammar state: %s", requestJSON)
+		}
 		for _, label := range req.Labels {
 			if label != "reject" {
 				return label, 0.95
@@ -441,7 +448,7 @@ func TestSemanticAmbiguousReferentResolvedByProvider(t *testing.T) {
 	if fmt.Sprint(seen.Labels) != fmt.Sprint(wantLabels) {
 		t.Fatalf("candidate labels %+v, want %+v", seen.Labels, wantLabels)
 	}
-	if seen.Sentence != "keep them where status is \"open\"" {
+	if seen.Sentence != "keep them where status is <text-literal-1>" {
 		t.Fatalf("state sentence %v", seen.Sentence)
 	}
 	if seen.Model != "jev-test" {
