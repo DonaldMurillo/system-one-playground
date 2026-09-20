@@ -1,0 +1,106 @@
+{
+  "name": "SysOneScript",
+  "scopeName": "source.sos",
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#numbers"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#types"
+    },
+    {
+      "include": "#judgments"
+    },
+    {
+      "include": "#literals"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.number-sign.sos",
+          "match": "#.*$"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.sos",
+          "begin": "\"",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.begin.sos"
+            }
+          },
+          "end": "\"|$",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.sos"
+            }
+          },
+          "patterns": [
+            {
+              "name": "constant.character.escape.sos",
+              "match": "\\\\."
+            }
+          ]
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.sos",
+          "match": "\\b\\d+(?:\\.\\d+)?(?:ms|[hms])?\\b"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.sos",
+          "match": "\\b(?:evaluate|criterion|package|import|export|argument|option|switch|to|call|return|while|repeat|set|emit|judge|score|command|describe|expect|remember|find|read|require|keep|sort|group|create|make|assign|when|take|classify|append|save|show|for|map|stop|print)\\b"
+        },
+        {
+          "name": "keyword.operator.sos",
+          "match": "\\b(?:each|in|as|into|on|called|with|where|by|from|under|named|matching|if|missing|numbered|otherwise|and|or|not|of|count|first|last|items|default|choices|is|ascending|descending|existing|off|at|most|running|collecting|failures|rethrow)\\b"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "storage.type.sos",
+          "match": "\\b(?:text|timestamp|duration|folder|list|json|table|number|integer|boolean|switch)\\b"
+        }
+      ]
+    },
+    "judgments": {
+      "patterns": [
+        {
+          "name": "support.function.sos",
+          "match": "\\b(?:jev|classify|judge|confidence|value|p_yes|noul|choice|score)\\b"
+        }
+      ]
+    },
+    "literals": {
+      "patterns": [
+        {
+          "name": "constant.language.sos",
+          "match": "\\b(?:true|false|null|now)\\b"
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,174 @@
+name: Release SysOneScript
+
+on:
+  push:
+    tags:
+      - 'vscode-v*'
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: sysonescript-release
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Check extension
+        run: pnpm --dir vscode check
+
+      - name: Test extension
+        run: pnpm --dir vscode test
+
+      - name: Verify tag matches extension version
+        run: |
+          expected="${GITHUB_REF_NAME#vscode-v}"
+          actual="$(node -p "require('./vscode/package.json').version")"
+          test "$expected" = "$actual" || {
+            echo "Tag version $expected does not match package version $actual"
+            exit 1
+          }
+
+  build:
+    needs: verify
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: darwin-arm64
+            goos: darwin
+            goarch: arm64
+            binary: sos
+            archive: tar.gz
+          - target: darwin-x64
+            goos: darwin
+            goarch: amd64
+            binary: sos
+            archive: tar.gz
+          - target: linux-arm64
+            goos: linux
+            goarch: arm64
+            binary: sos
+            archive: tar.gz
+          - target: linux-x64
+            goos: linux
+            goarch: amd64
+            binary: sos
+            archive: tar.gz
+          - target: win32-arm64
+            goos: windows
+            goarch: arm64
+            binary: sos.exe
+            archive: zip
+          - target: win32-x64
+            goos: windows
+            goarch: amd64
+            binary: sos.exe
+            archive: zip
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Build source bundle
+        run: go generate ./internal/sosbuild
+
+      - name: Build language server and CLIs
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          version="${GITHUB_REF_NAME#vscode-v}"
+          mkdir -p vscode/bin release/cli
+          go build -trimpath -o "vscode/bin/${{ matrix.binary }}" ./cmd/sos
+          go build -trimpath -o "release/cli/${{ matrix.binary }}" ./cmd/sos
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            go build -trimpath -o release/cli/sysone.exe ./cmd/sysone
+          else
+            go build -trimpath -o release/cli/sysone ./cmd/sysone
+          fi
+          cp LICENSE release/cli/
+          cp README.md release/cli/
+          archive_base="sysonescript-cli-v${version}-${{ matrix.target }}"
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            (cd release/cli && zip -q -r "../${archive_base}.zip" .)
+          else
+            tar -C release/cli -czf "release/${archive_base}.tar.gz" .
+          fi
+
+      - name: Package platform extension
+        working-directory: vscode
+        run: pnpm dlx @vscode/vsce package --target "${{ matrix.target }}"
+
+      - name: Collect release artifacts
+        run: |
+          mkdir -p release/assets
+          mv vscode/*.vsix release/assets/
+          find release -maxdepth 1 -type f \( -name '*.tar.gz' -o -name '*.zip' \) -exec mv {} release/assets/ \;
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: release/assets/*
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: marketplace
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: release
+          merge-multiple: true
+
+      - name: Publish platform extensions
+        run: |
+          for vsix in release/*.vsix; do
+            pnpm dlx @vscode/vsce publish --packagePath "$vsix" --oidc
+          done
+
+      - name: Publish GitHub CLI release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#vscode-v}"
+          gh release create "$GITHUB_REF_NAME" release/*.tar.gz release/*.zip \
+            --title "SysOneScript v${version}" \
+            --generate-notes

@@ -1,0 +1,147 @@
+{
+  "name": "sysonescript-vscode",
+  "displayName": "SysOneScript",
+  "description": "Language support for SysOneScript (.sos) with the native SysOneScript language server.",
+  "version": "0.1.0",
+  "publisher": "donaldmurillo",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/DonaldMurillo/system-one-playground"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters"
+  ],
+  "keywords": [
+    "SysOneScript",
+    "SOS",
+    "language server",
+    "LSP"
+  ],
+  "activationEvents": [
+    "onLanguage:sos"
+  ],
+  "main": "./extension.js",
+  "files": [
+    "extension.js",
+    "lsp-client.js",
+    "bin/**",
+    "language-configuration.json",
+    "syntaxes/**",
+    "README.md",
+    "CHANGELOG.md",
+    "SUPPORT.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "check": "node --check extension.js && node --check lsp-client.js && node --check test/lsp-client.test.js",
+    "test": "node test/lsp-client.test.js",
+    "package": "pnpm dlx @vscode/vsce package --allow-unused-files-pattern"
+  },
+  "contributes": {
+    "languages": [
+      {
+        "id": "sos",
+        "aliases": [
+          "SysOneScript",
+          "SOS"
+        ],
+        "extensions": [
+          ".sos"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "sos",
+        "scopeName": "source.sos",
+        "path": "./syntaxes/sos.tmLanguage.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "sysonescript.analyze",
+        "title": "SysOneScript: Analyze Document",
+        "category": "SysOneScript"
+      },
+      {
+        "command": "sysonescript.restartServer",
+        "title": "SysOneScript: Restart Language Server",
+        "category": "SysOneScript"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "sysonescript.analyze",
+          "when": "editorLangId == sos",
+          "group": "navigation@9"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "sysonescript.analyze",
+          "when": "editorLangId == sos"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "SysOneScript",
+      "properties": {
+        "sysonescript.server.command": {
+          "type": "string",
+          "default": "",
+          "description": "Executable used to start the SysOneScript language server. Empty uses the bundled binary in a Marketplace install, then looks for sos on PATH."
+        },
+        "sysonescript.server.args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "lsp"
+          ],
+          "description": "Arguments passed to the SysOneScript language-server executable."
+        },
+        "sysonescript.server.cwd": {
+          "type": "string",
+          "default": "",
+          "description": "Working directory for the language server. Relative paths are resolved from the first workspace folder; empty uses that folder automatically."
+        },
+        "sysonescript.server.env": {
+          "type": "object",
+          "default": {},
+          "additionalProperties": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "description": "Environment variables for the language server. Set a value to null to remove an inherited variable."
+        },
+        "sysonescript.trace.server": {
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "enumDescriptions": [
+            "Do not write JSON-RPC traffic to the output channel.",
+            "Write request and response method names to the output channel.",
+            "Write complete JSON-RPC messages to the output channel."
+          ],
+          "default": "off",
+          "description": "Trace communication with the SysOneScript language server."
+        }
+      }
+    }
+  }
+}

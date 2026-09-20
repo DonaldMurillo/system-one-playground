@@ -26,6 +26,8 @@ jobs:
       - run: pnpm --dir studio test
       - run: pnpm --dir studio run lint
       - run: pnpm --dir studio build
+      - run: pnpm --dir vscode check
+      - run: pnpm --dir vscode test
       - run: go generate ./internal/sosbuild
       - run: go test ./...
       - run: go vet ./...

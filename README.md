@@ -43,6 +43,22 @@ sysone --project examples/sos/repo-assistant open studio
 
 Keep `sos-studio` alongside the other two executables. This opens the browser workbench. For the optional native desktop app, see the [Studio guide](docs/studio-overview.md).
 
+## Use SysOneScript in VS Code
+
+The repository includes a VS Code extension backed by the same stdio language server used by Studio. Build the language entry points, then package the extension:
+
+```sh
+go generate ./internal/sosbuild
+mkdir -p vscode/bin
+go build -o vscode/bin/sos ./cmd/sos
+pnpm --dir vscode check
+pnpm --dir vscode test
+pnpm --dir vscode package
+code --install-extension vscode/sysonescript-vscode-0.1.0.vsix
+```
+
+Marketplace packages include a platform-matched `sos` language server, so users do not need a separate CLI install. Development checkouts can set `sysonescript.server.command` to an absolute path such as `/path/to/system-one-playground/bin/sos`; the `sysone` entry point is also supported. See the [editor services guide](docs/sysonescript-editor.md) for supported features and configuration.
+
 ## Choose what to try next
 
 | I want to… | Start here |

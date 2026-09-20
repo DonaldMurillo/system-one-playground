@@ -4,6 +4,59 @@ Studio uses SOS's own Go syntax and analysis code. Tree-sitter is not a dependen
 The interpreter remains the authority for executable syntax; the editor additionally
 retains comments, incomplete strings, source spans, and indented blocks.
 
+## VS Code
+
+The repository ships a standalone extension in [`vscode/`](https://github.com/DonaldMurillo/system-one-playground/tree/main/vscode) for `.sos`
+files. It starts the same stdio language server as Studio, so diagnostics,
+completion, hover, definition lookup, formatting, semantic tokens, inlay hints,
+code actions, folding and CodeLens use the shared Go implementation.
+
+Build and install it from the repository root:
+
+```sh
+go generate ./internal/sosbuild
+mkdir -p vscode/bin
+go build -o vscode/bin/sos ./cmd/sos
+pnpm --dir vscode package
+code --install-extension vscode/sysonescript-vscode-0.1.0.vsix
+```
+
+Marketplace releases bundle a platform-matched `sos` language-server binary,
+so users do not need a separate CLI installation. Development checkouts without
+that bundle can use `sos` on PATH or configure an absolute executable path:
+
+```json
+{
+  "sysonescript.server.command": "/absolute/path/to/bin/sos",
+  "sysonescript.server.cwd": "${workspaceFolder}"
+}
+```
+
+The extension also accepts `sysonescript.server.args` and
+`sysonescript.server.env`; use `args: ["lsp"]` for `sysone` or `sos`, and pass
+credentials through the environment only when explicitly invoking analysis or
+other provider-backed behavior. Typing assistance itself is offline. The
+`SysOneScript: Analyze Document` command is explicit and maps to the custom
+`sos/analyze` request; the server never makes a model call just because a file
+is open.
+
+### Marketplace publishing
+
+The extension release workflow is [`.github/workflows/vscode-release.yml`](https://github.com/DonaldMurillo/system-one-playground/blob/main/.github/workflows/vscode-release.yml).
+Create a VS Code Marketplace publisher whose identifier matches the extension
+manifest (`donaldmurillo`), configure trusted OIDC publishing for this
+repository, and create a protected GitHub environment named `marketplace` with
+required reviewers. Then bump `vscode/package.json` and
+`vscode/CHANGELOG.md` together. Pushing a tag like `vscode-v0.1.0` runs the
+checks, builds the platform bundles, waits for approval, and publishes the
+matching version. The first publisher, trusted-publishing policy, and GitHub
+environment setup are account-level actions; they cannot be completed from the
+repository alone.
+
+The Marketplace receives the `.vsix` extension packages, each with its matching
+`sos` language server. The same approved release also attaches standalone
+`sos`/`sysone` archives for macOS, Linux, and Windows to the GitHub Release.
+
 ## Colors, hints, and navigation
 
 Immediate lexical colors remain available while a language-server request is in
@@ -50,6 +103,9 @@ cannot choose an arbitrary filesystem root.
 - `pnpm --dir studio test`
 - `pnpm --dir studio lint`
 - `pnpm --dir studio build`
+- `pnpm --dir vscode check`
+- `pnpm --dir vscode test`
+- `pnpm --dir vscode package`
 
 Rebuild `bin/sos-studio` after bundling the frontend. Rebuild the Wails application
 from `desktop/` with `go tool wails build` to update the installed build artifact.

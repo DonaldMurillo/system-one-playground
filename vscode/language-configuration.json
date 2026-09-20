@@ -1,0 +1,42 @@
+{
+  "comments": {
+    "lineComment": "#"
+  },
+  "brackets": [
+    [
+      "{",
+      "}"
+    ]
+  ],
+  "autoClosingPairs": [
+    {
+      "open": "{",
+      "close": "}"
+    },
+    {
+      "open": "\"",
+      "close": "\"",
+      "notIn": [
+        "string",
+        "comment"
+      ]
+    }
+  ],
+  "surroundingPairs": [
+    [
+      "\"",
+      "\""
+    ],
+    [
+      "{",
+      "}"
+    ]
+  ],
+  "indentationRules": {
+    "increaseIndentPattern": ":\\s*$",
+    "decreaseIndentPattern": "^\\s*(otherwise|on (failure|success|existing))\\b"
+  },
+  "folding": {
+    "offSide": true
+  }
+}

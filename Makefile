@@ -75,7 +75,7 @@ semlint-calibrate: $(SEMLINT)
 clean:
 	rm -f $(BIN) $(SEMLINT)
 
-.PHONY: sos sos-test sos-studio sos-desktop sos-test-live
+.PHONY: sos sos-test sos-studio sos-desktop sos-test-live vscode-check vscode-test vscode-package
 sos:
 	go generate ./internal/sosbuild
 	go build -trimpath -o bin/sos ./cmd/sos
@@ -94,3 +94,12 @@ sos-studio:
 
 sos-desktop: sos-studio
 	cd desktop && go tool wails build -clean
+
+vscode-check:
+	pnpm --dir vscode check
+
+vscode-test:
+	pnpm --dir vscode test
+
+vscode-package:
+	pnpm --dir vscode package

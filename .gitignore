@@ -7,6 +7,9 @@ studio/node_modules/
 desktop/build/bin/
 desktop/desktop
 desktop/frontend/wailsjs/
+vscode/node_modules/
+vscode/bin/
+vscode/*.vsix
 output/
 .playwright-cli/
 

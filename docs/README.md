@@ -15,7 +15,7 @@ The public site lives in [docs-site](../docs-site/README.md). Its explicit conte
 - [Studio projects](sysonescript-projects.md)
 - [Environment settings](sysonescript-project-environment.md)
 - [CLI and MCP](sysonescript-agent-interface.md)
-- [Editor services](sysonescript-editor.md)
+- [Editor services](sysonescript-editor.md), including the VS Code extension
 - [Repository CLI walkthrough](../examples/sos/repo-assistant/README.md)
 
 ## Other repository components
