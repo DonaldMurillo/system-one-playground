@@ -1136,7 +1136,7 @@ async function init() {
       } catch (e) { showOutput('', e.message) }
     })
     if (ex.examples.length) {
-      const initial = ex.examples.find(item => item.name === 'semantic-dictionary') || ex.examples[0]
+      const initial = ex.examples.find(item => item.name === 'jev-language-composer') || ex.examples[0]
       const r = await api('/api/open', { name: initial.name })
       loadDocument(r.source, initial.name + '.sos'); sel.value = initial.name
     }

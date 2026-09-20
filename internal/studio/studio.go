@@ -196,7 +196,13 @@ func (s *Server) handleExamples(w http.ResponseWriter, r *http.Request) {
 	out := make([]map[string]string, 0, len(names))
 	for _, n := range names {
 		title := strings.TrimSuffix(path.Base(n), ".sos")
-		out = append(out, map[string]string{"name": title, "title": title})
+		switch title {
+		case "semantic-dictionary":
+			title = "Dictionary fast path · 0 Jev requests"
+		case "jev-language-composer":
+			title = "Jev grammar composer · 1 request"
+		}
+		out = append(out, map[string]string{"name": strings.TrimSuffix(path.Base(n), ".sos"), "title": title})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"examples": out})
 }

@@ -128,6 +128,16 @@ func TestExamplesListAndOpen(t *testing.T) {
 		t.Fatalf("expected bundled examples, got %v", examples)
 	}
 	first, _ := examples[0].(map[string]any)
+	var composer map[string]any
+	for _, value := range examples {
+		row, _ := value.(map[string]any)
+		if row["name"] == "jev-language-composer" {
+			composer = row
+		}
+	}
+	if composer == nil || !strings.Contains(composer["title"].(string), "1 request") {
+		t.Fatalf("Jev composer must be unmistakable in the picker: %v", examples)
+	}
 	name, _ := first["name"].(string)
 	res, data = post(t, ts, s.Token(), "/api/open", `{"name":"`+name+`"}`)
 	if res.StatusCode != http.StatusOK {
