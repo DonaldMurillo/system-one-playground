@@ -1,4 +1,5 @@
 // Monaco adapters for the shared offline SOS language server.
+import { usageCost } from './usage.js'
 export const SEMANTIC_LEGEND = {
   tokenTypes: ['keyword', 'variable', 'parameter', 'function', 'type', 'namespace', 'string', 'number', 'comment', 'macro', 'enumMember', 'operator'],
   tokenModifiers: []
@@ -6,8 +7,13 @@ export const SEMANTIC_LEGEND = {
 export const toEditorRange = r => ({startLineNumber:r.start.line+1,startColumn:r.start.character+1,endLineNumber:r.end.line+1,endColumn:r.end.character+1})
 const toLSPRange = r => ({start:{line:r.startLineNumber-1,character:r.startColumn-1},end:{line:r.endLineNumber-1,character:r.endColumn-1}})
 
-export function installLanguageServices(monaco, api, context = () => ({})) {
+export function installLanguageServices(monaco, api, context = () => ({}), analysis = () => null) {
   const registrations = []
+  const codeLensListeners = new Set()
+  const codeLensEvent = listener => {
+    codeLensListeners.add(listener)
+    return {dispose(){ codeLensListeners.delete(listener) }}
+  }
   const request = async (model, method, params = {}, token) => {
     const version = model.getVersionId()
     if (token?.isCancellationRequested || model.isDisposed()) return null
@@ -21,10 +27,24 @@ export function installLanguageServices(monaco, api, context = () => ({})) {
     return response.result
   }
   if (monaco.languages.registerCodeLensProvider) registrations.push(monaco.languages.registerCodeLensProvider('sos', {
+    onDidChange: codeLensEvent,
     provideCodeLenses: async (model, token) => {
       try {
         const items = await request(model, 'textDocument/codeLens', {}, token)
-        return {lenses:(items || []).map(item=>({range:toEditorRange(item.range),command:{id:item.command.command,title:item.command.title}})),dispose(){}}
+        const decisions = new Map((analysis()?.decisions || []).map(decision => [decision.line, decision]))
+        return {lenses:(items || []).map(item=>{
+          const range = toEditorRange(item.range)
+          const decision = decisions.get(range.startLineNumber)
+          let title = item.command.title
+          if (decision?.method === 'jev') {
+            const confidence = `${Math.round(decision.confidence * 100)}% confidence`
+            const usage = decision.usage_known
+              ? `${decision.input_tokens} tokens · ~${usageCost(decision.input_tokens)}`
+              : 'usage unavailable'
+            title = `Jev · ${confidence} · ${usage}`
+          } else if (decision?.method === 'deterministic') title = 'Deterministic · no Jev cost'
+          return {range,command:{id:item.command.command,title}}
+        }),dispose(){}}
       } catch { return {lenses:[],dispose(){}} }
     }
   }))
@@ -107,7 +127,10 @@ export function installLanguageServices(monaco, api, context = () => ({})) {
       return ranges.map(r=>({start:r.startLine+1,end:r.endLine+1,kind:monaco.languages.FoldingRangeKind?.Region}))
     })
   }))
-  return {dispose(){registrations.forEach(r=>r.dispose())}}
+  return {
+    refreshCodeLenses(){ for (const listener of codeLensListeners) listener() },
+    dispose(){codeLensListeners.clear();registrations.forEach(r=>r.dispose())}
+  }
 }
 
 function completionKind(monaco, kind) {

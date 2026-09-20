@@ -2,16 +2,27 @@ import {test} from 'node:test'
 import assert from 'node:assert/strict'
 import {installLanguageServices, SEMANTIC_LEGEND, diagnosticColumn} from './lsp.js'
 
-function setup(api) {
+function setup(api, analysis = () => null) {
   const providers={}
   const languages={CompletionItemKind:{Function:1,Keyword:2},InlayHintKind:{Type:1,Parameter:2},CompletionItemInsertTextRule:{InsertAsSnippet:4}}
-  for (const kind of ['CompletionItem','Hover','Definition','DocumentFormattingEdit','DocumentSemanticTokens','InlayHints','CodeAction','FoldingRange']) {
+  for (const kind of ['CodeLens','CompletionItem','Hover','Definition','DocumentFormattingEdit','DocumentSemanticTokens','InlayHints','CodeAction','FoldingRange']) {
     languages[`register${kind}Provider`]=(_language,provider)=>{providers[kind]=provider;return {dispose(){}}}
   }
   const model={getVersionId:()=>1,isDisposed:()=>false,getValue:()=>'',uri:{toString:()=> 'inmemory://model/1'},getWordUntilPosition:()=>({startColumn:6,endColumn:10})}
-  installLanguageServices({languages},api)
-  return {providers,model}
+  const services=installLanguageServices({languages},api,()=>({}),analysis)
+  return {providers,model,services}
 }
+
+test('code lenses show attributed Jev confidence and cost after analysis',async()=>{
+  const decision={line:2,method:'jev',confidence:.94,input_tokens:721,usage_known:true}
+  const {providers,model,services}=setup(async()=>({result:[{range:{start:{line:1,character:0},end:{line:1,character:1}},command:{command:'sos.analyze',title:'Semantic phrase · Analyze meaning'}}]}),()=>({decisions:[decision]}))
+  let refreshes=0
+  providers.CodeLens.onDidChange(()=>refreshes++)
+  services.refreshCodeLenses()
+  const result=await providers.CodeLens.provideCodeLenses(model)
+  assert.equal(refreshes,1)
+  assert.equal(result.lenses[0].command.title,'Jev · 94% confidence · 721 tokens · ~$0.00003028')
+})
 
 test('completion preserves replacement ranges and atomic import edits',async()=>{
   const {providers,model}=setup(async()=>({result:[{label:'text.trim',kind:3,detail:'std/text',textEdit:{range:{start:{line:1,character:5},end:{line:1,character:14}},newText:'text.trim'},additionalTextEdits:[{range:{start:{line:0,character:0},end:{line:0,character:0}},newText:'import "std/text"\n'}]}]}))

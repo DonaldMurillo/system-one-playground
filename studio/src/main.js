@@ -49,7 +49,7 @@ async function api(path, body, method = 'POST', signal) {
 
 
 registerSOSLanguage(monaco)
-installLanguageServices(monaco, api)
+const languageServices = installLanguageServices(monaco, api, () => ({}), () => state.analysis?.result?.analysis)
 monaco.editor.defineTheme('sos-dark', {
   base: 'vs-dark',
   inherit: true,
@@ -373,6 +373,7 @@ function invalidateAnalysis() {
   if (state.analyzing && state.analysisAbort) state.analysisAbort.abort()
   if (state.analysis) {
     state.analysis = null
+    languageServices.refreshCodeLenses()
     markInterpretationStale()
   }
 }
@@ -421,6 +422,7 @@ async function runAnalyze() {
     diagnosticEpoch++
     setMarkers(r.analysis?.diagnostics || [])
     state.analysis = { version, result: r }
+    languageServices.refreshCodeLenses()
     renderInterpretation(r, version)
   } catch (e) {
     if (e.name === 'AbortError') return
@@ -1001,7 +1003,10 @@ $('run').addEventListener('click', async () => {
     renderTraces(r.traces, r.usage)
     diagnosticEpoch++
     if (r.analysis) {
-      renderInterpretation({analysis:r.analysis, originalSource:editor.getValue()}, editor.getModel().getVersionId())
+      const analysisResult = {analysis:r.analysis, originalSource:editor.getValue()}
+      state.analysis = {version:editor.getModel().getVersionId(), result:analysisResult}
+      languageServices.refreshCodeLenses()
+      renderInterpretation(analysisResult, editor.getModel().getVersionId())
     }
     if (r.ok && r.traces?.length) {
       const summary = document.createElement('p')
@@ -1088,6 +1093,7 @@ function loadDocument(source, name) {
   clearTimeout(checkTimer)
   state.analysisAbort?.abort()
   state.analysis = null
+  languageServices.refreshCodeLenses()
   $('interpretation').classList.remove('is-stale')
   $('interpretation').textContent = 'Analyze this script to inspect its meaning.'
   showOutput('Run this script to see output.')

@@ -52,6 +52,8 @@ type Interpretation struct {
 	Method      string          `json:"method"`
 	Explanation string          `json:"explanation"`
 	Matches     []SemanticMatch `json:"matches,omitempty"`
+	InputTokens int             `json:"input_tokens,omitempty"`
+	UsageKnown  bool            `json:"usage_known,omitempty"`
 }
 
 // Analysis is a complete resolution: the canonical program, its map back to
@@ -348,6 +350,8 @@ func (a *semanticAnalysis) doSemantic(n *semNode, scope *semScope) {
 		conf        = 1.0
 		method      = "deterministic"
 		explanation string
+		inputTokens int
+		usageKnown  bool
 	)
 	if a.replay {
 		expected := "jev"
@@ -369,11 +373,15 @@ func (a *semanticAnalysis) doSemantic(n *semNode, scope *semScope) {
 	} else if len(cands) == 1 && !cands[0].requiresJev {
 		cand = cands[0]
 	} else {
+		before := a.budget.Snapshot().Buckets[a.bucket]
 		var ok bool
 		cand, conf, ok = a.chooseInterpretation(n, cands, scope)
 		if !ok {
 			return
 		}
+		after := a.budget.Snapshot().Buckets[a.bucket]
+		inputTokens = after.ReportedInputTokens - before.ReportedInputTokens
+		usageKnown = after.Unresolved == before.Unresolved && after.Requests == before.Requests+1
 		method = "jev"
 	}
 	repl := indentApply(n.line.indent, cand.lines)
@@ -399,6 +407,8 @@ func (a *semanticAnalysis) doSemantic(n *semNode, scope *semScope) {
 		Method:      method,
 		Explanation: explanation,
 		Matches:     cand.matches,
+		InputTokens: inputTokens,
+		UsageKnown:  usageKnown,
 	})
 	applySemanticEffects(scope, n, cand)
 }

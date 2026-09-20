@@ -82,6 +82,11 @@ sos build report.sos --output report --resolution report.resolution.json
 source-line mapping, interpretation decisions, dictionary `matches`, diagnostics,
 and request usage. Each match identifies the phrase, concept, and executable
 language definition used by the lowering.
+Studio refreshes semantic code lenses after Analyze or Run. A Jev-resolved line
+shows its confidence, provider-reported input tokens, and the corresponding
+published-rate estimate; deterministic resolutions explicitly show that they
+used no Jev request. Per-line cost remains an estimate rather than account
+billing, and unreported provider usage is labeled unavailable instead of zero.
 Saving is explicit and only succeeds after analysis succeeds. Saving a resolution
 writes that JSON file; it does not run the program. A resolution can contain
 source text and judgment questions, so handle it like the source itself.
