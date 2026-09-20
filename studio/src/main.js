@@ -527,6 +527,28 @@ function interpEntry(d, version, originalLine) {
     apply.addEventListener('click', () => applyInterpretation(d, version, originalLine))
     entry.appendChild(apply)
   }
+  if (Array.isArray(d.matches) && d.matches.length) {
+    const matches = document.createElement('div')
+    matches.className = 'interp-matches'
+    matches.setAttribute('aria-label', 'Dictionary matches')
+    for (const match of d.matches) {
+      if (!match || !match.phrase || !match.definition) continue
+      const item = document.createElement('span')
+      item.className = 'interp-match'
+      const phrase = document.createElement('span')
+      phrase.className = 'interp-match-phrase'
+      phrase.textContent = match.phrase
+      const arrow = document.createElement('span')
+      arrow.className = 'interp-match-arrow'
+      arrow.textContent = '→'
+      const definition = document.createElement('span')
+      definition.className = 'interp-match-definition'
+      definition.textContent = match.definition
+      item.append(phrase, arrow, definition)
+      matches.appendChild(item)
+    }
+    if (matches.childElementCount) entry.appendChild(matches)
+  }
   if (d.explanation) {
     const ex = document.createElement('p')
     ex.className = 'interp-explain'
@@ -1114,7 +1136,7 @@ async function init() {
       } catch (e) { showOutput('', e.message) }
     })
     if (ex.examples.length) {
-      const initial = ex.examples.find(item => item.name === 'jev-workflow') || ex.examples[0]
+      const initial = ex.examples.find(item => item.name === 'semantic-dictionary') || ex.examples[0]
       const r = await api('/api/open', { name: initial.name })
       loadDocument(r.source, initial.name + '.sos'); sel.value = initial.name
     }

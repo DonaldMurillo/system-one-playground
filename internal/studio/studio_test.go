@@ -142,6 +142,49 @@ func TestExamplesListAndOpen(t *testing.T) {
 	}
 }
 
+func TestSemanticDictionaryDemoAnalyzesAndRunsOffline(t *testing.T) {
+	s, ts := newTestServer(t)
+	res, opened := post(t, ts, s.Token(), "/api/open", `{"name":"semantic-dictionary"}`)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("open semantic dictionary demo: %d %+v", res.StatusCode, opened)
+	}
+	source, _ := opened["source"].(string)
+	if !strings.Contains(source, "if age bigger 18 show") {
+		t.Fatalf("semantic dictionary example is missing its defining sentence: %q", source)
+	}
+	raw, _ := json.Marshal(map[string]any{"source": source})
+	res, analyzed := post(t, ts, s.Token(), "/api/analyze", string(raw))
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("analyze semantic dictionary demo: %d %+v", res.StatusCode, analyzed)
+	}
+	analysis, _ := analyzed["analysis"].(map[string]any)
+	decisions, _ := analysis["decisions"].([]any)
+	if len(decisions) != 2 {
+		t.Fatalf("want two local dictionary decisions, got %+v", analysis)
+	}
+	for _, value := range decisions {
+		decision := value.(map[string]any)
+		if decision["method"] != "deterministic" {
+			t.Fatalf("demo unexpectedly requires Jev: %+v", decision)
+		}
+		if matches, _ := decision["matches"].([]any); len(matches) != 3 {
+			t.Fatalf("demo does not expose dictionary matches: %+v", decision)
+		}
+	}
+	usage, _ := analysis["usage"].(map[string]any)
+	if usage["totalAdmitted"] != float64(0) {
+		t.Fatalf("demo spent a provider request: %+v", usage)
+	}
+
+	res, ran := post(t, ts, s.Token(), "/api/run", string(raw))
+	if res.StatusCode != http.StatusOK || ran["ok"] != true {
+		t.Fatalf("run semantic dictionary demo: %d %+v", res.StatusCode, ran)
+	}
+	if got, _ := ran["output"].(string); strings.TrimSpace(got) != "adult\nqualified" {
+		t.Fatalf("unexpected demo output %q", got)
+	}
+}
+
 func TestCheckAndFormatEnvelopes(t *testing.T) {
 	s, ts := newTestServer(t)
 	res, data := post(t, ts, s.Token(), "/api/check", `{"source":"show \"hi\""}`)

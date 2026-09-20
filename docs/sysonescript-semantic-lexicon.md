@@ -36,3 +36,7 @@ The exact program below resolves and runs offline:
 make age 21
 if age bigger 18 show "adult"
 ```
+
+Studio opens the bundled `semantic-dictionary` example by default in Examples
+mode. Choose **Analyze** to inspect phrase-to-definition matches, then **Run** to
+see the lowered program execute without a Jev token.
