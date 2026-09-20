@@ -36,6 +36,24 @@ func analyze(p *Program) []Diagnostic {
 		}
 	}
 	add := func(s *Statement, msg string) { ds = append(ds, Diagnostic{s.Line, 1, msg}) }
+	checkActionArgs := func(s *Statement, action string, args []string) {
+		fn := actions[action]
+		if fn == nil {
+			return
+		}
+		decl, err := parseActionDecl(fn.Text)
+		if err != nil {
+			return
+		}
+		for i, arg := range args {
+			if i >= len(decl.Params) {
+				break
+			}
+			if message := staticArgumentProblem(arg, decl.Params[i].Type, types, visibleDefs, action, decl.Params[i].Name); message != "" {
+				add(s, message)
+			}
+		}
+	}
 	var checkExpr func(*Statement, string, bool)
 	checkExpr = func(s *Statement, expr string, fields bool) {
 		tokens, e := lex(expr)
@@ -209,18 +227,7 @@ func analyze(p *Program) []Diagnostic {
 				for _, v := range args {
 					checkExpr(s, v, false)
 				}
-				if fn := actions[m[1]]; fn != nil {
-					if decl, err := parseActionDecl(fn.Text); err == nil {
-						for i, arg := range args {
-							if i >= len(decl.Params) {
-								break
-							}
-							if message := staticArgumentProblem(arg, decl.Params[i].Type, types, visibleDefs, m[1], decl.Params[i].Name); message != "" {
-								add(s, message)
-							}
-						}
-					}
-				}
+				checkActionArgs(s, m[1], args)
 				if m[4] != "" {
 					names[m[4]] = true
 				}
@@ -255,6 +262,7 @@ func analyze(p *Program) []Diagnostic {
 				for _, v := range args {
 					checkExpr(s, v, false)
 				}
+				checkActionArgs(s, m[1], args)
 				if m[3] != "" {
 					names[m[3]] = true
 					delete(types, m[3])
@@ -556,7 +564,7 @@ func staticArgumentProblem(expression string, wanted TypeRef, known map[string]T
 		if actual.Name == wanted.Name && actual.Element == nil && wanted.Element == nil {
 			return ""
 		}
-		return ""
+		return fmt.Sprintf("%s.%s must be %s; received %s", action, parameter, wanted.String(), actual.String())
 	}
 	if tokens[0].text == "null" {
 		if !wanted.Optional {

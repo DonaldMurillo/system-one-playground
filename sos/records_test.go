@@ -120,6 +120,23 @@ func TestNamedRecordCheckerRejectsKnownFieldTypos(t *testing.T) {
 	}
 }
 
+func TestNamedRecordCheckerRejectsKnownRecordArgumentMismatch(t *testing.T) {
+	source := `define User:
+  name as text
+define Account:
+  id as text
+make user as User with:
+  name from "Ada"
+to inspect with account as Account:
+  return id of account
+call inspect with user called result
+`
+	diagnostics := Check(source)
+	if len(diagnostics) == 0 || !strings.Contains(diagnostics[0].Message, "inspect.account must be Account; received User") {
+		t.Fatalf("diagnostics = %+v", diagnostics)
+	}
+}
+
 func TestNamedRecordPackageExportAndTypedCall(t *testing.T) {
 	dir := t.TempDir()
 	people := filepath.Join(dir, "people")
