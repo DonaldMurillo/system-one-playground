@@ -1,5 +1,6 @@
 """Verify the public export's pages, local links, assets and content boundaries."""
 import json
+import re
 from html.parser import HTMLParser
 from pathlib import Path
 import sys
@@ -55,3 +56,20 @@ if search.exists():
 if errors:
     raise SystemExit('\n'.join(sorted(set(errors))))
 print(f'Export verified: {len(pages)} HTML pages, local links/assets, search and agent surfaces')
+
+# Static discovery must not send agents to an unavailable JSON-RPC endpoint.
+llms = (root / 'llms.txt').read_text()
+if re.search(r'\]\([^)]*/mcp\)', llms) or '/.well-known/mcp.json' in llms:
+    raise SystemExit('Static llms.txt advertises a live MCP endpoint')
+for name in ['agent-card.json', 'agent.json']:
+    card = root / '.well-known' / name
+    if card.exists():
+        metadata = json.loads(card.read_text())
+        if metadata.get('supportedInterfaces') or metadata.get('skills'):
+            raise SystemExit('Static agent card advertises executable interfaces')
+        if not metadata.get('documentationUrl', '').endswith('/docs/for-agents'):
+            raise SystemExit('Static agent card is missing documentation guidance')
+for route in ['enable-jev', 'for-agents']:
+    if not (root / 'docs' / route / 'llm.md').exists():
+        raise SystemExit('Missing agent-readable guide: ' + route)
+print('Static agent discovery and Jev/agent guides verified')

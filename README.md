@@ -101,3 +101,7 @@ SOS is a preview: local packages and native builds work; remote package resoluti
 The Go module is `github.com/DonaldMurillo/system-one-playground`. Install the client in your own module with `go get github.com/DonaldMurillo/system-one-playground/typesafe`. See [public release readiness](docs/public-release-readiness.md).
 
 [MIT](LICENSE). Third-party dependencies retain their own licenses. This project uses the TypeSafe System One API; it is not the provider's official SDK or documentation.
+
+## Jev and agents
+
+[Add Jev to your application](docs/enable-jev.md) · [For agents](docs/for-agents.md)

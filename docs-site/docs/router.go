@@ -31,5 +31,7 @@ func NewRouter() *docs.Router {
 	r.MustPage("/docs/parallel", docs.PageConfig{Title: "Parallel maps and failures", Description: "Bounded workers, isolated state, ordered results and shared budgets.", SourcePath: "content/parallel.md", Order: 24, Offline: true})
 	r.MustPage("/docs/semlint-sos", docs.PageConfig{Title: "Build semlint in SOS", Description: "Repository scanning, parallel rule evaluation and calibration with the Go reference retained.", SourcePath: "content/semlint-sos.md", Order: 25, Offline: true})
 	r.MustPage("/docs/semlint-source", docs.PageConfig{Title: "SOS semlint source", Description: "Complete runnable repository scanner and calibration CLI.", SourcePath: "content/semlint-source.md", Order: 26, Offline: true})
+	r.MustPage("/docs/enable-jev", docs.PageConfig{Title: "Add Jev to your application", Description: "Enable credentials, modes, budgets and application integration.", SourcePath: "content/enable-jev.md", Order: 27, Offline: true})
+	r.MustPage("/docs/for-agents", docs.PageConfig{Title: "For agents", Description: "Read machine-friendly docs and connect the local project CLI or MCP.", SourcePath: "content/for-agents.md", Order: 28, Offline: true})
 	return r
 }

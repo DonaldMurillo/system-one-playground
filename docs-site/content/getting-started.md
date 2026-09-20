@@ -1,6 +1,6 @@
 # Get started
 
-SysOneScript source files end in `.sos`. Start from a source checkout; release downloads and a public installation URL have not been established yet.
+SysOneScript source files end in `.sos`. Clone `https://github.com/DonaldMurillo/system-one-playground.git`. The preview ships source; prebuilt installers are not available.
 
 ## Build the language tools
 
@@ -48,7 +48,7 @@ Use `open examples` for the smaller example experience. The selection persists p
 
 Use Studio's Settings to set `TYPESAFE_API_KEY` for your project. Values are saved in a local `.env` with restrictive permissions; keep it out of version control. CLI scripts can also use the launching environment. See [environment precedence](/docs/project-environment) for the differences.
 
-Start with the [interpretation guide](/docs/interpretation) and [configuration and budgets](/docs/configuration). Inspect Interpretation for sentence resolution, and Trace for runtime judgments and reported usage. A successful run alone does not explain which records were selected.
+Start with [Add Jev to your application](/docs/enable-jev) for credentials, every enablement switch and complete workflows. Then use the [interpretation guide](/docs/interpretation) and [configuration and budgets](/docs/configuration). Inspect Interpretation for sentence resolution, and Trace for runtime judgments and reported usage. A successful run alone does not explain which records were selected.
 
 ## Next steps
 

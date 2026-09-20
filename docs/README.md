@@ -28,3 +28,6 @@ The public site lives in [docs-site](../docs-site/README.md). Its explicit conte
 ## Maintainers
 
 [Public release readiness](public-release-readiness.md) tracks launch requirements. [Agent notes](agent-notes.md) record implementation lessons. Design proposals and roadmaps describe historical or future work; they are not the shipped language contract.
+
+- [Add Jev to your application](enable-jev.md)
+- [For agents](for-agents.md)

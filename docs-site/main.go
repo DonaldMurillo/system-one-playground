@@ -97,6 +97,10 @@ type generatedSite struct {
 
 func buildSite() (*generatedSite, error) {
 	router := docsite.NewRouter()
+	mcpEndpoint := "/mcp"
+	if exportDir(os.Args[1:]) != "" {
+		mcpEndpoint = "" // Static hosts cannot serve JSON-RPC.
+	}
 	// Built from the Router so the 404 answers in the language of the URL
 	// that was missed. It is the one surface with no route to read a
 	// language from.
@@ -132,17 +136,17 @@ func buildSite() (*generatedSite, error) {
 		uihost.WithPublicLLMMD(),
 		uihost.WithAgentReady(uihost.AgentReadyConfig{
 			Title:     "System One Playground",
-			Summary:   "Searchable documentation with a router-owned content tree.",
+			Summary:   "Read [For agents](/docs/for-agents) and [Add Jev](/docs/enable-jev). The public static site has no executable tools.",
 			WhenToUse: "Use this site for the TypeSafe Go client, semlint, SysOneScript, Studio, gate and experiments.",
 			AgentCard: &uihost.AgentCardConfig{
 				Name:        "System One Playground",
 				Description: "Searchable documentation with a router-owned content tree.",
-				MCPEndpoint: "/mcp",
+				MCPEndpoint: mcpEndpoint,
 			},
 			CLI: &uihost.CLIToolConfig{
 				Name:    "sysone",
-				Install: "Build sysone, sos and sos-studio from the source checkout; see /docs/getting-started",
-				Docs:    "/docs/getting-started",
+				Install: "git clone https://github.com/DonaldMurillo/system-one-playground.git\ncd system-one-playground\ngo build -o bin/sos ./cmd/sos\ngo build -o bin/sysone ./cmd/sysone\ngo build -o bin/sos-studio ./cmd/sos-studio\nexport PATH=\"$PWD/bin:$PATH\"",
+				Docs:    "/docs/for-agents",
 			},
 		}),
 		uihost.WithHeadHTML(`<link rel="icon" href="/assets/favicon.svg">`),
@@ -348,10 +352,10 @@ func writeAgentAssets(dir, base string, handler http.Handler) error {
 	if err := fastrdocs.WriteAgentAssets(dir, base, handler); err != nil {
 		return err
 	}
-	if base == "" {
-		return nil
-	}
 	for _, name := range []string{"llms.txt", ".well-known/agent-card.json", ".well-known/agent.json"} {
+		if base == "" {
+			continue
+		}
 		source := filepath.Join(dir, strings.Trim(base, "/"), name)
 		if _, err := os.Stat(source); os.IsNotExist(err) {
 			continue
@@ -363,6 +367,33 @@ func writeAgentAssets(dir, base string, handler http.Handler) error {
 			return err
 		}
 		if err := os.Rename(source, target); err != nil {
+			return err
+		}
+	}
+	// Upstream defaults every agent card to JSON-RPC, even without an endpoint.
+	// Keep descriptive discovery metadata but advertise no callable interfaces.
+	for _, name := range []string{".well-known/agent-card.json", ".well-known/agent.json"} {
+		path := filepath.Join(dir, name)
+		data, err := os.ReadFile(path)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		var card map[string]any
+		if err := json.Unmarshal(data, &card); err != nil {
+			return err
+		}
+		card["supportedInterfaces"] = []any{}
+		card["skills"] = []any{}
+		card["description"] = "Static documentation only. No MCP or A2A execution endpoint. See the documentation URL for local sysone MCP setup."
+		card["documentationUrl"] = strings.TrimRight(publicSiteURL(), "/") + "/docs/for-agents"
+		data, err = json.MarshalIndent(card, "", "  ")
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(path, append(data, '\n'), 0644); err != nil {
 			return err
 		}
 	}

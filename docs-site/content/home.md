@@ -37,3 +37,7 @@ These tools can make paid API requests. Start with offline examples or semlint's
 Use Go 1.25 or newer for the repository tools. This documentation site uses a separate Go 1.27 module. Clone `https://github.com/DonaldMurillo/system-one-playground.git` to try the tools. The Go client is available at `github.com/DonaldMurillo/system-one-playground/typesafe`. This preview provides source builds, not prebuilt installers.
 
 MIT licensed repository code; third-party components retain their own licenses. The client here is for **TypeSafe**, not Typesense search. This is the repository's documentation, not the provider's official API reference.
+
+## Jev and agents
+
+[Add Jev to your application](/docs/enable-jev) · [For agents](/docs/for-agents)

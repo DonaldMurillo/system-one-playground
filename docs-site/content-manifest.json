@@ -102,5 +102,15 @@
     "source": "docs/sysonescript-semlint.md",
     "slug": "semlint-sos",
     "title": "Build semlint in SOS"
+  },
+  {
+    "source": "docs/enable-jev.md",
+    "slug": "enable-jev",
+    "title": "Add Jev to your application"
+  },
+  {
+    "source": "docs/for-agents.md",
+    "slug": "for-agents",
+    "title": "For agents"
   }
 ]

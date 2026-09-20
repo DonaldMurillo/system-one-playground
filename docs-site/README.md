@@ -35,3 +35,9 @@ No deployment has been configured or run. The scaffold's nested workflow is manu
 The pinned upstream `fastr-docs check` requires its starter blog and OpenAPI plugin, even for a documentation-only site. We run the same `Router.Validate()` through `go test` and verify the real static export instead. This is a known upstream scaffold-check limitation, not a skipped route check.
 
 The site covers the entire repository. Product landings are `/client`, `/semlint`, `/docs` (SysOneScript), `/studio`, and `/tools`. Existing language URLs remain stable. The original four-tab book icon is maintained in `public/favicon.svg` and `docs/icon.go` for header/favicon and generated PWA sizes.
+
+The public **For agents** and **Add Jev to your application** guides cover discovery,
+local CLI/MCP and language enablement. Export mode omits MCP links from `llms.txt`
+and clears executable interfaces from the descriptive agent cards. The running
+Go server retains its documentation MCP. `verify_export.py` checks this distinction
+alongside guide Markdown exports; GitHub Pages does not offer content negotiation.
