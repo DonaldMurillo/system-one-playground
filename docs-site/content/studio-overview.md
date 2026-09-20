@@ -29,3 +29,17 @@ Settings stores project environment values in a local `.env` with restrictive pe
 Output shows emitted program text and run failures. Diagnostics reports checker findings. Interpretation explains sentence resolution. Trace reports runtime judgment results and available usage. Vocabulary explains enabled words and imports.
 
 A successful run and a recognized sentence answer different questions. Inspect the judgment result and selected records to understand what happened. CLI/MCP services operate on disk or explicitly supplied source; they do not remotely control another window's unsaved buffers.
+
+## Desktop icon and local build
+
+Studio uses the System One terminal icon in its app bundle and macOS About
+window. Its editable SVG and macOS regeneration command live in
+`desktop/assets/README.md`; the checked-in PNG lets other platforms build
+without Swift. After `make sos-desktop`, open the generated application under
+`desktop/build/bin/`. On macOS, pass a project folder explicitly:
+
+```sh
+open -n desktop/build/bin/sos-studio.app --args "$PWD"
+```
+
+`-n` opens a new instance, preserving any existing window's unsaved work.

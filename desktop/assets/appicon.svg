@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-labelledby="title">
+  <title id="title">SysOneScript Studio — System One terminal</title>
+  <defs>
+    <linearGradient id="plate" x1="0" y1="0" x2="0" y2="1">
+      <stop stop-color="#29343b"/>
+      <stop offset="1" stop-color="#11191e"/>
+    </linearGradient>
+    <linearGradient id="one" x1="0" y1="0" x2="0" y2="1">
+      <stop stop-color="#f6ca7c"/>
+      <stop offset="1" stop-color="#df9848"/>
+    </linearGradient>
+  </defs>
+  <rect x="70" y="86" width="884" height="868" rx="196" fill="#080e12" fill-opacity=".3"/>
+  <rect x="70" y="70" width="884" height="868" rx="196" fill="url(#plate)"/>
+  <rect x="88" y="88" width="848" height="832" rx="179" fill="none" stroke="#516066" stroke-opacity=".45" stroke-width="3"/>
+  <path d="M176 252H848" stroke="#647178" stroke-opacity=".35" stroke-width="4"/>
+  <circle cx="192" cy="190" r="17" fill="#66c6b9"/>
+  <circle cx="250" cy="190" r="17" fill="#ae9be0"/>
+  <circle cx="308" cy="190" r="17" fill="#7facde"/>
+  <path d="M226 381L368 515L226 649" fill="none" stroke="#66c6b9" stroke-width="66" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M485 410L622 324H698V660H784V730H510V660H597V424L523 470Z" fill="url(#one)"/>
+  <rect x="202" y="785" width="166" height="14" rx="7" fill="#66c6b9" fill-opacity=".5"/>
+  <rect x="395" y="785" width="70" height="14" rx="7" fill="#ae9be0" fill-opacity=".5"/>
+</svg>

@@ -3,8 +3,8 @@ module github.com/DonaldMurillo/system-one-playground/desktop
 go 1.25.0
 
 require (
-	github.com/wailsapp/wails/v2 v2.15.0
 	github.com/DonaldMurillo/system-one-playground v0.0.0
+	github.com/wailsapp/wails/v2 v2.15.0
 )
 
 require (

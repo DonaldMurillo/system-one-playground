@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 	"log"
@@ -21,6 +22,9 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	"github.com/wailsapp/wails/v2/pkg/options/mac"
 )
+
+//go:embed build/appicon.png
+var appIcon []byte
 
 func main() {
 	// Optional single argument: the working directory runs execute in and
@@ -63,6 +67,7 @@ func main() {
 		Mac: &mac.Options{
 			About: &mac.AboutInfo{
 				Title:   "SysOneScript Studio",
+				Icon:    appIcon,
 				Message: fmt.Sprintf("SysOneScript %s", sos.Version),
 			},
 		},
