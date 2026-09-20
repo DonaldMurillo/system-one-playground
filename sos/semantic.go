@@ -18,9 +18,9 @@ import (
 // construction changes; the prompt version changes when the discrimination
 // question or state shape changes. Both participate in the policy hash.
 const (
-	semanticAnalysisVersion = 3
-	semanticRegistryVersion = "2"
-	semanticPromptVersion   = "1"
+	semanticAnalysisVersion = 4
+	semanticRegistryVersion = "3"
+	semanticPromptVersion   = "2"
 	// semanticMinConfidence is the conservative acceptance policy for model
 	// selections. It is evidence, not a correctness guarantee.
 	semanticMinConfidence   = 0.8
@@ -44,13 +44,14 @@ type AnalyzeOptions struct {
 // Interpretation is one resolved noncanonical sentence (or criterion
 // declaration) with its canonical lowering and selection provenance.
 type Interpretation struct {
-	Line        int     `json:"line"`
-	Source      string  `json:"source"`
-	Canonical   string  `json:"canonical"`
-	Candidate   string  `json:"candidate"`
-	Confidence  float64 `json:"confidence"`
-	Method      string  `json:"method"`
-	Explanation string  `json:"explanation"`
+	Line        int             `json:"line"`
+	Source      string          `json:"source"`
+	Canonical   string          `json:"canonical"`
+	Candidate   string          `json:"candidate"`
+	Confidence  float64         `json:"confidence"`
+	Method      string          `json:"method"`
+	Explanation string          `json:"explanation"`
+	Matches     []SemanticMatch `json:"matches,omitempty"`
 }
 
 // Analysis is a complete resolution: the canonical program, its map back to
@@ -397,6 +398,7 @@ func (a *semanticAnalysis) doSemantic(n *semNode, scope *semScope) {
 		Confidence:  conf,
 		Method:      method,
 		Explanation: explanation,
+		Matches:     cand.matches,
 	})
 	applySemanticEffects(scope, n, cand)
 }
@@ -427,7 +429,7 @@ func (a *semanticAnalysis) chooseInterpretation(n *semNode, cands []semCandidate
 	views := make([]map[string]any, 0, len(cands))
 	for _, c := range cands {
 		labels[c.id] = c.meaning
-		views = append(views, map[string]any{"id": c.id, "meaning": c.meaning, "canonical": strings.Join(indentApply(n.line.indent, c.lines), "\n")})
+		views = append(views, map[string]any{"id": c.id, "meaning": c.meaning, "canonical": strings.Join(indentApply(n.line.indent, c.lines), "\n"), "matches": c.matches})
 	}
 	visible := make([]map[string]any, 0, len(scope.collections))
 	for _, name := range scope.collectionNames() {
@@ -438,6 +440,7 @@ func (a *semanticAnalysis) chooseInterpretation(n *semNode, cands []semCandidate
 		"sentence":            n.text,
 		"line":                n.line.num,
 		"visible_collections": visible,
+		"visible_bindings":    scope.bindings,
 		"candidates":          views,
 	}
 	question := typesafe.Choice(semanticChoiceInstructions(), labels)
@@ -498,7 +501,7 @@ func (a *semanticAnalysis) chooseInterpretation(n *semNode, cands []semCandidate
 
 func semanticChoiceInstructions() string {
 	return "You are interpreting one SysOneScript sentence. Select the single listed meaning that matches the sentence exactly. " +
-		"Each option names the collection it applies to and shows the canonical sentence it lowers to. " +
+		"Each option shows its retrieved dictionary matches, type-valid meaning, and canonical lowering. " +
 		"Choose reject when none of the listed meanings matches, when the sentence is too ambiguous, or when it asks for something the options do not describe."
 }
 

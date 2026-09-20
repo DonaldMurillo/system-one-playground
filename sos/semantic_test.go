@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
 	"github.com/DonaldMurillo/system-one-playground/sosconfig"
 )
 
@@ -146,6 +147,78 @@ func requireFailure(t *testing.T, out *Analysis, err error, substr string) {
 	}
 	if !found {
 		t.Fatalf("want diagnostic containing %q, got %+v", substr, out.Diagnostics)
+	}
+}
+
+func TestSemanticDictionaryLowersInlineConditionalWithoutJev(t *testing.T) {
+	source := `+++
+version = 1
+[interpretation]
+mode = "semantic"
+[runtime]
+judgment = "semantic"
+[budget.run]
+requests = 8
+timeout = "30s"
++++
+
+make age 21
+if age bigger 18 show "adult"
+`
+	out, err := Analyze(context.Background(), source, AnalyzeOptions{Config: semanticConfig("semantic", "semantic")})
+	requireSuccess(t, out, err)
+	if !strings.Contains(out.Canonical, "when age > 18:\n  show \"adult\"") {
+		t.Fatalf("unexpected canonical lowering:\n%s", out.Canonical)
+	}
+	if out.Usage.TotalAdmitted != 0 {
+		t.Fatalf("dictionary/type resolution must not spend a Jev request, used %d", out.Usage.TotalAdmitted)
+	}
+	if len(out.Decisions) != 1 || out.Decisions[0].Method != "deterministic" {
+		t.Fatalf("want one deterministic decision, got %+v", out.Decisions)
+	}
+	if len(out.Decisions[0].Matches) != 3 {
+		t.Fatalf("want conditional, output, and comparison matches, got %+v", out.Decisions[0].Matches)
+	}
+}
+
+func TestSemanticDictionaryAliasesAndTypePruning(t *testing.T) {
+	t.Run("aliases", func(t *testing.T) {
+		source := "make score 10\nprovided that score at least 10 display \"ok\"\n"
+		out, err := Analyze(context.Background(), source, AnalyzeOptions{Config: semanticConfig("semantic", "semantic")})
+		requireSuccess(t, out, err)
+		if out.Canonical != "make score 10\nwhen score >= 10:\n  show \"ok\"\n" {
+			t.Fatalf("unexpected canonical lowering: %q", out.Canonical)
+		}
+	})
+
+	t.Run("ordered comparison rejects text", func(t *testing.T) {
+		source := "make age \"old\"\nif age bigger 18 show \"adult\"\n"
+		out, err := Analyze(context.Background(), source, AnalyzeOptions{Config: semanticConfig("semantic", "semantic")})
+		requireFailure(t, out, err, "comparison meaning requires an ordered value; age is text")
+		if out.Usage.TotalAdmitted != 0 {
+			t.Fatalf("type pruning must happen before Jev, used %d requests", out.Usage.TotalAdmitted)
+		}
+	})
+}
+
+func TestSemanticDictionaryDoesNotMatchInsideQuotes(t *testing.T) {
+	source := "make age 21\nif age bigger 18 show \"show bigger things\"\n"
+	out, err := Analyze(context.Background(), source, AnalyzeOptions{Config: semanticConfig("semantic", "semantic")})
+	requireSuccess(t, out, err)
+	if !strings.Contains(out.Canonical, `show "show bigger things"`) {
+		t.Fatalf("quoted words were parsed as semantic operators: %q", out.Canonical)
+	}
+}
+
+func BenchmarkSemanticLexicalInlineConditional(b *testing.B) {
+	source := "make age 21\nif age bigger 18 show \"adult\"\n"
+	opts := AnalyzeOptions{Config: semanticConfig("semantic", "semantic")}
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		out, err := Analyze(context.Background(), source, opts)
+		if err != nil || out.Canonical == "" {
+			b.Fatalf("analysis failed: %v (%+v)", err, out.Diagnostics)
+		}
 	}
 }
 

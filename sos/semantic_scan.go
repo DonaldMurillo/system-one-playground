@@ -248,6 +248,9 @@ func classifySemantic(text string) (role, form string, m []string) {
 	}
 	kind := classifyLine(text)
 	if kind == "" {
+		if semanticCouldInterpret(text) {
+			return "semantic", "lexical", []string{text}
+		}
 		return "unknown", "", nil
 	}
 	return "canonical", kind, match(kind, text)
@@ -283,19 +286,23 @@ func commentTail(s string) string {
 type semScope struct {
 	collections map[string]string
 	criteria    map[string]*criterionDecl
+	bindings    map[string]string
 }
 
 func newSemScope() *semScope {
-	return &semScope{collections: map[string]string{}, criteria: map[string]*criterionDecl{}}
+	return &semScope{collections: map[string]string{}, criteria: map[string]*criterionDecl{}, bindings: map[string]string{}}
 }
 
 func (s *semScope) clone() *semScope {
-	n := &semScope{collections: map[string]string{}, criteria: map[string]*criterionDecl{}}
+	n := &semScope{collections: map[string]string{}, criteria: map[string]*criterionDecl{}, bindings: map[string]string{}}
 	for k, v := range s.collections {
 		n.collections[k] = v
 	}
 	for k, v := range s.criteria {
 		n.criteria[k] = v
+	}
+	for k, v := range s.bindings {
+		n.bindings[k] = v
 	}
 	return n
 }
@@ -356,6 +363,11 @@ func applyCanonicalEffects(scope *semScope, n *semNode) {
 	case "make":
 		if len(n.m) >= 3 {
 			name := n.m[1]
+			if typ := inferSemanticExprType(strings.TrimPrefix(n.m[2], "as ")); typ != "" {
+				scope.bindings[name] = typ
+			} else {
+				delete(scope.bindings, name)
+			}
 			if isCollectionExpr(strings.TrimPrefix(n.m[2], "as "), scope) {
 				scope.collections[name] = "value of " + n.m[2]
 			} else {

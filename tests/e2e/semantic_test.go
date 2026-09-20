@@ -1224,6 +1224,23 @@ save tickets as json in "open.json"
 	fx.requireNoContacts(t)
 }
 
+// Dictionary meanings that resolve to one type-valid definition execute
+// offline; Jev is reserved for ambiguity that survives host validation.
+func TestSemanticRunDictionaryConditionalZeroCalls(t *testing.T) {
+	fx := semCanary(t)
+	dir := semPreparedDir(t)
+	body := `make age 21
+if age bigger 18 show "adult"
+`
+	script := semWrite(t, dir, "dictionary.sos", frontmatter(semSemanticTOML)+body)
+	stdout, stderr, code := runCLI(t, dir, "run", script)
+	semRequireCode(t, code, 0, semOutput(stdout, stderr), "run dictionary conditional")
+	if strings.TrimSpace(stdout) != "adult" {
+		t.Fatalf("unexpected program output %q (stderr %q)", stdout, stderr)
+	}
+	fx.requireNoContacts(t)
+}
+
 // A locked resolution executes offline and behaves exactly like the
 // hand-written canonical equivalent.
 func TestSemanticRunLockedOfflineParity(t *testing.T) {

@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "license": "Project-authored mappings; source vocabulary may be reviewed against Open English WordNet under its attribution terms.",
+  "concepts": [
+    {
+      "id": "control.conditional",
+      "phrases": ["if", "provided that", "when"],
+      "definitions": ["language.when"]
+    },
+    {
+      "id": "comparison.greater_than",
+      "phrases": ["bigger than", "greater than", "larger than", "more than", "above", "over", "bigger", "greater", "larger"],
+      "definitions": ["operator.greater_than"]
+    },
+    {
+      "id": "comparison.greater_or_equal",
+      "phrases": ["at least", "no less than"],
+      "definitions": ["operator.greater_or_equal"]
+    },
+    {
+      "id": "comparison.less_than",
+      "phrases": ["less than", "smaller than", "below", "under", "less", "smaller"],
+      "definitions": ["operator.less_than"]
+    },
+    {
+      "id": "comparison.less_or_equal",
+      "phrases": ["at most", "no more than"],
+      "definitions": ["operator.less_or_equal"]
+    },
+    {
+      "id": "output.show",
+      "phrases": ["show", "display", "print", "emit"],
+      "definitions": ["language.show"]
+    }
+  ]
+}

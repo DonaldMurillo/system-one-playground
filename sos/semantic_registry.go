@@ -12,6 +12,7 @@ type semCandidate struct {
 	id      string
 	meaning string
 	lines   []string
+	matches []SemanticMatch
 	// referent is the resolved collection name when the sentence operates
 	// on one; result is a name the lowering binds.
 	referent string
@@ -81,6 +82,9 @@ func (a *semanticAnalysis) candidatesFor(n *semNode, scope *semScope) ([]semCand
 	}
 
 	switch n.form {
+	case "lexical":
+		return lexicalCandidates(n.text, scope)
+
 	case "keep-where", "keep-where-ref":
 		expr := m[2]
 		jevExpr := jevPredicate(expr)
@@ -299,6 +303,11 @@ func (a *semanticAnalysis) explain(n *semNode, cand semCandidate, conf float64, 
 		}
 	}
 	switch {
+	case strings.HasPrefix(cand.id, "lexical-"):
+		if method == "jev" {
+			return fmt.Sprintf("dictionary meanings retrieved known language definitions; type context pruned invalid meanings and Jev selected the remaining interpretation (confidence %g, policy minimum %g)", conf, semanticMinConfidence)
+		}
+		return "dictionary meanings matched one type-valid language definition; no Jev request was needed"
 	case strings.HasPrefix(cand.id, "keep-criterion"):
 		return fmt.Sprintf("adjective applies the declared criterion; %s; the lowering embeds the exact question, fields, threshold, and uncertainty policy", subject)
 	case strings.HasPrefix(cand.id, "keep-where-not"):

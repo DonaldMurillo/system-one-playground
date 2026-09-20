@@ -17,6 +17,8 @@ request interpretation of sentence variants.
 | `load "tickets.json" as json called tickets` | Read the specified file and representation. |
 | `write tickets as json to "report.json"` | Save to the specified destination. |
 | `group them by team called teams` | Resolve a visible collection reference. |
+| `if age bigger 18 show "adult"` | `when age > 18:` followed by `show "adult"`. |
+| `provided that score at least 10 display "ok"` | `when score >= 10:` followed by `show "ok"`. |
 
 Unambiguous variants lower locally and report deterministic decisions. Competing
 meanings or collection references use a constrained Jev Choice with an explicit
@@ -26,7 +28,12 @@ named `them` retains its ordinary binding. Reference tracking is conservative
 around scopes; unsupported references fail rather than invent bindings.
 
 The resolver never invents a file format, destination, or naming convention.
-Arbitrary prose and open-ended generation of code are outside this registry.
+For dictionary-backed forms, it retrieves concepts from the compiled project
+lexicon, maps those concepts only to registered language definitions, and
+removes type-incompatible meanings before considering Jev. If one candidate
+remains, lowering is local and consumes zero requests. Jev receives a bounded
+Choice only when more than one valid meaning remains. Arbitrary prose and
+open-ended generation of code remain outside this pipeline.
 
 In semantic mode, declare a reusable criterion:
 
@@ -70,7 +77,9 @@ sos build report.sos --output report --resolution report.resolution.json
 ```
 
 `explain` does not execute script effects. Its JSON includes canonical source,
-source-line mapping, interpretation decisions, diagnostics, and request usage.
+source-line mapping, interpretation decisions, dictionary `matches`, diagnostics,
+and request usage. Each match identifies the phrase, concept, and executable
+language definition used by the lowering.
 Saving is explicit and only succeeds after analysis succeeds. Saving a resolution
 writes that JSON file; it does not run the program. A resolution can contain
 source text and judgment questions, so handle it like the source itself.
@@ -168,7 +177,7 @@ commands and unused actions do not consume interpretation requests. Source lines
 are preserved by blanking excluded constructions. Command declarations remain
 local and canonical. `check`, `explain`, and `build` cover the whole application.
 
-Saved analysis and registry formats are now version 3; regenerate older saved
+Saved analysis format is now version 4 and the registry is version 3; regenerate older saved
 interpretations. Selected-source and whole-source hashes distinguish their
 coverage. A selected result cannot stand in for a whole build or a different
 command. Packaged applications validate the embedded whole result offline, then
