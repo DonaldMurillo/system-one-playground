@@ -7,7 +7,6 @@ on:
 
 permissions:
   contents: write
-  id-token: write
 
 concurrency:
   group: sysonescript-release
@@ -104,12 +103,13 @@ jobs:
         run: |
           version="${GITHUB_REF_NAME#vscode-v}"
           mkdir -p vscode/bin release/cli
-          go build -trimpath -o "vscode/bin/${{ matrix.binary }}" ./cmd/sos
-          go build -trimpath -o "release/cli/${{ matrix.binary }}" ./cmd/sos
+          version_ldflag="-X github.com/DonaldMurillo/system-one-playground/sos.Version=$version"
+          go build -trimpath -ldflags "$version_ldflag" -o "vscode/bin/${{ matrix.binary }}" ./cmd/sos
+          go build -trimpath -ldflags "$version_ldflag" -o "release/cli/${{ matrix.binary }}" ./cmd/sos
           if [ "${{ matrix.goos }}" = "windows" ]; then
-            go build -trimpath -o release/cli/sysone.exe ./cmd/sysone
+            go build -trimpath -ldflags "$version_ldflag" -o release/cli/sysone.exe ./cmd/sysone
           else
-            go build -trimpath -o release/cli/sysone ./cmd/sysone
+            go build -trimpath -ldflags "$version_ldflag" -o release/cli/sysone ./cmd/sysone
           fi
           cp LICENSE release/cli/
           cp README.md release/cli/
@@ -158,17 +158,29 @@ jobs:
           path: release
           merge-multiple: true
 
-      - name: Publish platform extensions
+      - name: Generate CLI checksums
         run: |
-          for vsix in release/*.vsix; do
-            pnpm dlx @vscode/vsce publish --packagePath "$vsix" --oidc
-          done
+          cp scripts/install.sh scripts/install.ps1 release/
+          cd release
+          sha256sum ./*.tar.gz ./*.zip ./install.sh ./install.ps1 | sed 's#  \./#  #' > checksums.txt
 
       - name: Publish GitHub CLI release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           version="${GITHUB_REF_NAME#vscode-v}"
-          gh release create "$GITHUB_REF_NAME" release/*.tar.gz release/*.zip \
+          gh release create "$GITHUB_REF_NAME" release/*.tar.gz release/*.zip release/checksums.txt release/install.sh release/install.ps1 \
             --title "SysOneScript v${version}" \
             --generate-notes
+
+      - name: Publish platform extensions when configured
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          if [ -z "$VSCE_PAT" ]; then
+            echo "VSCE_PAT is not configured; platform VSIX artifacts are ready for manual Marketplace upload."
+            exit 0
+          fi
+          for vsix in release/*.vsix; do
+            pnpm dlx @vscode/vsce publish --packagePath "$vsix"
+          done

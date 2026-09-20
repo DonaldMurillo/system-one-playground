@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">SysOneScript</title>
+  <desc id="desc">A clean S and one monogram for SysOneScript.</desc>
+  <rect width="256" height="256" rx="58" fill="#101a2c"/>
+  <rect x="13" y="13" width="230" height="230" rx="47" fill="#101a2c"/>
+  <path fill="#67dfcf" d="M164 58H93c-29 0-52 20-52 46s23 46 52 46h70c12 0 21 8 21 19s-9 19-21 19H80v22h83c29 0 52-18 52-41s-23-41-52-41H93c-12 0-21-10-21-24s9-24 21-24h71z"/>
+  <path fill="#f4b15f" d="m178 45-37 30 14 18 12-10v100h-25v24h68v-24h-19V45z"/>
+  <circle cx="178" cy="54" r="7" fill="#fff0cb"/>
+</svg>

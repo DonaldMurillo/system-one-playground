@@ -2,8 +2,9 @@
   "name": "sysonescript-vscode",
   "displayName": "SysOneScript",
   "description": "Language support for SysOneScript (.sos) with the native SysOneScript language server.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "donaldmurillo",
+  "icon": "icon.png",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -23,13 +24,38 @@
     "LSP"
   ],
   "activationEvents": [
-    "onLanguage:sos"
+    "onLanguage:sos",
+    "onView:sysonescript.project",
+    "onCommand:sysonescript.selectEntrypoint",
+    "onCommand:sysonescript.runProject",
+    "onCommand:sysonescript.runFile",
+    "onCommand:sysonescript.debugFile",
+    "onCommand:sysonescript.debugProject",
+    "onCommand:sysonescript.showRunOutput",
+    "onCommand:sysonescript.checkProject",
+    "onCommand:sysonescript.buildProject",
+    "onCommand:sysonescript.explainFile",
+    "onCommand:sysonescript.stop",
+    "onCommand:sysonescript.setJevToken",
+    "onCommand:sysonescript.clearJevToken",
+    "onCommand:sysonescript.showJevStatus",
+    "onCommand:sysonescript.selectIconTheme",
+    "onCommand:sysonescript.openWelcome",
+    "onCommand:sysonescript.getCli",
+    "onCommand:sysonescript.updateCli",
+    "onCommand:sysonescript.checkCliVersions",
+    "onCommand:sysonescript.refresh",
+    "onCommand:sysonescript.runHelper"
   ],
   "main": "./extension.js",
   "files": [
     "extension.js",
     "lsp-client.js",
+    "project.js",
     "bin/**",
+    "icon.png",
+    "icons/**",
+    "walkthrough/**",
     "language-configuration.json",
     "syntaxes/**",
     "README.md",
@@ -38,11 +64,54 @@
     "LICENSE"
   ],
   "scripts": {
-    "check": "node --check extension.js && node --check lsp-client.js && node --check test/lsp-client.test.js",
-    "test": "node test/lsp-client.test.js",
+    "check": "node --check extension.js && node --check lsp-client.js && node --check project.js && node --check test/lsp-client.test.js && node --check test/project.test.js",
+    "test": "node --test test/*.test.js",
     "package": "pnpm dlx @vscode/vsce package --allow-unused-files-pattern"
   },
   "contributes": {
+    "walkthroughs": [
+      {
+        "id": "sysonescript.getStarted",
+        "title": "Get Started with SysOneScript",
+        "description": "Write, run, debug, and configure SysOneScript without installing Go or a separate runtime.",
+        "steps": [
+          {
+            "id": "sysonescript.getStarted.openPanel",
+            "title": "Open the project controls",
+            "description": "Use the SysOneScript Activity Bar panel for project-level Run, Check, Build, Debug, output, and helper actions.\n[Open SysOneScript Project](command:workbench.view.extension.sysonescript)",
+            "media": { "markdown": "./walkthrough/project.md" }
+          },
+          {
+            "id": "sysonescript.getStarted.run",
+            "title": "Run your project",
+            "description": "Run the detected project entrypoint and see the complete result in the SysOneScript Run output channel.\n[Run Project](command:sysonescript.runProject)",
+            "media": { "markdown": "./walkthrough/run.md" },
+            "completionEvents": ["onCommand:sysonescript.runProject"]
+          },
+          {
+            "id": "sysonescript.getStarted.debug",
+            "title": "Debug with native VS Code tools",
+            "description": "Set breakpoints, step through statements, inspect locals, and evaluate expressions.\n[Debug Project](command:sysonescript.debugProject)",
+            "media": { "markdown": "./walkthrough/debug.md" },
+            "completionEvents": ["onCommand:sysonescript.debugProject"]
+          },
+          {
+            "id": "sysonescript.getStarted.jev",
+            "title": "Enable Jev features",
+            "description": "Store the optional Jev token in VS Code SecretStorage for model-backed language features.\n[Set Jev Token](command:sysonescript.setJevToken)",
+            "media": { "markdown": "./walkthrough/jev.md" },
+            "completionEvents": ["onCommand:sysonescript.setJevToken"]
+          },
+          {
+            "id": "sysonescript.getStarted.cli",
+            "title": "Get the standalone CLI",
+            "description": "The extension already includes everything VS Code needs. Download the optional `sysone` and `sos` terminal commands separately when you want them on your PATH.\n[Open CLI Downloads](command:sysonescript.getCli)",
+            "media": { "markdown": "./walkthrough/cli.md" },
+            "completionEvents": ["onCommand:sysonescript.getCli"]
+          }
+        ]
+      }
+    ],
     "languages": [
       {
         "id": "sos",
@@ -53,7 +122,36 @@
         "extensions": [
           ".sos"
         ],
+        "icon": {
+          "light": "./icons/sysonescript-file.svg",
+          "dark": "./icons/sysonescript-file.svg"
+        },
         "configuration": "./language-configuration.json"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "sysonescript",
+          "title": "SysOneScript",
+          "icon": "./icons/sysonescript-glyph.svg"
+        }
+      ]
+    },
+    "views": {
+      "sysonescript": [
+        {
+          "id": "sysonescript.project",
+          "name": "Project",
+          "contextualTitle": "SysOneScript Project"
+        }
+      ]
+    },
+    "iconThemes": [
+      {
+        "id": "sysonescript-icons",
+        "label": "SysOneScript Icons",
+        "path": "./icons/sysonescript-icon-theme.json"
       }
     ],
     "grammars": [
@@ -61,6 +159,23 @@
         "language": "sos",
         "scopeName": "source.sos",
         "path": "./syntaxes/sos.tmLanguage.json"
+      }
+    ],
+    "semanticTokenTypes": [
+      {
+        "id": "sosOperator",
+        "superType": "keyword",
+        "description": "SysOneScript expression and sentence operator"
+      }
+    ],
+    "semanticTokenScopes": [
+      {
+        "language": "sos",
+        "scopes": {
+          "sosOperator": [
+            "keyword.control.operator.sos"
+          ]
+        }
       }
     ],
     "commands": [
@@ -73,6 +188,106 @@
         "command": "sysonescript.restartServer",
         "title": "SysOneScript: Restart Language Server",
         "category": "SysOneScript"
+      },
+      {
+        "command": "sysonescript.selectEntrypoint",
+        "title": "SysOneScript: Select Project Entrypoint",
+        "category": "SysOneScript"
+      },
+      {
+        "command": "sysonescript.runProject",
+        "title": "SysOneScript: Run Project",
+        "category": "SysOneScript"
+      },
+      {
+        "command": "sysonescript.runFile",
+        "title": "SysOneScript: Run File",
+        "category": "SysOneScript"
+      },
+      {
+        "command": "sysonescript.checkProject",
+        "title": "SysOneScript: Check Project",
+        "category": "SysOneScript"
+      },
+      {
+        "command": "sysonescript.buildProject",
+        "title": "SysOneScript: Build Project",
+        "category": "SysOneScript"
+      },
+      {
+        "command": "sysonescript.explainFile",
+        "title": "SysOneScript: Explain File",
+        "category": "SysOneScript"
+      },
+      {
+        "command": "sysonescript.debugProject",
+        "title": "SysOneScript: Debug Project",
+        "category": "SysOneScript"
+      },
+      {
+        "command": "sysonescript.debugFile",
+        "title": "SysOneScript: Debug File",
+        "category": "SysOneScript"
+      },
+      {
+        "command": "sysonescript.stop",
+        "title": "SysOneScript: Stop Processes",
+        "category": "SysOneScript"
+      },
+      {
+        "command": "sysonescript.showRunOutput",
+        "title": "SysOneScript: Show Run Output",
+        "category": "SysOneScript"
+      },
+      {
+        "command": "sysonescript.setJevToken",
+        "title": "SysOneScript: Set Jev Token",
+        "category": "SysOneScript"
+      },
+      {
+        "command": "sysonescript.clearJevToken",
+        "title": "SysOneScript: Clear Jev Token",
+        "category": "SysOneScript"
+      },
+      {
+        "command": "sysonescript.showJevStatus",
+        "title": "SysOneScript: Show Jev Token Status",
+        "category": "SysOneScript"
+      },
+      {
+        "command": "sysonescript.selectIconTheme",
+        "title": "SysOneScript: Choose Explorer Icon Theme",
+        "category": "SysOneScript"
+      },
+      {
+        "command": "sysonescript.refresh",
+        "title": "SysOneScript: Refresh Project Panel",
+        "category": "SysOneScript"
+      },
+      {
+        "command": "sysonescript.runHelper",
+        "title": "SysOneScript: Run Helper",
+        "category": "SysOneScript"
+      },
+      {
+        "command": "sysonescript.openWelcome",
+        "title": "SysOneScript: Open Welcome",
+        "category": "SysOneScript"
+      },
+      {
+        "command": "sysonescript.getCli",
+        "title": "SysOneScript: Get Standalone CLI",
+        "category": "SysOneScript"
+      },
+      {
+        "command": "sysonescript.updateCli",
+        "title": "SysOneScript: Update Standalone CLI",
+        "category": "SysOneScript"
+      },
+      {
+        "command": "sysonescript.checkCliVersions",
+        "title": "SysOneScript: Check CLI Version Sync",
+        "category": "SysOneScript"
       }
     ],
     "menus": {
@@ -81,15 +296,143 @@
           "command": "sysonescript.analyze",
           "when": "editorLangId == sos",
           "group": "navigation@9"
+        },
+        {
+          "command": "sysonescript.runFile",
+          "when": "editorLangId == sos",
+          "group": "navigation@10"
+        },
+        {
+          "command": "sysonescript.debugFile",
+          "when": "editorLangId == sos",
+          "group": "navigation@11"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "sysonescript.runFile",
+          "when": "resourceLangId == sos",
+          "group": "navigation@1"
+        },
+        {
+          "command": "sysonescript.debugFile",
+          "when": "resourceLangId == sos",
+          "group": "navigation@2"
+        },
+        {
+          "command": "sysonescript.explainFile",
+          "when": "resourceLangId == sos",
+          "group": "navigation@3"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "sysonescript.runFile",
+          "when": "resourceExtname == .sos",
+          "group": "navigation@1"
+        },
+        {
+          "command": "sysonescript.debugFile",
+          "when": "resourceExtname == .sos",
+          "group": "navigation@2"
+        },
+        {
+          "command": "sysonescript.runProject",
+          "when": "resourceFilename == sos.toml",
+          "group": "navigation@3"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "sysonescript.refresh",
+          "when": "view == sysonescript.project",
+          "group": "navigation@1"
         }
       ],
       "commandPalette": [
         {
           "command": "sysonescript.analyze",
           "when": "editorLangId == sos"
+        },
+        {
+          "command": "sysonescript.runProject"
+        },
+        {
+          "command": "sysonescript.runFile",
+          "when": "editorLangId == sos"
+        },
+        {
+          "command": "sysonescript.debugProject"
+        },
+        {
+          "command": "sysonescript.debugFile",
+          "when": "editorLangId == sos"
+        },
+        {
+          "command": "sysonescript.setJevToken"
+        },
+        {
+          "command": "sysonescript.clearJevToken"
+        },
+        {
+          "command": "sysonescript.checkProject"
+        },
+        {
+          "command": "sysonescript.buildProject"
+        },
+        {
+          "command": "sysonescript.showRunOutput"
+        },
+        {
+          "command": "sysonescript.showJevStatus"
+        },
+        {
+          "command": "sysonescript.openWelcome"
+        },
+        {
+          "command": "sysonescript.getCli"
+        },
+        {
+          "command": "sysonescript.updateCli"
+        },
+        {
+          "command": "sysonescript.checkCliVersions"
         }
       ]
     },
+    "debuggers": [
+      {
+        "type": "sysonescript",
+        "label": "SysOneScript",
+        "languages": ["sos"],
+        "enableBreakpointsFor": ["sos"],
+        "configurationAttributes": {
+          "launch": {
+            "required": ["program"],
+            "properties": {
+              "program": { "type": "string", "description": "SysOneScript file to debug." },
+              "cwd": { "type": "string", "description": "Project working directory." },
+              "args": { "type": "array", "items": { "type": "string" }, "description": "Script arguments." },
+              "stopOnEntry": { "type": "boolean", "default": false },
+              "model": { "type": "string" },
+              "maxCalls": { "type": "number" }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "sysonescript",
+            "request": "launch",
+            "name": "Debug SysOneScript",
+            "program": "${file}",
+            "cwd": "${workspaceFolder}"
+          }
+        ]
+      }
+    ],
+    "breakpoints": [
+      { "language": "sos" }
+    ],
     "configuration": {
       "title": "SysOneScript",
       "properties": {
@@ -140,6 +483,16 @@
           ],
           "default": "off",
           "description": "Trace communication with the SysOneScript language server."
+        },
+        "sysonescript.runner.command": {
+          "type": "string",
+          "default": "",
+          "description": "Executable used for SysOneScript run, build, and debug commands. Empty uses the bundled sos binary, then PATH."
+        },
+        "sysonescript.project.entry": {
+          "type": "string",
+          "default": "",
+          "description": "Project-relative .sos entrypoint used by panel Run, Check, Build, and Debug actions. Empty auto-detects or prompts."
         }
       }
     }

@@ -151,6 +151,51 @@ func TestSemanticTokensUTF16String(t *testing.T) {
 	}
 }
 
+func TestSemanticTokensOperators(t *testing.T) {
+	got := semanticData(t, "make value \"a\" + \"b\"\nmake other \"a\" plus \"b\"\nmake scaled 2 * 3 times 4", map[string]any{})
+	want := []float64{
+		0, 0, 4, 0, 0, 0, 5, 5, 1, 0, 0, 6, 3, 6, 0, 0, 4, 1, 11, 0, 0, 2, 3, 6, 0,
+		1, 0, 4, 0, 0, 0, 5, 5, 1, 0, 0, 6, 3, 6, 0, 0, 4, 4, 11, 0, 0, 5, 3, 6, 0,
+		1, 0, 4, 0, 0, 0, 5, 6, 1, 0, 0, 7, 1, 7, 0, 0, 2, 1, 11, 0, 0, 2, 1, 7, 0, 0, 2, 5, 11, 0, 0, 6, 1, 7, 0,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("data = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("data[%d] = %v, want %v (full: %v)", i, got[i], want[i], got)
+		}
+	}
+}
+
+func TestSemanticTokensInsideInterpolation(t *testing.T) {
+	toks := syntaxTokens(sossyntax.Parse("show \"Value {total plus 1 times 2}\""), nil)
+	for _, want := range []struct {
+		start, kind int
+		text        string
+	}{
+		{13, tokVariable, "total"},
+		{19, tokOperator, "plus"},
+		{24, tokNumber, "1"},
+		{26, tokOperator, "times"},
+		{32, tokNumber, "2"},
+	} {
+		if !tokenIs(toks, 0, want.start, want.kind, want.text) {
+			t.Fatalf("interpolation token %q kind %d missing at %d: %+v", want.text, want.kind, want.start, toks)
+		}
+	}
+}
+
+func TestOperatorWordsRespectBindingRoles(t *testing.T) {
+	toks := syntaxTokens(sossyntax.Parse("command count:\n  option times as integer default 5\n  repeat times times:"), nil)
+	if !tokenIs(toks, 1, 9, tokParameter, "times") {
+		t.Fatalf("option binding named times must remain a parameter: %+v", toks)
+	}
+	if !tokenIs(toks, 2, 9, tokVariable, "times") || !tokenIs(toks, 2, 15, tokOperator, "times") {
+		t.Fatalf("repeat operand and connector must have distinct roles: %+v", toks)
+	}
+}
+
 func TestInitializeAdvertisesLegendAndProviders(t *testing.T) {
 	messages, err := runLSP(t,
 		lspRequest(1, "initialize", map[string]any{}),
@@ -258,6 +303,7 @@ func TestInlayHintsConfidentValues(t *testing.T) {
 		"  read each row in \"rows.json\" as lines of json into rows",
 		"  take first 2 items from rows called top",
 		"  show label # make count 3",
+		"  show \"Count {count plus 1}\"",
 	}, "\n")
 	messages, err := runLSP(t,
 		lspRequest(1, "initialize", map[string]any{}),
@@ -270,7 +316,7 @@ func TestInlayHintsConfidentValues(t *testing.T) {
 		t.Fatalf("Serve: %v", err)
 	}
 	hints, _ := lspResult(t, messages, 2)["result"].([]any)
-	want := map[int]string{1: ": number", 2: ": text", 3: ": list", 4: ": json", 5: ": list", 6: ": list"}
+	want := map[int]string{1: ": number", 2: ": text", 3: ": list", 4: ": json", 5: ": list", 6: ": list", 8: ": number"}
 	seen := map[int]string{}
 	for _, h := range hints {
 		item := h.(map[string]any)

@@ -13,6 +13,8 @@ export const CONNECTORS = [
   'choices', 'is', 'ascending', 'descending', 'existing', 'off', 'at', 'most', 'running', 'collecting', 'failures', 'rethrow'
 ]
 
+export const OPERATORS = ['and', 'contains', 'is', 'minus', 'not', 'or', 'plus', 'times']
+
 
 export const TYPE_WORDS = [
   'text', 'timestamp', 'duration', 'folder', 'list', 'json', 'table',
@@ -39,17 +41,19 @@ export function registerSOSLanguage(monaco) {
     tokenPostfix: '.sos',
     starters: SENTENCE_STARTERS,
     connectors: CONNECTORS,
+    operators: OPERATORS,
     types: TYPE_WORDS,
     judgment: JUDGMENT_WORDS,
     literals: LITERALS,
     tokenizer: {
       root: [
         [/#.*$/, 'comment'],
-        [/"([^"\\]|\\.)*"?/, 'string'],
+        [/"/, { token: 'string', next: '@string' }],
         [/\d+(\.\d+)?([hms]|ms)?\b/, 'number'],
         [/[a-zA-Z_][a-zA-Z0-9_-]*/, {
           cases: {
             '@starters': 'keyword',
+            '@operators': 'operator',
             '@connectors': 'connector',
             '@judgment': 'judgment',
             '@types': 'type',
@@ -57,8 +61,29 @@ export function registerSOSLanguage(monaco) {
             '@default': 'identifier'
           }
         }],
+        [/(?<!\+)\+(?!\+)|(?<!-)\-(?!-)|[*/%]|(?:==|!=|<=|>=|<|>)/, 'operator'],
         [/[{}]/, 'delimiter.bracket'],
         [/[,:]/, 'delimiter']
+      ],
+      string: [
+        [/[^\\"{]+/, 'string'],
+        [/\\./, 'string.escape'],
+        [/\{/, { token: 'delimiter.bracket', next: '@interpolation' }],
+        [/"/, { token: 'string', next: '@pop' }]
+      ],
+      interpolation: [
+        [/\}/, { token: 'delimiter.bracket', next: '@pop' }],
+        [/\d+(\.\d+)?([hms]|ms)?\b/, 'number'],
+        [/[a-zA-Z_][a-zA-Z0-9_-]*/, {
+          cases: {
+            '@operators': 'operator',
+            '@types': 'type',
+            '@literals': 'literal',
+            '@default': 'variable'
+          }
+        }],
+        [/(?<!\+)\+(?!\+)|(?<!-)\-(?!-)|[*/%]|(?:==|!=|<=|>=|<|>)/, 'operator'],
+        [/\s+/, 'white']
       ]
     }
   })

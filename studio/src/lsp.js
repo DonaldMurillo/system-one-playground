@@ -1,6 +1,6 @@
 // Monaco adapters for the shared offline SOS language server.
 export const SEMANTIC_LEGEND = {
-  tokenTypes: ['keyword', 'variable', 'parameter', 'function', 'type', 'namespace', 'string', 'number', 'comment', 'macro', 'enumMember'],
+  tokenTypes: ['keyword', 'variable', 'parameter', 'function', 'type', 'namespace', 'string', 'number', 'comment', 'macro', 'enumMember', 'operator'],
   tokenModifiers: []
 }
 export const toEditorRange = r => ({startLineNumber:r.start.line+1,startColumn:r.start.character+1,endLineNumber:r.end.line+1,endColumn:r.end.character+1})

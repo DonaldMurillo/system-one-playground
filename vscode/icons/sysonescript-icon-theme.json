@@ -1,0 +1,8 @@
+{
+  "iconDefinitions": {
+    "sos-file": { "iconPath": "./sysonescript-file.svg" }
+  },
+  "fileExtensions": {
+    "sos": "sos-file"
+  }
+}

@@ -339,6 +339,64 @@ func TestServeCompletionFiltersByPrefix(t *testing.T) {
 	}
 }
 
+func TestServeColorsAndHintsInterpolationExpressions(t *testing.T) {
+	source := "make total 2\nshow \"Value {total plus 1 times 2}\"\n"
+	var input bytes.Buffer
+	input.Write(request(1, "initialize", map[string]any{}))
+	input.Write(notification("textDocument/didOpen", map[string]any{
+		"textDocument": map[string]any{"uri": testURI, "languageId": "sos", "version": 1, "text": source},
+	}))
+	input.Write(request(2, "textDocument/semanticTokens/full", map[string]any{"textDocument": map[string]any{"uri": testURI}}))
+	input.Write(request(3, "textDocument/inlayHint", map[string]any{"textDocument": map[string]any{"uri": testURI}}))
+	input.Write(request(4, "shutdown", nil))
+	input.Write(notification("exit", nil))
+
+	messages, err := runServer(t, input.Bytes())
+	if err != nil {
+		t.Fatalf("Serve returned error: %v", err)
+	}
+	byID := func(id float64) map[string]any {
+		for _, message := range messages {
+			if message["id"] == id {
+				return message
+			}
+		}
+		t.Fatalf("response %v missing: %+v", id, messages)
+		return nil
+	}
+	data := getMap(t, byID(2), "result")["data"].([]any)
+	type key struct{ line, start, kind int }
+	seen := map[key]bool{}
+	line, start := 0, 0
+	for i := 0; i < len(data); i += 5 {
+		deltaLine, deltaStart := int(data[i].(float64)), int(data[i+1].(float64))
+		line += deltaLine
+		if deltaLine == 0 {
+			start += deltaStart
+		} else {
+			start = deltaStart
+		}
+		seen[key{line, start, int(data[i+3].(float64))}] = true
+	}
+	for _, want := range []key{{1, 13, 1}, {1, 19, 11}, {1, 24, 7}, {1, 26, 11}, {1, 32, 7}} {
+		if !seen[want] {
+			t.Fatalf("semantic token %+v missing from %v", want, seen)
+		}
+	}
+	hints := byID(3)["result"].([]any)
+	found := false
+	for _, raw := range hints {
+		hint := raw.(map[string]any)
+		position := hint["position"].(map[string]any)
+		if position["line"] == float64(1) && position["character"] == float64(18) && hint["label"] == ": number" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("interpolation type hint missing: %+v", hints)
+	}
+}
+
 func TestServeDidCloseClearsDiagnostics(t *testing.T) {
 	var input bytes.Buffer
 	input.Write(request(1, "initialize", map[string]any{}))

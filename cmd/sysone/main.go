@@ -19,8 +19,11 @@ import (
 
 const usage = `usage: sysone [--project DIR] COMMAND [arguments]
 
-Language: run, check, build, fmt, explain, config, vocabulary, lsp, version
+Language: run, check, build, fmt, explain, config, vocabulary, debug, lsp, version
   These preserve the sos command arguments and output.
+Updates:
+  update --check                      compare this CLI with the latest release
+  update                              install the latest verified CLI release
 Workspace (JSON output):
   tree
   read PATH
@@ -56,6 +59,9 @@ func run(args []string) int {
 		fmt.Print(usage)
 		return 0
 	}
+	if args[0] == "update" {
+		return runUpdate(args[1:])
+	}
 	root, err := filepath.Abs(root)
 	if err != nil {
 		return fail(err)
@@ -66,7 +72,7 @@ func run(args []string) int {
 	}
 	command, rest := args[0], args[1:]
 	switch command {
-	case "run", "check", "build", "fmt", "explain", "config", "vocabulary", "lsp", "version":
+	case "run", "check", "build", "fmt", "explain", "config", "vocabulary", "debug", "lsp", "version":
 		return delegate(root, "sos", args)
 	}
 	srv, err := studio.New(studio.Options{Dir: root})

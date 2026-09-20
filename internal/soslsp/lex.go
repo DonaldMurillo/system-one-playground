@@ -10,7 +10,8 @@ import (
 
 // Semantic token legend, by index. The order is part of the wire contract in
 // lsp-contract.md: keyword, variable, parameter, function, type, namespace,
-// string, number, comment.
+// string, number, comment, macro, enumMember, operator. New token types are
+// appended so existing semantic-token indices remain stable.
 var tokenLegend = []string{
 	"keyword",
 	"variable",
@@ -23,6 +24,7 @@ var tokenLegend = []string{
 	"comment",
 	"macro",
 	"enumMember",
+	"operator",
 }
 
 const (
@@ -37,6 +39,7 @@ const (
 	tokComment
 	tokSemanticPhrase
 	tokCriterion
+	tokOperator
 )
 
 type lexToken struct {
@@ -91,6 +94,7 @@ var nameRoleRegexes = []struct {
 }{
 	{tokFunction, regexp.MustCompile(`^\s*command\s+([A-Za-z_]\w*)`)},
 	{tokParameter, regexp.MustCompile(`^\s*(?:argument|option|switch)\s+([A-Za-z_]\w*)`)},
+	{tokVariable, regexp.MustCompile(`^\s*repeat\s+([A-Za-z_]\w*)\s+times\b`)},
 	{tokVariable, regexp.MustCompile(`^\s*(?:make|assign|set)\s+([A-Za-z_]\w*)`)},
 	{tokVariable, regexp.MustCompile(`\bcalled\s+([A-Za-z_]\w*)`)},
 	{tokVariable, regexp.MustCompile(`^\s*for\s+each\s+([A-Za-z_]\w*)`)},

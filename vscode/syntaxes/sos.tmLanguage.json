@@ -51,8 +51,48 @@
           },
           "patterns": [
             {
+              "include": "#interpolations"
+            },
+            {
               "name": "constant.character.escape.sos",
               "match": "\\\\."
+            }
+          ]
+        }
+      ]
+    },
+    "interpolations": {
+      "patterns": [
+        {
+          "name": "meta.interpolation.sos",
+          "begin": "\\{",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.section.interpolation.begin.sos"
+            }
+          },
+          "end": "\\}",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.section.interpolation.end.sos"
+            }
+          },
+          "patterns": [
+            {
+              "include": "#numbers"
+            },
+            {
+              "include": "#keywords"
+            },
+            {
+              "include": "#types"
+            },
+            {
+              "include": "#literals"
+            },
+            {
+              "name": "variable.other.readwrite.sos",
+              "match": "\\b[A-Za-z_][A-Za-z0-9_-]*\\b"
             }
           ]
         }
@@ -73,8 +113,12 @@
           "match": "\\b(?:evaluate|criterion|package|import|export|argument|option|switch|to|call|return|while|repeat|set|emit|judge|score|command|describe|expect|remember|find|read|require|keep|sort|group|create|make|assign|when|take|classify|append|save|show|for|map|stop|print)\\b"
         },
         {
-          "name": "keyword.operator.sos",
-          "match": "\\b(?:each|in|as|into|on|called|with|where|by|from|under|named|matching|if|missing|numbered|otherwise|and|or|not|of|count|first|last|items|default|choices|is|ascending|descending|existing|off|at|most|running|collecting|failures|rethrow)\\b"
+          "name": "keyword.control.operator.sos",
+          "match": "\\b(?:each|in|as|into|on|called|with|where|by|from|under|named|matching|if|missing|numbered|otherwise|and|or|not|of|count|first|last|items|default|choices|is|ascending|descending|existing|off|at|most|running|collecting|failures|rethrow|plus|minus|times)\\b"
+        },
+        {
+          "name": "keyword.control.operator.sos",
+          "match": "(?<!\\+)\\+(?!\\+)|(?<!-)\\-(?!-)|[*/%]|(?:==|!=|<=|>=|<|>)"
         }
       ]
     },

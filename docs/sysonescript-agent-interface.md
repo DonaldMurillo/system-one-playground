@@ -2,6 +2,11 @@
 
 `sysone` is the language entry point, like `go` or `python3`. It also exposes Studio's project services without requiring an open desktop window. It operates on the same files and settings as Studio; it does not remotely control an existing window's unsaved editor buffer.
 
+Use `sysone update --check` to compare the installed CLI with the latest
+published CLI release, or `sysone update` to download a checksum-verified
+installer and replace the colocated `sysone` and `sos` commands. Updates are
+always explicit; ordinary language commands never contact the release service.
+
 Build and distribute these three executables together (or put them on `PATH`):
 
 ```sh

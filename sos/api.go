@@ -2,11 +2,12 @@
 package sos
 
 import (
-	"io"
+	"context"
 	"github.com/DonaldMurillo/system-one-playground/sosconfig"
+	"io"
 )
 
-const Version = "0.6.0"
+var Version = "0.6.0"
 
 type Diagnostic struct {
 	Line    int    `json:"line"`
@@ -55,6 +56,26 @@ type Trace struct {
 	InputTokens  int    `json:"inputTokens"`
 	Replay       bool   `json:"replay"`
 }
+
+// DebugFrame identifies one executable source location. Path is absolute when
+// the runner was given a source path, and Line is one-based.
+type DebugFrame struct {
+	Name   string `json:"name,omitempty"`
+	Path   string `json:"path,omitempty"`
+	Line   int    `json:"line"`
+	Column int    `json:"column"`
+	Kind   string `json:"kind,omitempty"`
+	Text   string `json:"text,omitempty"`
+	Depth  int    `json:"depth"`
+}
+
+// Debugger is the runtime boundary used by the native debug adapter. The
+// runtime calls BeforeStatement immediately before executing each statement.
+// Implementations may block there to implement breakpoints and stepping. The
+// variables map is a JSON-shaped snapshot and can safely be retained.
+type Debugger interface {
+	BeforeStatement(context.Context, DebugFrame, []DebugFrame, map[string]any) error
+}
 type Options struct {
 	CommandPath []string
 	Dir         string
@@ -75,6 +96,12 @@ type Options struct {
 	Resolution *Analysis
 	Locked     bool
 	OnTrace    func(Trace)
+	// SourcePath gives runtime diagnostics and debugger stops a stable source
+	// identity. It is optional for embedders that execute in-memory programs.
+	SourcePath string
+	// Debugger pauses before executable statements when a debug adapter is
+	// attached. It is nil for ordinary runs.
+	Debugger Debugger
 }
 type Result struct {
 	// Usage reports live provider admissions; replay adds no new usage.
@@ -83,6 +110,13 @@ type Result struct {
 	Variables map[string]any `json:"variables"`
 	Traces    []Trace        `json:"traces"`
 	Steps     int            `json:"steps"`
+}
+
+// EvaluateDebugExpression evaluates a read-only language expression against a
+// debugger variable snapshot. It intentionally exposes the same expression
+// grammar as scripts without exposing runtime effects or provider calls.
+func EvaluateDebugExpression(expression string, variables map[string]any) (any, error) {
+	return evaluate(expression, variables, nil)
 }
 
 // Public API implemented in the language core:

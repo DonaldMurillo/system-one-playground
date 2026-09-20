@@ -34,6 +34,7 @@ commands:
                                       build a standalone executable
   vocabulary [FILE] [--json] [--query TEXT] [--library PATH]
                                       offline dictionary of callable vocabulary
+  debug                                 run a Debug Adapter Protocol server
   lsp                                 run the language server on stdio
   version                             print the SysOneScript version
 `
@@ -83,6 +84,12 @@ func RunCLI(args []string, stdout, stderr io.Writer) int {
 		return cmdBuild(rest, stdout, stderr)
 	case "lsp":
 		return cmdLSP(rest, stdout, stderr)
+	case "debug":
+		if len(rest) != 0 {
+			fmt.Fprintln(stderr, "sos: debug takes no command-line arguments; use the DAP launch request")
+			return 2
+		}
+		return runDebugServer(os.Stdin, stdout, stderr)
 	case "version":
 		fmt.Fprintf(stdout, "sos %s\n", sos.Version)
 		return 0

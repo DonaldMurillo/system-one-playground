@@ -1,10 +1,13 @@
 const path = require('node:path')
 const fs = require('node:fs')
+const { spawn } = require('node:child_process')
 const vscode = require('vscode')
 const { LspClient } = require('./lsp-client')
+const { compareVersions, discoverEntrypoints, findProjectRoot, parseVersionLine, readHelpers, relativeScript, resolveProjectEntrypoint } = require('./project')
 
 const LANGUAGE_ID = 'sos'
 const DOCUMENT_SELECTOR = [{ language: LANGUAGE_ID }]
+const JEV_SECRET_KEY = 'sysonescript.jevApiKey'
 
 let extensionState
 
@@ -130,7 +133,439 @@ function serverEnvironment() {
     if (value === null || value === undefined) delete env[name]
     else env[name] = String(value)
   }
+  if (extensionState?.jevToken) env.TYPESAFE_API_KEY = extensionState.jevToken
   return env
+}
+
+function runnerCommand() {
+  const configured = configuration().get('runner.command', '')
+  if (configured) return configured
+  const executable = process.platform === 'win32' ? 'sos.exe' : 'sos'
+  const bundled = path.join(extensionState.extensionPath, 'bin', executable)
+  return fs.existsSync(bundled) ? bundled : executable
+}
+
+function resourcePath(resource) {
+  const value = resource?.fsPath || resource?.path || resource?.resource || resource
+  return typeof value === 'string' ? value : undefined
+}
+
+function projectFor(resource) {
+  const value = resourcePath(resource) || workspaceRoot()
+  return findProjectRoot(value) || (value && fs.existsSync(value) && fs.statSync(value).isDirectory() ? value : workspaceRoot())
+}
+
+function fileFor(resource) {
+  const value = resourcePath(resource)
+  if (typeof value !== 'string') return undefined
+  try { return fs.statSync(value).isDirectory() ? undefined : value } catch { return undefined }
+}
+
+function configuredEntry(root) {
+  const configured = configuration().get('project.entry', '')
+  if (!configured || !root) return undefined
+  const candidate = resolveProjectEntrypoint(root, configured)
+  return candidate && relativeScript(root, candidate) === configured.replace(/\\/g, '/') ? candidate : undefined
+}
+
+function activeProjectFile(root) {
+  const file = fileFor(vscode.window.activeTextEditor?.document.uri)
+  if (!file || !isSysOneScript({ fileName: file, languageId: LANGUAGE_ID })) return undefined
+  return projectFor(file) === root ? file : undefined
+}
+
+function projectEntrypoint(resource) {
+  const root = projectFor(resource)
+  if (!root) {
+    vscode.window.showErrorMessage('Open a SysOneScript project folder first.')
+    return undefined
+  }
+  const file = configuredEntry(root) || activeProjectFile(root) || resolveProjectEntrypoint(root)
+  if (!file) {
+    vscode.window.showErrorMessage(`No .sos entrypoint was found in ${root}.`)
+    return undefined
+  }
+  return { root, file }
+}
+
+function entrypointDescription(root) {
+  const configured = configuredEntry(root)
+  if (configured) return relativeScript(root, configured)
+  const active = activeProjectFile(root)
+  if (active) return `${relativeScript(root, active)} · active`
+  const candidates = discoverEntrypoints(root)
+  if (candidates.length === 1) return relativeScript(root, candidates[0])
+  if (candidates.length > 1) return `${relativeScript(root, candidates[0])} · auto`
+  return 'none found'
+}
+
+async function selectEntrypoint(resource) {
+  const root = projectFor(resource)
+  if (!root) return
+  const candidates = discoverEntrypoints(root)
+  const options = [
+    { label: 'Auto-detect on each project action', description: 'Do not pin an entrypoint', file: '' },
+    ...candidates.map(file => ({ label: relativeScript(root, file), description: 'Pin as the project entrypoint', file })),
+  ]
+  const picked = await vscode.window.showQuickPick(options, { placeHolder: 'Choose the project entrypoint' })
+  if (!picked) return
+  const value = picked.file ? relativeScript(root, picked.file) : ''
+  await configuration().update('project.entry', value, vscode.ConfigurationTarget.Workspace)
+  extensionState.tree.refresh()
+}
+
+function saveWorkspace() {
+  return vscode.workspace.saveAll().catch(() => false)
+}
+
+function runInTerminal(args, cwd, label, commandOverride) {
+  const output = extensionState.output
+  const emitter = new vscode.EventEmitter()
+  let child
+  const write = text => {
+    const value = String(text).replace(/\n/g, '\r\n')
+    emitter.fire(value)
+    output.append(String(text))
+  }
+  const pty = {
+    name: 'SysOneScript',
+    onDidWrite: emitter.event,
+    open() {
+      child = spawn(commandOverride || runnerCommand(), args, {
+        cwd,
+        env: serverEnvironment(),
+        stdio: ['pipe', 'pipe', 'pipe'],
+        windowsHide: true,
+      })
+      extensionState.processes.add(child)
+      child.stdout.on('data', chunk => write(chunk.toString()))
+      child.stderr.on('data', chunk => write(chunk.toString()))
+      child.on('error', error => write(`SysOneScript could not start: ${error.message}\n`))
+      child.on('close', code => {
+        extensionState.processes.delete(child)
+        write(`\n[${label} exited with code ${code ?? 'unknown'}]\n`)
+        emitter.fire('\x1b[?25h')
+      })
+    },
+    close() {
+      if (child && !child.killed) child.kill()
+    },
+  }
+  const terminal = vscode.window.createTerminal({ name: `SysOneScript: ${label}`, cwd, pty })
+  terminal.show(true)
+  return terminal
+}
+
+function setPanelRun(action, value) {
+  if (!extensionState?.panelRuns) return
+  extensionState.panelRuns.set(action, value)
+  extensionState.tree.refresh()
+}
+
+function runPanelProcess(action, args, cwd, label, commandOverride) {
+  const command = commandOverride || runnerCommand()
+  const output = extensionState.runOutput
+  output.clear()
+  output.appendLine(`SysOneScript · ${label}`)
+  output.appendLine(`$ ${path.basename(command)} ${args.join(' ')}`)
+  output.appendLine('')
+  output.show(true)
+  setPanelRun(action, { status: 'running', label: `${label} · running` })
+  const child = spawn(command, args, { cwd, env: serverEnvironment(), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
+  extensionState.processes.add(child)
+  child.stdout.on('data', chunk => output.append(chunk.toString()))
+  child.stderr.on('data', chunk => output.append(chunk.toString()))
+  child.on('error', error => {
+    output.appendLine(`SysOneScript could not start: ${error.message}`)
+    setPanelRun(action, { status: 'failed', label: `${label} · failed` })
+  })
+  child.on('close', code => {
+    extensionState.processes.delete(child)
+    output.appendLine('')
+    output.appendLine(`[${label} ${code === 0 ? 'completed' : `exited with code ${code ?? 'unknown'}`}]`)
+    setPanelRun(action, { status: code === 0 ? 'success' : 'failed', label: `${label} · ${code === 0 ? 'done' : `exit ${code ?? 'unknown'}`}` })
+  })
+  return child
+}
+
+function showRunOutput() {
+  extensionState.runOutput.show(true)
+}
+
+async function runProject(resource) {
+  const selected = projectEntrypoint(resource)
+  if (!selected) return
+  await saveWorkspace()
+  runPanelProcess('run', ['run', relativeScript(selected.root, selected.file)], selected.root, `Run ${relativeScript(selected.root, selected.file)}`)
+}
+
+async function runFile(resource) {
+  const file = fileFor(resource) || fileFor(vscode.window.activeTextEditor?.document.uri)
+  if (!file || !isSysOneScript({ fileName: file, languageId: LANGUAGE_ID })) {
+    vscode.window.showInformationMessage('Choose a .sos file to run.')
+    return
+  }
+  const root = projectFor(file)
+  if (!root) return runProject(resource)
+  await saveWorkspace()
+  runInTerminal(['run', relativeScript(root, file)], root, `run ${relativeScript(root, file)}`)
+}
+
+async function checkProject(resource) {
+  const selected = projectEntrypoint(resource)
+  if (!selected) return
+  await saveWorkspace()
+  runPanelProcess('check', ['check', relativeScript(selected.root, selected.file)], selected.root, `Check ${relativeScript(selected.root, selected.file)}`)
+}
+
+async function buildProject(resource) {
+  const selected = projectEntrypoint(resource)
+  if (!selected) return
+  const defaultOutput = path.join(selected.root, 'bin', path.basename(selected.file, '.sos'))
+  await saveWorkspace()
+  runPanelProcess('build', ['build', relativeScript(selected.root, selected.file), '--output', relativeScript(selected.root, defaultOutput)], selected.root, `Build ${relativeScript(selected.root, selected.file)}`)
+}
+
+async function explainFile(resource) {
+  const file = fileFor(resource) || fileFor(vscode.window.activeTextEditor?.document.uri)
+  if (!file) return
+  const root = projectFor(file)
+  if (!root) return
+  await saveWorkspace()
+  runInTerminal(['explain', relativeScript(root, file)], root, `explain ${relativeScript(root, file)}`)
+}
+
+async function stopProcesses() {
+  for (const child of extensionState.processes) child.kill()
+  extensionState.processes.clear()
+  for (const state of extensionState.panelRuns.values()) {
+    if (state.status === 'running') {
+      state.status = 'stopped'
+      state.label = `${state.label} · stopped`
+    }
+  }
+  extensionState.tree.refresh()
+}
+
+async function debugFile(resource) {
+  const file = fileFor(resource) || fileFor(vscode.window.activeTextEditor?.document.uri)
+  if (!file) {
+    vscode.window.showInformationMessage('Choose a .sos file to debug.')
+    return
+  }
+  const root = projectFor(file)
+  if (!root) return
+  await saveWorkspace()
+  let args = []
+  try {
+    const source = fs.readFileSync(file, 'utf8')
+    if (/^\s*command\b/m.test(source)) {
+      const entered = await vscode.window.showInputBox({
+        prompt: 'Optional SysOneScript command and arguments',
+        placeHolder: 'for example: report --output reports',
+        value: '',
+      })
+      if (entered === undefined) return
+      args = splitScriptArguments(entered)
+    }
+  } catch {
+    // The debug adapter will report a more useful source error if the file
+    // disappears between the editor action and launch.
+  }
+  await vscode.debug.startDebugging(vscode.workspace.getWorkspaceFolder(vscode.Uri.file(root)), {
+    type: 'sysonescript',
+    request: 'launch',
+    name: `Debug ${path.basename(file)}`,
+    program: file,
+    cwd: root,
+    args,
+    stopOnEntry: false,
+  })
+}
+
+function splitScriptArguments(value) {
+  const result = []
+  const pattern = /"([^"\\]*(?:\\.[^"\\]*)*)"|'([^']*)'|(\S+)/g
+  let match
+  while ((match = pattern.exec(value)) !== null) result.push(match[1] ?? match[2] ?? match[3])
+  return result
+}
+
+async function debugProject(resource) {
+  const selected = projectEntrypoint(resource)
+  if (!selected) return
+  await saveWorkspace()
+  setPanelRun('debug', { status: 'running', label: `Debug ${relativeScript(selected.root, selected.file)} · running` })
+  const started = await vscode.debug.startDebugging(vscode.workspace.getWorkspaceFolder(vscode.Uri.file(selected.root)), {
+    type: 'sysonescript', request: 'launch', name: `Debug ${path.basename(selected.file)}`, program: selected.file, cwd: selected.root, args: [], stopOnEntry: false,
+  })
+  if (!started) setPanelRun('debug', { status: 'failed', label: 'Debug failed to start' })
+}
+
+async function setJevToken() {
+  const token = await vscode.window.showInputBox({
+    prompt: 'Enter the Jev API token (stored securely by VS Code)',
+    password: true,
+    ignoreFocusOut: true,
+    validateInput: value => value.trim() ? undefined : 'A token is required.',
+  })
+  if (token === undefined) return
+  await extensionState.secrets.store(JEV_SECRET_KEY, token.trim())
+  extensionState.jevToken = token.trim()
+  extensionState.tree.refresh()
+  await restartServer()
+  vscode.window.showInformationMessage('Jev token stored securely for SysOneScript.')
+}
+
+async function clearJevToken() {
+  await extensionState.secrets.delete(JEV_SECRET_KEY)
+  extensionState.jevToken = undefined
+  extensionState.tree.refresh()
+  await restartServer()
+  vscode.window.showInformationMessage('Stored Jev token cleared. Environment or project .env values remain unchanged.')
+}
+
+async function showJevStatus() {
+  const configured = Boolean(extensionState.jevToken || process.env.TYPESAFE_API_KEY || configuration().get('server.env.TYPESAFE_API_KEY'))
+  vscode.window.showInformationMessage(configured ? 'Jev token is configured for SysOneScript.' : 'Jev token is not configured. Use SysOneScript: Set Jev Token.')
+}
+
+function jevStatus() {
+  if (extensionState.jevToken) return 'configured in VS Code'
+  if (process.env.TYPESAFE_API_KEY || configuration().get('server.env.TYPESAFE_API_KEY')) return 'configured in environment'
+  return 'not configured'
+}
+
+async function selectIconTheme() {
+  await vscode.commands.executeCommand('workbench.action.selectIconTheme')
+}
+
+async function openWelcome() {
+  await vscode.commands.executeCommand(
+    'workbench.action.openWalkthrough',
+    'donaldmurillo.sysonescript-vscode#sysonescript.getStarted',
+    false,
+  )
+}
+
+async function getCli() {
+  await vscode.env.openExternal(vscode.Uri.parse('https://github.com/DonaldMurillo/system-one-playground#install-the-standalone-cli'))
+}
+
+function readCommandVersion(command, args) {
+  return new Promise(resolve => {
+    let output = ''
+    let settled = false
+    const child = spawn(command, args, { env: process.env, windowsHide: true })
+    const finish = value => {
+      if (settled) return
+      settled = true
+      resolve(value)
+    }
+    child.stdout.on('data', chunk => { output += chunk })
+    child.on('error', () => finish(undefined))
+    child.on('close', code => finish(code === 0 ? parseVersionLine(output) : undefined))
+  })
+}
+
+async function refreshCliVersions(notify = false) {
+  const bundled = await readCommandVersion(bundledServerCommand(extensionState.extensionPath), ['version'])
+  const external = await readCommandVersion(process.platform === 'win32' ? 'sysone.exe' : 'sysone', ['version'])
+  extensionState.cliVersions = { extension: extensionState.extensionVersion, bundled, external }
+  extensionState.tree.refresh()
+  if (!notify || !external || !bundled || compareVersions(external, bundled) === 0 || extensionState.versionWarningShown) return
+  extensionState.versionWarningShown = true
+  const action = compareVersions(external, bundled) < 0 ? 'Update CLI' : 'Check Extension Updates'
+  const selected = await vscode.window.showWarningMessage(`SysOneScript versions are out of sync: VS Code runtime ${bundled}, terminal CLI ${external}.`, action)
+  if (selected === 'Update CLI') await updateCli()
+  if (selected === 'Check Extension Updates') await vscode.commands.executeCommand('workbench.extensions.action.checkForUpdates')
+}
+
+async function updateCli() {
+  await refreshCliVersions(false)
+  if (!extensionState.cliVersions.external) {
+    const selected = await vscode.window.showInformationMessage('The standalone SysOneScript CLI is not installed on PATH.', 'Install CLI')
+    if (selected === 'Install CLI') await getCli()
+    return
+  }
+  const comparison = compareVersions(extensionState.cliVersions.external, extensionState.cliVersions.bundled)
+  if (comparison > 0) {
+    const selected = await vscode.window.showWarningMessage(`The terminal CLI (${extensionState.cliVersions.external}) is newer than the VS Code runtime (${extensionState.cliVersions.bundled}).`, 'Check Extension Updates')
+    if (selected === 'Check Extension Updates') await vscode.commands.executeCommand('workbench.extensions.action.checkForUpdates')
+    return
+  }
+  if (comparison === 0) {
+    vscode.window.showInformationMessage(`Terminal CLI ${extensionState.cliVersions.external} is already current with VS Code runtime ${extensionState.cliVersions.bundled}.`)
+    return
+  }
+  const terminal = vscode.window.createTerminal({ name: 'SysOneScript Update', cwd: workspaceRoot() })
+  terminal.show()
+  terminal.sendText('sysone update', true)
+}
+
+async function runHelper(helper, resource) {
+  const root = projectFor(resource)
+  if (!root || !helper) return
+  await saveWorkspace()
+  const cwd = helper.cwd ? path.resolve(root, helper.cwd) : root
+  const builtins = new Set(['run', 'check', 'build', 'fmt', 'explain', 'config', 'vocabulary'])
+  if (builtins.has(helper.command)) runInTerminal([helper.command, ...helper.args], cwd, helper.name)
+  else runInTerminal(helper.args, cwd, helper.name, helper.command)
+}
+
+class SysOneScriptItem extends vscode.TreeItem {
+  constructor(label, collapsibleState, kind, resource, command, icon, description) {
+    super(label, collapsibleState)
+    this.kind = kind
+    this.resource = resource
+    this.contextValue = kind
+    if (command) this.command = command
+    if (icon) this.iconPath = new vscode.ThemeIcon(icon)
+    if (description) this.description = description
+  }
+}
+
+class SysOneScriptTreeProvider {
+  constructor() { this.changed = new vscode.EventEmitter(); this.onDidChangeTreeData = this.changed.event }
+  refresh() { this.changed.fire() }
+  getTreeItem(element) { return element }
+  getChildren(element) {
+    const root = projectFor(element?.resource || workspaceRoot()) || workspaceRoot()
+    if (!root) return [new SysOneScriptItem('Welcome & setup', vscode.TreeItemCollapsibleState.None, 'projectAction', undefined, { command: 'sysonescript.openWelcome', title: 'Open SysOneScript Welcome' }, 'sparkle')]
+    if (!element) {
+      const items = [
+        new SysOneScriptItem(`Project · ${path.basename(root)}`, vscode.TreeItemCollapsibleState.None, 'projectStatus', root, undefined, 'rocket', `${entrypointDescription(root)} · ${root}`),
+        new SysOneScriptItem('Welcome & setup', vscode.TreeItemCollapsibleState.None, 'projectAction', root, { command: 'sysonescript.openWelcome', title: 'Open SysOneScript Welcome' }, 'sparkle'),
+      ]
+      const appendAction = (action, label, command, icon) => {
+        const state = extensionState.panelRuns.get(action)
+        items.push(new SysOneScriptItem(label, vscode.TreeItemCollapsibleState.None, 'projectAction', root, { command, title: label, arguments: [root] }, icon, state?.label))
+      }
+      appendAction('run', 'Run project', 'sysonescript.runProject', 'play')
+      appendAction('check', 'Check project', 'sysonescript.checkProject', 'check-all')
+      appendAction('build', 'Build project', 'sysonescript.buildProject', 'package')
+      appendAction('debug', 'Debug project', 'sysonescript.debugProject', 'debug-alt')
+      items.push(
+        new SysOneScriptItem('Show run output', vscode.TreeItemCollapsibleState.None, 'projectAction', root, { command: 'sysonescript.showRunOutput', title: 'Show SysOneScript Run Output' }, 'output'),
+        new SysOneScriptItem('Stop processes', vscode.TreeItemCollapsibleState.None, 'projectAction', root, { command: 'sysonescript.stop', title: 'Stop SysOneScript Processes' }, 'stop-circle'),
+        new SysOneScriptItem('Set Jev token', vscode.TreeItemCollapsibleState.None, 'jevStatus', root, { command: 'sysonescript.setJevToken', title: 'Set Jev Token' }, 'key', jevStatus()),
+        new SysOneScriptItem('Get standalone CLI', vscode.TreeItemCollapsibleState.None, 'projectAction', root, { command: 'sysonescript.getCli', title: 'Get Standalone CLI' }, 'terminal'),
+      )
+      const versions = extensionState.cliVersions
+      if (versions?.external && versions?.bundled) {
+        const mismatch = compareVersions(versions.external, versions.bundled)
+        items.push(new SysOneScriptItem(mismatch < 0 ? 'Update standalone CLI' : 'CLI version status', vscode.TreeItemCollapsibleState.None, 'projectAction', root, { command: 'sysonescript.updateCli', title: 'Update Standalone CLI' }, mismatch === 0 ? 'pass-filled' : 'warning', `VS Code ${versions.bundled} · terminal ${versions.external}${mismatch === 0 ? '' : ' · out of sync'}`))
+      } else if (versions) {
+        items.push(new SysOneScriptItem('CLI version status', vscode.TreeItemCollapsibleState.None, 'projectAction', root, { command: 'sysonescript.getCli', title: 'Get Standalone CLI' }, 'info', `VS Code ${versions.bundled || versions.extension} · terminal CLI not found`))
+      }
+      if (extensionState.jevToken) items.push(new SysOneScriptItem('Clear Jev token', vscode.TreeItemCollapsibleState.None, 'jevStatus', root, { command: 'sysonescript.clearJevToken', title: 'Clear Jev Token' }, 'trash'))
+      const helpers = readHelpers(root)
+      if (helpers.length) items.push(new SysOneScriptItem('Helpers & generators', vscode.TreeItemCollapsibleState.Expanded, 'helpers', root, undefined, 'tools'))
+      return items
+    }
+    if (element.kind === 'helpers') return readHelpers(root).map(helper => new SysOneScriptItem(helper.name, vscode.TreeItemCollapsibleState.None, 'helper', root, { command: 'sysonescript.runHelper', title: helper.description || helper.name, arguments: [helper, root] }, 'play-circle'))
+    return []
+  }
 }
 
 function initializeParams() {
@@ -190,6 +625,7 @@ function publishDiagnostics(params) {
 }
 
 async function startServer() {
+  if (extensionState?.tokenReady) await extensionState.tokenReady
   const previous = extensionState?.client
   if (previous) await previous.stop()
   clearDiagnostics()
@@ -357,7 +793,7 @@ function registerLanguageProviders(context) {
   }))
 
   const legend = new vscode.SemanticTokensLegend([
-    'keyword', 'variable', 'parameter', 'function', 'type', 'namespace', 'string', 'number', 'comment', 'macro', 'enumMember',
+    'keyword', 'variable', 'parameter', 'function', 'type', 'namespace', 'string', 'number', 'comment', 'macro', 'enumMember', 'sosOperator',
   ])
   context.subscriptions.push(vscode.languages.registerDocumentSemanticTokensProvider(DOCUMENT_SELECTOR, {
     async provideDocumentSemanticTokens(document) {
@@ -462,30 +898,122 @@ async function restartServer() {
   }
 }
 
+class SysOneScriptDebugConfigurationProvider {
+  resolveDebugConfiguration(folder, config) {
+    const root = folder?.uri.fsPath || workspaceRoot()
+    const result = { ...config }
+    result.type = 'sysonescript'
+    result.request = 'launch'
+    result.name = result.name || 'Debug SysOneScript'
+    result.cwd = result.cwd || root
+    if (!result.program) {
+      const editorFile = fileFor(vscode.window.activeTextEditor?.document.uri)
+      if (editorFile) result.program = editorFile
+      else {
+        const entries = root ? discoverEntrypoints(root) : []
+        if (entries.length === 1) result.program = entries[0]
+      }
+    }
+    if (!result.program) {
+      vscode.window.showErrorMessage('Choose a SysOneScript program to debug.')
+      return undefined
+    }
+    return result
+  }
+}
+
+class SysOneScriptDebugAdapterFactory {
+  createDebugAdapterDescriptor(session) {
+    const folder = session.workspaceFolder?.uri.fsPath || workspaceRoot()
+    return new vscode.DebugAdapterExecutable(runnerCommand(), ['debug'], {
+      cwd: folder,
+      env: serverEnvironment(),
+    })
+  }
+}
+
 function activate(context) {
   const output = vscode.window.createOutputChannel('SysOneScript')
+  const runOutput = vscode.window.createOutputChannel('SysOneScript Run')
   const diagnostics = vscode.languages.createDiagnosticCollection('sysonescript')
-  extensionState = { output, diagnostics, client: null, ready: null, opened: new Set(), extensionPath: context.extensionPath }
-  context.subscriptions.push(output, diagnostics)
+  const tree = new SysOneScriptTreeProvider()
+  extensionState = {
+    output,
+    runOutput,
+    diagnostics,
+    tree,
+    client: null,
+    ready: null,
+    opened: new Set(),
+    processes: new Set(),
+    panelRuns: new Map(),
+    treeView: null,
+    extensionPath: context.extensionPath,
+    extensionVersion: context.extension.packageJSON.version,
+    cliVersions: undefined,
+    versionWarningShown: false,
+    secrets: context.secrets,
+    jevToken: undefined,
+    tokenReady: context.secrets.get(JEV_SECRET_KEY).then(token => { extensionState.jevToken = token || undefined }),
+  }
+  context.subscriptions.push(output, runOutput, diagnostics)
+
+  extensionState.treeView = vscode.window.createTreeView('sysonescript.project', { treeDataProvider: tree, showCollapseAll: true })
+  context.subscriptions.push(extensionState.treeView)
+  context.subscriptions.push(vscode.debug.registerDebugConfigurationProvider('sysonescript', new SysOneScriptDebugConfigurationProvider()))
+  context.subscriptions.push(vscode.debug.registerDebugAdapterDescriptorFactory('sysonescript', new SysOneScriptDebugAdapterFactory()))
+  context.subscriptions.push(vscode.debug.onDidTerminateDebugSession(session => {
+    if (session.type === 'sysonescript') {
+      output.appendLine('SysOneScript debugger session ended.')
+      setPanelRun('debug', { status: 'success', label: 'Debug session ended' })
+    }
+  }))
 
   registerDocumentSync(context)
   registerLanguageProviders(context)
   context.subscriptions.push(vscode.commands.registerCommand('sysonescript.analyze', analyzeActiveDocument))
   context.subscriptions.push(vscode.commands.registerCommand('sysonescript.restartServer', restartServer))
+  context.subscriptions.push(vscode.commands.registerCommand('sysonescript.selectEntrypoint', selectEntrypoint))
+  context.subscriptions.push(vscode.commands.registerCommand('sysonescript.runProject', runProject))
+  context.subscriptions.push(vscode.commands.registerCommand('sysonescript.runFile', runFile))
+  context.subscriptions.push(vscode.commands.registerCommand('sysonescript.checkProject', checkProject))
+  context.subscriptions.push(vscode.commands.registerCommand('sysonescript.buildProject', buildProject))
+  context.subscriptions.push(vscode.commands.registerCommand('sysonescript.explainFile', explainFile))
+  context.subscriptions.push(vscode.commands.registerCommand('sysonescript.debugFile', debugFile))
+  context.subscriptions.push(vscode.commands.registerCommand('sysonescript.debugProject', debugProject))
+  context.subscriptions.push(vscode.commands.registerCommand('sysonescript.stop', stopProcesses))
+  context.subscriptions.push(vscode.commands.registerCommand('sysonescript.showRunOutput', showRunOutput))
+  context.subscriptions.push(vscode.commands.registerCommand('sysonescript.setJevToken', setJevToken))
+  context.subscriptions.push(vscode.commands.registerCommand('sysonescript.clearJevToken', clearJevToken))
+  context.subscriptions.push(vscode.commands.registerCommand('sysonescript.showJevStatus', showJevStatus))
+  context.subscriptions.push(vscode.commands.registerCommand('sysonescript.selectIconTheme', selectIconTheme))
+  context.subscriptions.push(vscode.commands.registerCommand('sysonescript.openWelcome', openWelcome))
+  context.subscriptions.push(vscode.commands.registerCommand('sysonescript.getCli', getCli))
+  context.subscriptions.push(vscode.commands.registerCommand('sysonescript.updateCli', updateCli))
+  context.subscriptions.push(vscode.commands.registerCommand('sysonescript.checkCliVersions', () => refreshCliVersions(true)))
+  context.subscriptions.push(vscode.commands.registerCommand('sysonescript.refresh', () => tree.refresh()))
+  context.subscriptions.push(vscode.commands.registerCommand('sysonescript.runHelper', runHelper))
   context.subscriptions.push(vscode.commands.registerCommand('sos.analyze', analyzeActiveDocument))
+  context.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(() => tree.refresh()))
+  context.subscriptions.push(vscode.workspace.onDidCreateFiles(() => tree.refresh()))
+  context.subscriptions.push(vscode.workspace.onDidDeleteFiles(() => tree.refresh()))
+  context.subscriptions.push(vscode.workspace.onDidRenameFiles(() => tree.refresh()))
+  context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(() => tree.refresh()))
   context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(event => {
     if (event.affectsConfiguration('sysonescript.server') || event.affectsConfiguration('sysonescript.trace.server')) {
       restartServer().catch(() => {})
     }
   }))
 
-  startServer().catch(() => {})
+  extensionState.tokenReady.then(() => startServer()).catch(() => {})
+  refreshCliVersions(true).catch(() => {})
 }
 
 async function deactivate() {
   const state = extensionState
   extensionState = undefined
   if (state?.client) await state.client.stop()
+  for (const child of state?.processes || []) child.kill()
 }
 
 module.exports = { activate, deactivate }

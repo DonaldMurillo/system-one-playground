@@ -138,7 +138,12 @@ func lexLine(text string) Line {
 				i++
 			}
 		} else {
-			i++
+			if end := operatorEnd(runes, i); end > i {
+				kind = "operator"
+				i = end
+			} else {
+				i++
+			}
 		}
 		for _, r := range runes[begin:i] {
 			col += width(r)
@@ -147,6 +152,32 @@ func lexLine(text string) Line {
 	}
 	return line
 }
+
+// operatorEnd returns the end of one expression operator. The frontmatter
+// delimiter +++ is intentionally left as punctuation, not three operators.
+func operatorEnd(runes []rune, start int) int {
+	c := runes[start]
+	if c == '+' {
+		if (start > 0 && runes[start-1] == '+') || (start+1 < len(runes) && runes[start+1] == '+') {
+			return start
+		}
+		return start + 1
+	}
+	if strings.ContainsRune("-*/%", c) {
+		return start + 1
+	}
+	if strings.ContainsRune("<>", c) {
+		if start+1 < len(runes) && runes[start+1] == '=' {
+			return start + 2
+		}
+		return start + 1
+	}
+	if (c == '=' || c == '!') && start+1 < len(runes) && runes[start+1] == '=' {
+		return start + 2
+	}
+	return start
+}
+
 func width(r rune) int {
 	if utf16.RuneLen(r) == 2 {
 		return 2

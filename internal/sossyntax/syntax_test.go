@@ -33,3 +33,28 @@ func TestBlocksAndInsertions(t *testing.T) {
 		t.Fatal("colon in comment became block")
 	}
 }
+
+func TestExpressionOperators(t *testing.T) {
+	doc := Parse("make joined \"left\" + \"right\"\nmake also \"left\" plus \"right\"\nmake scaled 2 * 3 >= 6\n+++\n")
+
+	if got := doc.Lines[0].Tokens[3]; got.Kind != "operator" || got.Text != "+" {
+		t.Fatalf("symbolic concatenation token = %+v, want operator +", got)
+	}
+	if got := doc.Lines[1].Tokens[3]; got.Kind != "identifier" || got.Text != "plus" {
+		t.Fatalf("word concatenation token = %+v, want identifier plus for semantic classification", got)
+	}
+	if got := doc.Lines[2].Tokens[2]; got.Kind != "number" || got.Text != "2" {
+		t.Fatalf("number before symbolic operators = %+v", got)
+	}
+	if got := doc.Lines[2].Tokens[3]; got.Kind != "operator" || got.Text != "*" {
+		t.Fatalf("multiplication token = %+v, want operator *", got)
+	}
+	if got := doc.Lines[2].Tokens[5]; got.Kind != "operator" || got.Text != ">=" {
+		t.Fatalf("comparison token = %+v, want operator >=", got)
+	}
+	for _, token := range doc.Lines[3].Tokens {
+		if token.Kind == "operator" {
+			t.Fatalf("frontmatter delimiter tokenized as operator: %+v", token)
+		}
+	}
+}

@@ -39,6 +39,7 @@ type runtime struct {
 	replayIndex      int
 	depth            int
 	condition        bool
+	debugStack       []DebugFrame
 }
 type returnValue struct{ value any }
 
@@ -153,7 +154,13 @@ func Run(ctx context.Context, p *Program, opts Options) (result *Result, err err
 	remapStatements(resolved.Statements, analysis.SourceMap)
 	p = resolved
 	p.Modules = modules
-	r := &runtime{shared: &executionState{}, ctx: ctx, p: p, opts: opts, replay: replay, env: map[string]any{}, functions: map[string]*Statement{}, schemas: map[string]*Statement{}, imports: map[string]*Module{}, result: &Result{Traces: []Trace{}}}
+	logicalPath := opts.SourcePath
+	if logicalPath != "" {
+		if absolute, e := filepath.Abs(logicalPath); e == nil {
+			logicalPath = absolute
+		}
+	}
+	r := &runtime{shared: &executionState{}, logicalPath: logicalPath, ctx: ctx, p: p, opts: opts, replay: replay, env: map[string]any{}, functions: map[string]*Statement{}, schemas: map[string]*Statement{}, imports: map[string]*Module{}, result: &Result{Traces: []Trace{}}}
 	if p.Modules != nil {
 		r.imports = p.Modules.Aliases
 		r.vocab = p.Modules.vocab
@@ -247,6 +254,11 @@ func (r *runtime) block(sts []*Statement) error {
 		if err := r.tick(); err != nil {
 			return fmt.Errorf("line %d: %w", s.Line, err)
 		}
+		if debuggableStatement(s) {
+			if err := r.debugBefore(s); err != nil {
+				return err
+			}
+		}
 		err := r.execute(s)
 		if err != nil {
 			var ret returnValue
@@ -296,6 +308,39 @@ func (r *runtime) block(sts []*Statement) error {
 				}
 			}
 		}
+	}
+	return nil
+}
+
+func debuggableStatement(s *Statement) bool {
+	if s == nil {
+		return false
+	}
+	switch s.Kind {
+	case "command", "parameter", "import", "package", "export", "schema", "to", "handler", "otherwise":
+		return false
+	default:
+		return true
+	}
+}
+
+func (r *runtime) debugBefore(s *Statement) error {
+	if r.opts.Debugger == nil {
+		return nil
+	}
+	frame := DebugFrame{Path: r.logicalPath, Line: s.Line, Column: 1, Kind: s.Kind, Text: s.Text, Depth: r.depth}
+	stack := make([]DebugFrame, len(r.debugStack))
+	copy(stack, r.debugStack)
+	variables, err := cloneValue(r.env)
+	if err != nil {
+		return fmt.Errorf("debugger snapshot: %w", err)
+	}
+	snapshot, ok := variables.(map[string]any)
+	if !ok {
+		return fmt.Errorf("debugger snapshot is not an object")
+	}
+	if err := r.opts.Debugger.BeforeStatement(r.ctx, frame, stack, snapshot); err != nil {
+		return err
 	}
 	return nil
 }
@@ -391,7 +436,9 @@ func (r *runtime) execute(s *Statement) error {
 		}
 		r.env = local
 		r.depth++
+		r.debugStack = append(r.debugStack, DebugFrame{Path: r.logicalPath, Line: fn.Line, Column: 1, Name: m[1], Kind: "action", Text: fn.Text, Depth: r.depth})
 		e = r.block(fn.Body)
+		r.debugStack = r.debugStack[:len(r.debugStack)-1]
 		r.depth--
 		r.env = outer
 		r.imports = outerImports
@@ -986,7 +1033,13 @@ func (r *runtime) callModule(s *Statement, mod *Module, action, display string, 
 	r.env = local
 	r.functions, r.schemas, r.imports, r.vocab = copyStatements(mod.Actions), copyStatements(mod.Schemas), imports, mod.vocabulary(action)
 	r.depth++
+	modulePath := mod.Key
+	if !filepath.IsAbs(modulePath) && r.logicalPath != "" {
+		modulePath = filepath.Join(r.opts.Dir, modulePath)
+	}
+	r.debugStack = append(r.debugStack, DebugFrame{Path: modulePath, Line: fn.Line, Column: 1, Name: display, Kind: "action", Text: fn.Text, Depth: r.depth})
 	e := r.block(fn.Body)
+	r.debugStack = r.debugStack[:len(r.debugStack)-1]
 	r.depth--
 	r.env = outer
 	r.functions, r.schemas, r.imports, r.vocab = outerFns, outerSchemas, outerImports, outerVocab

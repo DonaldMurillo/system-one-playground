@@ -18,7 +18,7 @@ go generate ./internal/sosbuild
 mkdir -p vscode/bin
 go build -o vscode/bin/sos ./cmd/sos
 pnpm --dir vscode package
-code --install-extension vscode/sysonescript-vscode-0.1.0.vsix
+code --install-extension vscode/sysonescript-vscode-0.1.1.vsix
 ```
 
 Marketplace releases bundle a platform-matched `sos` language-server binary,
@@ -44,14 +44,14 @@ is open.
 
 The extension release workflow is [`.github/workflows/vscode-release.yml`](https://github.com/DonaldMurillo/system-one-playground/blob/main/.github/workflows/vscode-release.yml).
 Create a VS Code Marketplace publisher whose identifier matches the extension
-manifest (`donaldmurillo`), configure trusted OIDC publishing for this
-repository, and create a protected GitHub environment named `marketplace` with
-required reviewers. Then bump `vscode/package.json` and
-`vscode/CHANGELOG.md` together. Pushing a tag like `vscode-v0.1.0` runs the
-checks, builds the platform bundles, waits for approval, and publishes the
-matching version. The first publisher, trusted-publishing policy, and GitHub
-environment setup are account-level actions; they cannot be completed from the
-repository alone.
+manifest (`donaldmurillo`), create an Azure DevOps Personal Access Token with
+Marketplace **Manage** scope, and save it as the `VSCE_PAT` secret on a
+protected GitHub environment named `marketplace` with required reviewers. Then
+bump `vscode/package.json` and `vscode/CHANGELOG.md` together. Pushing a tag
+like `vscode-v0.1.1` runs the checks, builds the platform bundles, waits for
+approval, and publishes the matching version. The first publisher, token, and
+GitHub environment setup are account-level actions; they cannot be completed
+from the repository alone.
 
 The Marketplace receives the `.vsix` extension packages, each with its matching
 `sos` language server. The same approved release also attaches standalone
@@ -61,7 +61,8 @@ The Marketplace receives the `.vsix` extension packages, each with its matching
 
 Immediate lexical colors remain available while a language-server request is in
 flight. Semantic colors distinguish operations, bindings, parameters, types,
-namespaces, strings, numbers, and comments. Hover describes known constructions
+namespaces, operators (including `plus` and `+`), strings, numbers, and comments.
+Hover describes known constructions
 and their effects. Inlay hints annotate values/types only when local analysis can
 justify them; they do not predict provider answers. Colon-led blocks can be folded.
 

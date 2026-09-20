@@ -4,17 +4,57 @@ Build readable scripts, semantic code checks and developer tools with the TypeSa
 
 **Start offline. Add Jev judgments when you need them.** Repository name: `system-one-playground`. MIT licensed · SOS 0.6 preview.
 
-## Run your first script
+## Ready to install and use
 
-You need **Go 1.25+**. Clone the repository, then build the CLI:
+You do **not** need to clone this repository or install Go to use the released
+CLI or VS Code extension.
+
+### Install the standalone CLI
+
+Install the latest standalone CLI on macOS or Linux:
 
 ```sh
-git clone https://github.com/DonaldMurillo/system-one-playground.git
-cd system-one-playground
-go build -o bin/sos ./cmd/sos
-go build -o bin/sysone ./cmd/sysone
-export PATH="$PWD/bin:$PATH"
+curl -fsSL https://raw.githubusercontent.com/DonaldMurillo/system-one-playground/main/scripts/install.sh | sh
+```
 
+On Windows PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/DonaldMurillo/system-one-playground/main/scripts/install.ps1 | iex
+```
+
+Both installers detect the platform, verify the release checksum, and install
+`sos` plus `sysone`. The Unix installer defaults to `~/.local/bin` and tells you
+if it is not on `PATH`. The Windows installer uses
+`%LOCALAPPDATA%\Programs\SysOneScript\bin` and adds that directory to the user
+`PATH`. Set `SYSONESCRIPT_VERSION` to pin a release or
+`SYSONESCRIPT_INSTALL_DIR` to choose another destination.
+
+Check for or install later CLI releases explicitly:
+
+```sh
+sysone update --check
+sysone update
+```
+
+The CLI does not update silently. VS Code also compares its bundled runtime
+with `sysone` on `PATH` and offers the same update command when they differ.
+
+### Install the VS Code extension
+
+Install [SysOneScript from the Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=donaldmurillo.sysonescript-vscode),
+or search for **SysOneScript** in VS Code's Extensions view. The extension ships
+with the matching runtime, language server, runner, builder, formatter, and
+debugger for the user's platform. Go and a separate CLI installation are not
+required.
+
+The standalone CLI remains optional for people who also want `sysone` and `sos`
+in an external terminal. See the [editor services guide](docs/sysonescript-editor.md)
+for all extension features and settings.
+
+### Run your first script
+
+```sh
 printf 'make message "Hello from System One Playground"\nshow message\n' > hello.sos
 sysone run hello.sos
 ```
@@ -30,59 +70,17 @@ sysone build hello.sos --output bin/hello
 
 Recipients need neither Go nor SysOneScript. Keep `sysone` and `sos` together when using the language tools; `sysone` delegates language commands to `sos`.
 
-## Open Studio
-
-Studio gives you a project file tree, editor hints, vocabulary search, environment settings and separate views for interpretation decisions and runtime traces. Building its frontend requires **Node.js 18+ and pnpm**:
-
-```sh
-pnpm --dir studio install --frozen-lockfile
-pnpm --dir studio build
-go build -o bin/sos-studio ./cmd/sos-studio
-sysone --project examples/sos/repo-assistant open studio
-```
-
-Keep `sos-studio` alongside the other two executables. This opens the browser workbench. For the optional native desktop app, see the [Studio guide](docs/studio-overview.md).
-
-## Use SysOneScript in VS Code
-
-The repository includes a VS Code extension backed by the same stdio language server used by Studio. Build the language entry points, then package the extension:
-
-```sh
-go generate ./internal/sosbuild
-mkdir -p vscode/bin
-go build -o vscode/bin/sos ./cmd/sos
-pnpm --dir vscode check
-pnpm --dir vscode test
-pnpm --dir vscode package
-code --install-extension vscode/sysonescript-vscode-0.1.0.vsix
-```
-
-Marketplace packages include a platform-matched `sos` language server, so users do not need a separate CLI install. Development checkouts can set `sysonescript.server.command` to an absolute path such as `/path/to/system-one-playground/bin/sos`; the `sysone` entry point is also supported. See the [editor services guide](docs/sysonescript-editor.md) for supported features and configuration.
-
-## Choose what to try next
-
-| I want to… | Start here |
-| --- | --- |
-| Build a CLI in readable sentences | [Repository assistant walkthrough](examples/sos/repo-assistant/README.md): import issues, triage and generate reports |
-| Inspect code without API calls | `go run ./cmd/semlint -sites-only cmd/semlint/fixtures` |
-| Run the linter written in SOS | `sysone run examples/sos/semlint/scan.sos -- sites --root cmd/semlint/fixtures` |
-| Use System One from Go | [Go client quickstart](docs/go-client.md): one request, typed answers and usage |
-| Let an agent use the workspace | [CLI and MCP interface](docs/sysonescript-agent-interface.md) |
-| Explore tool-call policy and API experiments | [Gate and repository tools](docs/repository-tools.md) |
-
-The `sites` commands only inspect source and show the planned checks. Both the Go and SOS semlint implementations are available; [SOS semlint](docs/sysonescript-semlint.md) adds an example of bounded parallel judgments and failure handling in the language itself.
-
 ## Add live judgments
 
-Set `TYPESAFE_API_KEY` in your environment or in Studio Settings. Then try the small Go API demonstration:
+Set `TYPESAFE_API_KEY` in your environment or use **Set Jev token** in the VS
+Code project panel. Canonical scripts run offline; only model-backed Jev
+operations require the token and can make paid provider requests.
 
-```sh
-go run ./cmd/playground 01
-```
-
-This makes paid provider requests. [The client guide](docs/go-client.md) explains credentials, models, typed answers and usage. For scripts, see [Jev judgments and interpretation](docs/sysonescript-language.md) and [project environment settings](docs/sysonescript-project-environment.md).
-
-Canonical scripts run offline. Jev can interpret supported semantic sentences and judge data at runtime. Parallel workers share request/time limits; those limits are not an account-wide monetary cap.
+The [client guide](docs/go-client.md) explains credentials, models, typed
+answers, and usage. For scripts, see [Jev judgments and interpretation](docs/sysonescript-language.md)
+and [project environment settings](docs/sysonescript-project-environment.md).
+Parallel workers share request/time limits; those limits are not an account-wide
+monetary cap.
 
 ## Documentation
 
@@ -92,17 +90,72 @@ Canonical scripts run offline. Jev can interpret supported semantic sentences an
 - [Go semlint guide](docs/semlint-guide.md) and [SOS semlint guide](docs/sysonescript-semlint.md)
 - [All Markdown guides](docs/README.md)
 
-Run the searchable documentation site locally with **Go 1.27+**:
+## Develop this repository locally
+
+Everything below is for contributors and source builds, not ordinary CLI or
+VS Code users.
+
+### Explore the repository examples
+
+| I want to… | Start here |
+| --- | --- |
+| Build a CLI in readable sentences | [Repository assistant walkthrough](examples/sos/repo-assistant/README.md) |
+| Inspect code without API calls | `go run ./cmd/semlint -sites-only cmd/semlint/fixtures` |
+| Run the linter written in SOS | `sysone run examples/sos/semlint/scan.sos -- sites --root cmd/semlint/fixtures` |
+| Try the Go API demonstration | `go run ./cmd/playground 01` (can make paid requests) |
+| Let an agent use the workspace | [CLI and MCP interface](docs/sysonescript-agent-interface.md) |
+| Explore tool-call policy | [Gate and repository tools](docs/repository-tools.md) |
+
+The `sites` commands only inspect source and show planned checks. Both the Go
+and SOS semlint implementations are available; [SOS semlint](docs/sysonescript-semlint.md)
+demonstrates bounded parallel judgments and failure handling.
+
+### Build the CLI from source
+
+You need **Go 1.25+**:
 
 ```sh
-cd docs-site
-python3 scripts/sync_content.py
-go run .
+git clone https://github.com/DonaldMurillo/system-one-playground.git
+cd system-one-playground
+mkdir -p bin
+go build -o bin/sos ./cmd/sos
+go build -o bin/sysone ./cmd/sysone
+export PATH="$PWD/bin:$PATH"
 ```
 
-Open <http://localhost:3070>. The site is built with [fastr-docs](docs-site/README.md).
+### Run Studio from the repository
 
-## Development and status
+Studio gives you a project file tree, editor hints, vocabulary search,
+environment settings, and separate interpretation and runtime traces. Its
+frontend requires **Node.js 18+ and pnpm**:
+
+```sh
+pnpm --dir studio install --frozen-lockfile
+pnpm --dir studio build
+go build -o bin/sos-studio ./cmd/sos-studio
+sysone --project examples/sos/repo-assistant open studio
+```
+
+Keep `sos-studio` alongside the other two executables. For the optional native
+desktop app, see the [Studio guide](docs/studio-overview.md).
+
+### Build the VS Code extension from the repository
+
+```sh
+go generate ./internal/sosbuild
+mkdir -p vscode/bin
+go build -o vscode/bin/sos ./cmd/sos
+pnpm --dir vscode check
+pnpm --dir vscode test
+pnpm --dir vscode package
+code --install-extension vscode/sysonescript-vscode-0.2.0.vsix
+```
+
+Development checkouts can set `sysonescript.server.command` to an absolute path
+such as `/path/to/system-one-playground/bin/sos`; the `sysone` entry point is
+also supported.
+
+### Run the repository checks
 
 ```sh
 go test ./...
@@ -111,6 +164,18 @@ pnpm --dir studio test
 pnpm --dir studio run lint
 (cd desktop && go test ./... && go vet ./...)
 ```
+
+### Run the documentation site locally
+
+The docs site requires **Go 1.27+**:
+
+```sh
+cd docs-site
+python3 scripts/sync_content.py
+go run .
+```
+
+Open <http://localhost:3070>. The site is built with [fastr-docs](docs-site/README.md).
 
 SOS is a preview: local packages and native builds work; remote package resolution and a plain JavaScript emitter are not implemented. Browser/WASI capabilities depend on the imported libraries; live Jev host adapters are not available. See the [language guide](docs/sysonescript-language.md) for limits.
 

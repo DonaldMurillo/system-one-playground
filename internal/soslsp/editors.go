@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/DonaldMurillo/system-one-playground/internal/sossyntax"
 	"github.com/DonaldMurillo/system-one-playground/sos"
 )
 
@@ -108,15 +110,36 @@ func (s *server) inlayHints(params json.RawMessage) any {
 		k := 1
 		hints = append(hints, inlayHintItem{Position: lspPosition{Line: lineNo, Character: byteToChar(line, end)}, Label: label, Kind: &k})
 	}
+	addCharacter := func(lineNo, character int, label string) {
+		k := 1
+		hints = append(hints, inlayHintItem{Position: lspPosition{Line: lineNo, Character: character}, Label: label, Kind: &k})
+	}
 	imported := map[string]string{}
+	bindingTypes := map[string]string{}
 	targets := s.wordTargets(p.TextDocument.URI, vocabFilename(p.TextDocument.URI, s.workspaceRoot), doc.text)
 	for _, line := range strings.Split(doc.text, "\n") {
-		if m := reImportStmt.FindStringSubmatch(strings.TrimSpace(stripLineComment(line))); m != nil {
+		code := stripLineComment(line)
+		if m := reImportStmt.FindStringSubmatch(strings.TrimSpace(code)); m != nil {
 			alias := m[2]
 			if alias == "" {
 				alias = defaultAlias(m[1])
 			}
 			imported[alias] = m[1]
+		}
+		if m := reMakeValue.FindStringSubmatchIndex(code); m != nil {
+			if inferred := confidentValueType(strings.TrimSpace(code[m[4]:m[5]])); inferred != "" {
+				bindingTypes[code[m[2]:m[3]]] = inferred
+			}
+		} else if m := reReadCall.FindStringSubmatchIndex(code); m != nil {
+			inferred := code[m[2]:m[3]]
+			if inferred == "lines of json" {
+				inferred = "list"
+			}
+			bindingTypes[code[m[4]:m[5]]] = inferred
+		} else if m := reReadEach.FindStringSubmatchIndex(code); m != nil {
+			bindingTypes[code[m[2]:m[3]]] = "list"
+		} else if m := reTakeItems.FindStringSubmatchIndex(code); m != nil {
+			bindingTypes[code[m[2]:m[3]]] = "list"
 		}
 	}
 	for i, line := range strings.Split(doc.text, "\n") {
@@ -124,20 +147,20 @@ func (s *server) inlayHints(params json.RawMessage) any {
 			continue
 		}
 		code := stripLineComment(line)
+		for _, token := range sossyntax.Parse(code).Lines[0].Tokens {
+			if token.Kind != "string" && token.Kind != "incompleteString" {
+				continue
+			}
+			for _, inner := range interpolationSemanticTokens(i, token) {
+				if inner.kind == tokVariable && bindingTypes[inner.text] != "" {
+					addCharacter(i, inner.start+inner.len, ": "+bindingTypes[inner.text])
+				}
+			}
+		}
 		if m := reMakeValue.FindStringSubmatchIndex(code); m != nil {
 			value := strings.TrimSpace(code[m[4]:m[5]])
-			label := ""
-			if value == "as empty list" || value == "empty list" {
-				label = ": list"
-			} else if reNumberLit.MatchString(value) {
-				label = ": number"
-			} else if value == "true" || value == "false" {
-				label = ": boolean"
-			} else if _, err := strconv.Unquote(value); err == nil && strings.HasPrefix(value, "\"") {
-				label = ": text"
-			}
-			if label != "" {
-				add(i, line, m[3], label)
+			if inferred := confidentValueType(value); inferred != "" {
+				add(i, line, m[3], ": "+inferred)
 			}
 			continue
 		}
@@ -179,6 +202,22 @@ func (s *server) inlayHints(params json.RawMessage) any {
 	}
 
 	return hints
+}
+
+func confidentValueType(value string) string {
+	if value == "as empty list" || value == "empty list" {
+		return "list"
+	}
+	if reNumberLit.MatchString(value) {
+		return "number"
+	}
+	if value == "true" || value == "false" {
+		return "boolean"
+	}
+	if _, err := strconv.Unquote(value); err == nil && strings.HasPrefix(value, "\"") {
+		return "text"
+	}
+	return ""
 }
 
 // reCalledName captures a trailing `called NAME` sink.

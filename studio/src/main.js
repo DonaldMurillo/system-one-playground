@@ -68,6 +68,7 @@ monaco.editor.defineTheme('sos-dark', {
     { token: 'parameter', foreground: 'e8c78e' },
     { token: 'function', foreground: '82c7b6' },
     { token: 'namespace', foreground: 'a9a2db' },
+    { token: 'operator', foreground: 'e0a458' },
     { token: 'comment', foreground: '78828c', fontStyle: 'italic' }
   ],
   colors: {
