@@ -13,6 +13,10 @@ type semCandidate struct {
 	meaning string
 	lines   []string
 	matches []SemanticMatch
+	// requiresJev marks a structurally valid composition recovered from an
+	// unfamiliar sentence shape. Jev must align the source to this bounded
+	// candidate (or reject it), even when it is the only host-valid lowering.
+	requiresJev bool
 	// referent is the resolved collection name when the sentence operates
 	// on one; result is a name the lowering binds.
 	referent string

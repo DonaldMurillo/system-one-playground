@@ -37,6 +37,7 @@ type semanticLanguageDefinition struct {
 }
 
 var semanticDefinitions = map[string]semanticLanguageDefinition{
+	"modifier.only":              {id: "modifier.only", canonical: "", inputs: []string{"statement"}},
 	"language.when":             {id: "language.when", canonical: "when", inputs: []string{"boolean", "statement"}},
 	"language.show":             {id: "language.show", canonical: "show", inputs: []string{"any"}},
 	"operator.greater_than":     {id: "operator.greater_than", canonical: ">", inputs: []string{"ordered", "ordered"}},
@@ -71,7 +72,10 @@ func semanticLexiconIndex() map[string][]semanticPhrase {
 }
 
 func semanticCouldInterpret(text string) bool {
-	_, _, _, ok := splitInlineConditional(text)
+	if _, _, _, ok := splitInlineConditional(text); ok {
+		return true
+	}
+	_, _, _, ok := splitComposedConditional(text)
 	return ok
 }
 
@@ -80,8 +84,13 @@ func semanticCouldInterpret(text string) bool {
 // before a candidate can reach Jev.
 func lexicalCandidates(text string, scope *semScope) ([]semCandidate, []string) {
 	condition, action, matches, ok := splitInlineConditional(text)
+	requiresJev := false
 	if !ok {
-		return nil, []string{"no semantic dictionary construction matches this sentence"}
+		condition, action, matches, ok = splitComposedConditional(text)
+		requiresJev = ok
+	}
+	if !ok {
+		return nil, []string{"dictionary concepts could not compose a supported construction"}
 	}
 	left, right, comparisons := splitSemanticComparison(condition)
 	if len(comparisons) == 0 {
@@ -114,19 +123,27 @@ func lexicalCandidates(text string, scope *semScope) ([]semCandidate, []string) 
 			Phrase: comparison.phrase, Concept: comparison.concept, Definition: comparison.definition,
 		})
 		candidates = append(candidates, semCandidate{
-			id:      "lexical-inline-conditional:" + strings.TrimPrefix(comparison.definition, "operator."),
+			id:      lexicalCandidateID(requiresJev) + strings.TrimPrefix(comparison.definition, "operator."),
 			meaning: "execute the output action when " + strings.TrimSpace(left) + " is " + comparison.concept + " " + strings.TrimSpace(right),
 			lines: []string{
 				"when " + strings.TrimSpace(left) + " " + definition.canonical + " " + strings.TrimSpace(right) + ":",
 				"show " + strings.TrimSpace(action),
 			},
-			matches: candidateMatches,
+			matches:     candidateMatches,
+			requiresJev: requiresJev,
 		})
 	}
 	if len(candidates) == 0 {
 		return nil, []string{"dictionary meanings do not map to an available language definition"}
 	}
 	return candidates, nil
+}
+
+func lexicalCandidateID(composed bool) string {
+	if composed {
+		return "lexical-composed-conditional:"
+	}
+	return "lexical-inline-conditional:"
 }
 
 func splitInlineConditional(text string) (condition, action string, matches []SemanticMatch, ok bool) {
@@ -150,6 +167,36 @@ func splitInlineConditional(text string) (condition, action string, matches []Se
 		{Phrase: opener.phrase, Concept: opener.concept, Definition: opener.definition},
 		{Phrase: output.phrase, Concept: output.concept, Definition: output.definition},
 	}
+	return condition, action, matches, true
+}
+
+// splitComposedConditional retrieves concepts without requiring the canonical
+// clause order. It deliberately produces only host-known structures; Jev
+// decides whether that proposed composition actually expresses the sentence.
+func splitComposedConditional(text string) (condition, action string, matches []SemanticMatch, ok bool) {
+	index := semanticLexiconIndex()
+	outputAt, output, hasOutput := findSemanticPhraseOutsideQuotes(text, index["output.show"])
+	conditionAt, conditional, hasConditional := findSemanticPhraseOutsideQuotes(text, index["control.conditional"])
+	if !hasOutput || !hasConditional || outputAt >= conditionAt {
+		return "", "", nil, false
+	}
+	prefix := strings.TrimSpace(text[:outputAt])
+	if prefix != "" {
+		focus, found := matchSemanticPrefix(prefix, index["control.focus"])
+		if !found || strings.TrimSpace(prefix[len(focus.phrase):]) != "" {
+			return "", "", nil, false
+		}
+		matches = append(matches, SemanticMatch{Phrase: focus.phrase, Concept: focus.concept, Definition: focus.definition})
+	}
+	action = strings.TrimSpace(text[outputAt+len(output.phrase) : conditionAt])
+	condition = strings.TrimSpace(text[conditionAt+len(conditional.phrase):])
+	if action == "" || condition == "" {
+		return "", "", nil, false
+	}
+	matches = append(matches,
+		SemanticMatch{Phrase: output.phrase, Concept: output.concept, Definition: output.definition},
+		SemanticMatch{Phrase: conditional.phrase, Concept: conditional.concept, Definition: conditional.definition},
+	)
 	return condition, action, matches, true
 }
 

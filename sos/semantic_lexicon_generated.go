@@ -5,9 +5,10 @@ const semanticLexiconVersion = 1
 
 var generatedSemanticConcepts = []semanticConcept{
 	{ID: "comparison.greater_or_equal", Phrases: []string{"at least", "no less than"}, Definitions: []string{"operator.greater_or_equal"}},
-	{ID: "comparison.greater_than", Phrases: []string{"above", "bigger", "bigger than", "greater", "greater than", "larger", "larger than", "more than", "over"}, Definitions: []string{"operator.greater_than"}},
+	{ID: "comparison.greater_than", Phrases: []string{"above", "bigger", "bigger than", "gone beyond", "greater", "greater than", "has gone beyond", "larger", "larger than", "more than", "over"}, Definitions: []string{"operator.greater_than"}},
 	{ID: "comparison.less_or_equal", Phrases: []string{"at most", "no more than"}, Definitions: []string{"operator.less_or_equal"}},
 	{ID: "comparison.less_than", Phrases: []string{"below", "less", "less than", "smaller", "smaller than", "under"}, Definitions: []string{"operator.less_than"}},
-	{ID: "control.conditional", Phrases: []string{"if", "provided that", "when"}, Definitions: []string{"language.when"}},
+	{ID: "control.conditional", Phrases: []string{"if", "once", "provided that", "when"}, Definitions: []string{"language.when"}},
+	{ID: "control.focus", Phrases: []string{"only"}, Definitions: []string{"modifier.only"}},
 	{ID: "output.show", Phrases: []string{"display", "emit", "print", "show"}, Definitions: []string{"language.show"}},
 }

@@ -210,6 +210,35 @@ func TestSemanticDictionaryDoesNotMatchInsideQuotes(t *testing.T) {
 	}
 }
 
+func TestSemanticComposerUsesJevForUnfamiliarSentenceShape(t *testing.T) {
+	srv := semanticChoiceServer(t, func(req fixtureReq) (string, float64) {
+		if req.Sentence != `only show "adult" once age has gone beyond 18` {
+			t.Fatalf("unexpected sentence: %#v", req.Sentence)
+		}
+		candidates, _ := req.State["candidates"].([]any)
+		if len(candidates) != 1 {
+			t.Fatalf("want one bounded host-valid composition, got %+v", req.State)
+		}
+		return "lexical-composed-conditional:greater_than", 0.94
+	})
+	semanticTestEnv(t, srv.URL)
+	source := "make age 21\nonly show \"adult\" once age has gone beyond 18\n"
+	out, err := Analyze(context.Background(), source, AnalyzeOptions{Config: semanticConfig("semantic", "semantic")})
+	requireSuccess(t, out, err)
+	if out.Canonical != "make age 21\nwhen age > 18:\n  show \"adult\"\n" {
+		t.Fatalf("unexpected canonical composition: %q", out.Canonical)
+	}
+	if out.Usage.TotalAdmitted != 1 {
+		t.Fatalf("semantic composition must use one bounded Jev request, got %d", out.Usage.TotalAdmitted)
+	}
+	if len(out.Decisions) != 1 || out.Decisions[0].Method != "jev" || out.Decisions[0].Confidence != 0.94 {
+		t.Fatalf("unexpected composition decision: %+v", out.Decisions)
+	}
+	if len(out.Decisions[0].Matches) != 4 {
+		t.Fatalf("want focus, output, conditional, and comparison evidence: %+v", out.Decisions[0].Matches)
+	}
+}
+
 func BenchmarkSemanticLexicalInlineConditional(b *testing.B) {
 	source := "make age 21\nif age bigger 18 show \"adult\"\n"
 	opts := AnalyzeOptions{Config: semanticConfig("semantic", "semantic")}

@@ -22,7 +22,9 @@ request interpretation of sentence variants.
 
 Unambiguous variants lower locally and report deterministic decisions. Competing
 meanings or collection references use a constrained Jev Choice with an explicit
-reject option and a minimum confidence of 0.8. That score is not a guarantee of
+reject option and a minimum confidence of 0.8. Unfamiliar sentence shapes also
+require Jev to accept or reject the host's bounded composition, even if typing
+leaves one candidate. That score is not a guarantee of
 correctness; inspect the selected canonical form. An ordinary variable actually
 named `them` retains its ordinary binding. Reference tracking is conservative
 around scopes; unsupported references fail rather than invent bindings.
@@ -177,7 +179,7 @@ commands and unused actions do not consume interpretation requests. Source lines
 are preserved by blanking excluded constructions. Command declarations remain
 local and canonical. `check`, `explain`, and `build` cover the whole application.
 
-Saved analysis format is now version 4 and the registry is version 3; regenerate older saved
+Saved analysis format is now version 5 and the registry is version 4; regenerate older saved
 interpretations. Selected-source and whole-source hashes distinguish their
 coverage. A selected result cannot stand in for a whole build or a different
 command. Packaged applications validate the embedded whole result offline, then

@@ -4,12 +4,12 @@
   "concepts": [
     {
       "id": "control.conditional",
-      "phrases": ["if", "provided that", "when"],
+      "phrases": ["if", "once", "provided that", "when"],
       "definitions": ["language.when"]
     },
     {
       "id": "comparison.greater_than",
-      "phrases": ["bigger than", "greater than", "larger than", "more than", "above", "over", "bigger", "greater", "larger"],
+      "phrases": ["has gone beyond", "gone beyond", "bigger than", "greater than", "larger than", "more than", "above", "over", "bigger", "greater", "larger"],
       "definitions": ["operator.greater_than"]
     },
     {
@@ -31,6 +31,11 @@
       "id": "output.show",
       "phrases": ["show", "display", "print", "emit"],
       "definitions": ["language.show"]
+    },
+    {
+      "id": "control.focus",
+      "phrases": ["only"],
+      "definitions": ["modifier.only"]
     }
   ]
 }

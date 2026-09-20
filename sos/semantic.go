@@ -18,8 +18,8 @@ import (
 // construction changes; the prompt version changes when the discrimination
 // question or state shape changes. Both participate in the policy hash.
 const (
-	semanticAnalysisVersion = 4
-	semanticRegistryVersion = "3"
+	semanticAnalysisVersion = 5
+	semanticRegistryVersion = "4"
 	semanticPromptVersion   = "2"
 	// semanticMinConfidence is the conservative acceptance policy for model
 	// selections. It is evidence, not a correctness guarantee.
@@ -351,7 +351,7 @@ func (a *semanticAnalysis) doSemantic(n *semNode, scope *semScope) {
 	)
 	if a.replay {
 		expected := "jev"
-		if len(cands) == 1 {
+		if len(cands) == 1 && !cands[0].requiresJev {
 			expected = "deterministic"
 		}
 		dec, ok := a.replayDecisionDetail(n, cands, expected)
@@ -366,7 +366,7 @@ func (a *semanticAnalysis) doSemantic(n *semNode, scope *semScope) {
 		conf = dec.Confidence
 		method = dec.Method
 		explanation = dec.Explanation
-	} else if len(cands) == 1 {
+	} else if len(cands) == 1 && !cands[0].requiresJev {
 		cand = cands[0]
 	} else {
 		var ok bool
