@@ -56,3 +56,6 @@ Studio opens the bundled `semantic-dictionary` example by default in Examples
 mode. Choose **Analyze** to inspect phrase-to-definition matches, then **Run** to
 see the lowered program execute without a Jev token. Select
 `jev-language-composer` to exercise the bounded Jev grammatical-alignment path.
+For a visible request-budget stress pass, select `semantic-gauntlet`: it contains
+eight unfamiliar action-first sentences, varied comparison vocabulary, and a
+quoted grammar decoy. Analysis must spend exactly eight bounded Jev requests.

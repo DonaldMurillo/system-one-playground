@@ -239,6 +239,49 @@ func TestSemanticComposerUsesJevForUnfamiliarSentenceShape(t *testing.T) {
 	}
 }
 
+func TestSemanticGauntletUsesBoundedJevForEverySentence(t *testing.T) {
+	requests := 0
+	srv := semanticChoiceServer(t, func(req fixtureReq) (string, float64) {
+		requests++
+		for _, label := range req.Labels {
+			if label != "reject" {
+				return label, 0.95
+			}
+		}
+		t.Fatalf("request has no bounded candidate: %+v", req)
+		return "reject", 1
+	})
+	semanticTestEnv(t, srv.URL)
+	source := `make age 21
+make score 92
+make temperature 41
+make attempts 4
+make balance 120
+make queue 3
+only show "adult — not: print child once age under 2" once age has gone beyond 18
+display "excellent" once score greater than 90
+only emit "dangerously hot" once temperature gone beyond 40
+only print "too many attempts" once attempts more than 3
+only show "funded" once balance no less than 100
+display "queue healthy" once queue at most 5
+only print "still young" once age under 30
+only emit "high score" once score above 80
+`
+	out, err := Analyze(context.Background(), source, AnalyzeOptions{Config: sosconfig.Effective{Interpretation: "semantic", Runtime: "semantic", Requests: 8}})
+	requireSuccess(t, out, err)
+	if requests != 8 || out.Usage.TotalAdmitted != 8 || len(out.Decisions) != 8 {
+		t.Fatalf("gauntlet did not exercise eight bounded decisions: requests=%d usage=%+v decisions=%d", requests, out.Usage, len(out.Decisions))
+	}
+	for _, decision := range out.Decisions {
+		if decision.Method != "jev" || !strings.HasPrefix(decision.Candidate, "lexical-composed-conditional:") {
+			t.Fatalf("gauntlet escaped bounded composition: %+v", decision)
+		}
+	}
+	if !strings.Contains(out.Canonical, `show "adult — not: print child once age under 2"`) {
+		t.Fatalf("quoted decoy grammar was not preserved: %s", out.Canonical)
+	}
+}
+
 func BenchmarkSemanticLexicalInlineConditional(b *testing.B) {
 	source := "make age 21\nif age bigger 18 show \"adult\"\n"
 	opts := AnalyzeOptions{Config: semanticConfig("semantic", "semantic")}

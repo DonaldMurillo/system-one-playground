@@ -201,6 +201,8 @@ func (s *Server) handleExamples(w http.ResponseWriter, r *http.Request) {
 			title = "Dictionary fast path · 0 Jev requests"
 		case "jev-language-composer":
 			title = "Jev grammar composer · 1 request"
+		case "semantic-gauntlet":
+			title = "Semantic Gauntlet · 8 Jev requests"
 		}
 		out = append(out, map[string]string{"name": strings.TrimSuffix(path.Base(n), ".sos"), "title": title})
 	}
