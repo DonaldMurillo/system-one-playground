@@ -13,6 +13,19 @@ bin/sysone --project examples/sos/repo-assistant open studio
 
 The browser launcher stays in the foreground. Use `open examples` to select the examples experience instead. For a native shell, `make sos-desktop` uses Wails and its platform build prerequisites.
 
+## Open a project
+
+Switching to Project workspace shows a clean welcome screen. Select **Open a
+project…** to choose a folder. Desktop opens the native folder dialog; the
+browser workbench provides a folder-browsing dialog for the machine running
+Studio. Cancel keeps the welcome screen unchanged. The editor and result panels
+appear only after a folder is selected. Empty folders are supported.
+
+Returning to Project workspace from Examples asks for a folder again rather
+than opening the launch directory or an example automatically. Unsaved project
+buffers are retained across mode switches; choosing another project asks before
+discarding them. Run or Analyze must finish or stop before switching.
+
 ## Choose your workflow
 
 - [Projects and files](/docs/projects): explorer, unsaved buffers, conflict-aware saves and native builds.

@@ -110,12 +110,12 @@ func (d *Desktop) Save(name, source string) error {
 }
 
 func (d *Desktop) ChooseFolder() (string, error) {
-	p, e := wailsruntime.OpenDirectoryDialog(d.ctx, wailsruntime.OpenDialogOptions{Title: "Choose working folder", DefaultDirectory: d.dir})
+	p, e := wailsruntime.OpenDirectoryDialog(d.ctx, wailsruntime.OpenDialogOptions{Title: "Open a project", DefaultDirectory: d.dir})
 	if e != nil || p == "" {
-		return d.dir, e
+		return "", e
 	}
 	if e = d.server.SetDir(p); e != nil {
-		return d.dir, e
+		return "", e
 	}
 	d.dir = p
 	return p, nil

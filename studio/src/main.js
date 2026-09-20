@@ -161,6 +161,7 @@ editor.onDidChangeModelContent(() => { scheduleCheck(); invalidateAnalysis(); sc
 function scheduleCheck() {
   clearTimeout(checkTimer)
   checkTimer = setTimeout(async () => {
+    if (projects && !projects.hasDocument()) return
     if (state.running || (activeProjectPath && !activeProjectPath.endsWith('.sos'))) return
     try {
       const version = editor.getModel().getVersionId()
@@ -392,6 +393,7 @@ function setAnalyzing(analyzing) {
 }
 
 async function runAnalyze() {
+  if (projects && !projects.hasDocument()) return
   if (state.analyzing) return
   try { await refreshCommands() } catch (e) { renderInterpretationError(e); return }
   if (state.analyzing) return
@@ -946,6 +948,7 @@ monaco.languages.registerHoverProvider('sos', {
 })
 
 $('run').addEventListener('click', async () => {
+  if (projects && !projects.hasDocument()) return
   if (state.running) return
   if (activeProjectPath && !activeProjectPath.endsWith('.sos')) { showOutput('', 'Select a .sos file to run.'); return }
   if (projects?.hasUnsavedImports()) { showOutput('', 'Save other edited project files before running; imports are loaded from disk.'); return }
@@ -1119,10 +1122,10 @@ async function init() {
   }
   await projects.init()
   scheduleCheck()
-  editor.focus()
+  if (projects.hasDocument()) editor.focus()
 }
 
-projects = installProjects({api, editor, monaco, load:loadDocument, onPath:path=>{activeProjectPath=path; const textOnly=Boolean(path&&!path.endsWith('.sos')); $('run').disabled=state.running||textOnly; $('analyze').disabled=textOnly; $('format').disabled=textOnly}, report:e=>showOutput('',e.message)})
+projects = installProjects({api, editor, monaco, busy:()=>state.running||state.analyzing, load:loadDocument, onPath:path=>{openSequence++;activeProjectPath=path; const textOnly=Boolean(path&&!path.endsWith('.sos')); $('run').disabled=state.running||textOnly; $('analyze').disabled=textOnly; $('format').disabled=textOnly}, report:e=>showOutput('',e.message)})
 init()
 
 $('open').addEventListener('click', async () => {

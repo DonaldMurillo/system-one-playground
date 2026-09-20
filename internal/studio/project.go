@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/DonaldMurillo/system-one-playground/sos"
 	"io"
 	"io/fs"
 	"net/http"
@@ -15,7 +16,6 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"github.com/DonaldMurillo/system-one-playground/sos"
 	"unicode/utf8"
 )
 
@@ -183,6 +183,35 @@ func (s *Server) handleProject(w http.ResponseWriter, r *http.Request) {
 	}
 	s.projectMu.Lock()
 	defer s.projectMu.Unlock()
+	if req.Action == "browseFolders" {
+		path := req.Path
+		if path == "" {
+			path, _ = os.UserHomeDir()
+		}
+		if !filepath.IsAbs(path) {
+			writeError(w, 400, "path", "choose an absolute directory")
+			return
+		}
+		path = filepath.Clean(path)
+		entries, err := os.ReadDir(path)
+		if err != nil {
+			writeError(w, 400, "project", err.Error())
+			return
+		}
+		folders := []map[string]string{}
+		for _, entry := range entries {
+			if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
+				continue
+			}
+			if len(folders) >= 2000 {
+				writeError(w, 400, "project", "too many folders to display")
+				return
+			}
+			folders = append(folders, map[string]string{"name": entry.Name(), "path": filepath.Join(path, entry.Name())})
+		}
+		writeJSON(w, 200, map[string]any{"path": path, "parent": filepath.Dir(path), "folders": folders})
+		return
+	}
 	if req.Action == "openProject" {
 		if !filepath.IsAbs(req.Path) {
 			writeError(w, 400, "path", "choose an absolute project directory")
