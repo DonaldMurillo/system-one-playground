@@ -2,6 +2,8 @@
 
 One repository for typed Jev judgments, semantic developer tools, a readable scripting language and its editor. Pick the layer you want to use.
 
+[View on GitHub](https://github.com/DonaldMurillo/system-one-playground) · [Preview releases](https://github.com/DonaldMurillo/system-one-playground/releases) · [Report an issue](https://github.com/DonaldMurillo/system-one-playground/issues)
+
 | Component | Start here | What it does |
 | --- | --- | --- |
 | Go client | [Use the client](/client) | Ask typed questions against text or structured state; inspect answers, errors and usage. |

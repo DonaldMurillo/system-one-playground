@@ -73,3 +73,11 @@ for route in ['enable-jev', 'for-agents']:
     if not (root / 'docs' / route / 'llm.md').exists():
         raise SystemExit('Missing agent-readable guide: ' + route)
 print('Static agent discovery and Jev/agent guides verified')
+for route in ['index.html', 'docs/enable-jev/index.html', 'client/index.html']:
+    html = (root / route).read_text()
+    if 'aria-label="Project on GitHub"' not in html:
+        raise SystemExit('Missing persistent repository navigation: ' + route)
+    for suffix in ['', '/releases', '/issues']:
+        if 'href="https://github.com/DonaldMurillo/system-one-playground' + suffix + '"' not in html:
+            raise SystemExit('Missing GitHub destination: ' + route + suffix)
+print('Persistent GitHub navigation verified')

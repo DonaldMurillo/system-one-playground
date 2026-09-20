@@ -108,7 +108,7 @@ func buildSite() (*generatedSite, error) {
 	// Each page carries its own <html lang>, which Pagefind reads to choose a
 	// language index and a screen reader reads to choose pronunciation rules.
 	site := uiapp.NewApp("System One Playground").WithTheme(router.Theme()).WithLang(router.Language()).WithLangFunc(router.LanguageFor)
-	if err := router.Mount(site, router.Layout()); err != nil {
+	if err := router.Mount(site, docsite.RepositoryLayout(router.Layout())); err != nil {
 		return nil, err
 	}
 	assetNames, err := router.RuntimeAssetNames(normalizeBase(exportBase(os.Args[1:])))
@@ -131,7 +131,7 @@ func buildSite() (*generatedSite, error) {
 	}
 	host := uihost.New(site,
 		uihost.WithDescription("System One Playground"+" — reusable documentation built with GoFastr."),
-		uihost.WithCustomCSS(router.CSS()+"\n"+router.BrandCSS()),
+		uihost.WithCustomCSS(router.CSS()+"\n"+router.BrandCSS()+"\n"+docsite.RepositoryCSS),
 		uihost.WithNotFoundScreen(notFound),
 		uihost.WithPublicLLMMD(),
 		uihost.WithAgentReady(uihost.AgentReadyConfig{
