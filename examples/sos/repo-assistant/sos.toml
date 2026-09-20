@@ -1,0 +1,8 @@
+version = 1
+
+[module]
+path = "example.com/repo-assistant"
+
+[budget.run]
+requests = 12
+timeout = "30s"

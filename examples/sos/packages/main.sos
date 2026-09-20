@@ -1,0 +1,4 @@
+import "example.com/support-tools/reporting" as reports
+
+call reports.summarize with "  Support queue  " called summary
+show summary

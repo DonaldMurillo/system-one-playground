@@ -1,0 +1,8 @@
+package reporting
+import "std/text" as text
+export summarize
+
+to summarize with title:
+  call text.trim with title called clean
+  call encode_title with clean called result
+  return result

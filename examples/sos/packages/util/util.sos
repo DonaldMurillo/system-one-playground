@@ -1,0 +1,19 @@
+# Local directory package: import "./packages/util" binds the alias util.
+package util
+import "std/text"
+
+export greet
+export shout
+
+# whisper stays private: importers cannot reach it.
+to whisper with name:
+  return name
+
+to greet with name:
+  call whisper with name called quiet
+  return "hello, " + quiet
+
+to shout with name:
+  call greet with name called plain
+  call text.upper with plain called loud
+  return loud + "!"

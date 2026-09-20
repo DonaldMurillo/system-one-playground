@@ -1,0 +1,32 @@
+[
+  {
+    "file": "example.js",
+    "state": {
+      "code": "1: function readSettings() {\n2:   try { return JSON.parse(localStorage.getItem('settings')); }\n3:   catch (error) {}\n4: }",
+      "context_completeness": "Only this example function is provided. Do not infer unseen callers."
+    },
+    "rules": [
+      {
+        "id": "error-swallowed",
+        "line": 3,
+        "threshold": 0.75,
+        "message": "Review the silently swallowed settings error.",
+        "question": {
+          "type": "noul",
+          "instructions": "Does the shown handler swallow a failure without recovery or reporting?",
+          "criteria": {"true": "The handler swallows the failure.", "false": "The handler recovers or reports the failure."}
+        }
+      },
+      {
+        "id": "unvalidated-settings",
+        "line": 2,
+        "threshold": 0.8,
+        "message": "Review validation of the decoded settings.",
+        "question": {
+          "type": "noul",
+          "instructions": "Does the shown function return decoded settings without validating their shape?"
+        }
+      }
+    ]
+  }
+]

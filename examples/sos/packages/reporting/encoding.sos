@@ -1,0 +1,6 @@
+package reporting
+import "std/json" as json
+
+to encode_title with title:
+  call json.encode with title called encoded
+  return encoded

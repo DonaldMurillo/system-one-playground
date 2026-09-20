@@ -1,0 +1,10 @@
+make entries [{"service": "api", "level": "error"}, {"service": "web", "level": "info"}, {"service": "api", "level": "error"}]
+keep entries where level is "error"
+group entries by service called services
+make reports as empty list
+for each service in services numbered from 1:
+  make report with:
+    name from service.key
+    errors from count of service.items
+  append report to reports
+show reports as table with name, errors

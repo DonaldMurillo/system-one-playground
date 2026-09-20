@@ -1,0 +1,8 @@
+version = 1
+
+[[language.libraries]]
+path = "std/text"
+
+[[language.libraries]]
+path = "std/json"
+as = "json"

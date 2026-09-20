@@ -1,0 +1,56 @@
+# A project CLI. Only triage --criterion blocking makes runtime Jev requests.
+import "example.com/repo-assistant/operations" as ops
+expect issue with:
+  id as integer
+  area as text
+  status as text
+  priority as integer
+  message as text
+
+command repo:
+  describe "Import, triage, and report on repository issues"
+
+  command import:
+    describe "Validate a JSON issue array and save a normalized copy"
+    argument source as file
+    option output as file default "issues.json"
+
+    read source as json called issues
+    require each issue in issues matches issue
+    call ops.normalize with issues called normalized
+    save normalized as json in output
+      on existing stop
+
+  command triage:
+    describe "Select open issues using an explicit criterion"
+    argument source as file
+    option criterion as text choices "blocking", "all" default "blocking"
+    option output as file default "selected.json"
+
+    read source as json called issues
+    require each issue in issues matches issue
+    keep issues where status is "open"
+    when criterion is "blocking":
+      keep issues where jev:
+        ask "Does this repository issue describe an actively broken build, exploitable security flaw, data loss, or regression blocking users?"
+        using message
+        accept probability at least 0.85
+        on uncertain discard
+        on failure stop with "Could not evaluate the issue"
+    save issues as json in output
+      on existing stop
+
+  command report:
+    describe "Write a numbered JSON report for each area"
+    argument source as file
+    option by as text choices "area" default "area"
+    option output as folder default "./issue-reports"
+
+    read source as json called issues
+    require each issue in issues matches issue
+    call ops.summarize with issues called reports
+    create folder output if missing
+    for each report in reports numbered from 1:
+      save report as json under output named "{number}.json"
+        on existing stop
+    show reports as table with area, count

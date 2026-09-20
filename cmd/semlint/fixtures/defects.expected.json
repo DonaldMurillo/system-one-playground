@@ -1,0 +1,91 @@
+{
+  "comment": "Expectations live outside defects.js so nothing in the linter's input names the defect it is meant to find. This lists EVERY genuine defect in the fixture, not just one per rule. An incomplete truth file makes a sound rule look unusable: its correct answer on an unlabelled real defect is scored as a false positive.",
+  "file": "defects.js",
+  "expect": [
+    {
+      "rule": "storage-cross-tab-divergence",
+      "line": 12,
+      "what": "initSidebar reads the collapsed state once and never listens for another tab's change"
+    },
+    {
+      "rule": "storage-guard-ineffective",
+      "line": 12,
+      "what": "initSidebar reads storage with no guard, so a throw leaves the toggle unwired"
+    },
+    {
+      "rule": "storage-guard-ineffective",
+      "line": 21,
+      "what": "restoreSelection reads storage with no guard either, so a throw escapes the function"
+    },
+    {
+      "rule": "storage-value-untrusted",
+      "line": 21,
+      "what": "restoreSelection assumes the parsed value is an array of objects with .id"
+    },
+    {
+      "rule": "json-parse-unguarded",
+      "line": 23,
+      "what": "restoreSelection parses stored text with nothing catching a throw"
+    },
+    {
+      "rule": "storage-key-not-namespaced",
+      "line": 29,
+      "what": "saveTheme writes the bare key 'theme'"
+    },
+    {
+      "rule": "comment-contradicts-code",
+      "line": 36,
+      "what": "recordDismissal promises the id is component-encoded; it is concatenated raw"
+    },
+    {
+      "rule": "storage-unbounded-growth",
+      "line": 36,
+      "what": "recordDismissal writes one key per banner id and nothing removes them"
+    },
+    {
+      "rule": "storage-unbounded-growth",
+      "line": 41,
+      "what": "rememberScroll writes one key per document with no eviction"
+    },
+    {
+      "rule": "storage-holds-sensitive-data",
+      "line": 47,
+      "what": "persistSession puts bearer tokens in localStorage"
+    },
+    {
+      "rule": "json-parse-unguarded",
+      "line": 55,
+      "what": "loadConfig parses a network response with nothing catching a throw"
+    },
+    {
+      "rule": "cookie-attributes-missing",
+      "line": 62,
+      "what": "markSeen writes a cookie with neither SameSite nor path"
+    },
+    {
+      "rule": "storage-read-write-key-mismatch",
+      "line": 67,
+      "what": "saveDraft encodes the name, loadDraft does not, so drafts are never found"
+    },
+    {
+      "rule": "storage-unbounded-growth",
+      "line": 67,
+      "what": "saveDraft writes one key per field name and nothing removes them"
+    },
+    {
+      "rule": "storage-read-write-key-mismatch",
+      "line": 70,
+      "what": "loadDraft is the read side of the same mismatch, reported from its own unit"
+    },
+    {
+      "rule": "storage-clear-wipes-origin",
+      "line": 75,
+      "what": "resetEverything calls clear(), erasing the host application's keys too"
+    },
+    {
+      "rule": "indexeddb-upgrade-unhandled",
+      "line": 80,
+      "what": "openCache opens without onupgradeneeded or an error path"
+    }
+  ]
+}

@@ -1,0 +1,99 @@
+// Package sos implements the canonical SysOneScript sentence language.
+package sos
+
+import (
+	"io"
+	"github.com/DonaldMurillo/system-one-playground/sosconfig"
+)
+
+const Version = "0.6.0"
+
+type Diagnostic struct {
+	Line    int    `json:"line"`
+	Column  int    `json:"column"`
+	Message string `json:"message"`
+}
+type Statement struct {
+	Kind string       `json:"kind"`
+	Text string       `json:"text"`
+	Line int          `json:"line"`
+	Body []*Statement `json:"body,omitempty"`
+}
+type Command struct {
+	Name        string       `json:"name"`
+	Description string       `json:"description,omitempty"`
+	Parameters  []Parameter  `json:"parameters,omitempty"`
+	Commands    []*Command   `json:"commands,omitempty"`
+	Statements  []*Statement `json:"statements,omitempty"`
+	Line        int          `json:"line"`
+}
+type Program struct {
+	RootCommand *Command     `json:"rootCommand,omitempty"`
+	Source      string       `json:"source"`
+	Statements  []*Statement `json:"statements"`
+	Command     string       `json:"command,omitempty"`
+	Parameters  []Parameter  `json:"parameters,omitempty"`
+	// Modules is the resolved import graph; nil for plain Parse results.
+	Modules *ModuleTable `json:"-"`
+}
+type Parameter struct {
+	Name    string   `json:"name"`
+	Type    string   `json:"type"`
+	Kind    string   `json:"kind"`
+	Default string   `json:"default,omitempty"`
+	Choices []string `json:"choices,omitempty"`
+}
+type Trace struct {
+	Item         any    `json:"item,omitempty"`
+	Decision     string `json:"decision,omitempty"`
+	Reason       string `json:"reason,omitempty"`
+	Line         int    `json:"line"`
+	Question     string `json:"question"`
+	Model        string `json:"model"`
+	Answer       any    `json:"answer"`
+	Milliseconds int64  `json:"milliseconds"`
+	InputTokens  int    `json:"inputTokens"`
+	Replay       bool   `json:"replay"`
+}
+type Options struct {
+	CommandPath []string
+	Dir         string
+	Args        map[string]any
+	Stdin       io.Reader
+	Stdout      io.Writer
+	Stderr      io.Writer
+	MaxSteps    int
+	MaxCalls    int
+	Model       string
+	Record      string
+	Replay      string
+	// Config supplies a resolved policy (for packaged programs). Nil discovers host config.
+	Config *sosconfig.Effective
+	// Budget optionally shares request accounting across consumers.
+	Budget *RequestBudget
+	// Resolution reuses an inspectable saved interpretation. Locked forbids new resolution calls.
+	Resolution *Analysis
+	Locked     bool
+	OnTrace    func(Trace)
+}
+type Result struct {
+	// Usage reports live provider admissions; replay adds no new usage.
+	Analysis  *Analysis      `json:"analysis,omitempty"`
+	Usage     BudgetSnapshot `json:"usage"`
+	Variables map[string]any `json:"variables"`
+	Traces    []Trace        `json:"traces"`
+	Steps     int            `json:"steps"`
+}
+
+// Public API implemented in the language core:
+// Parse(source string) (*Program, []Diagnostic)
+// LoadProgram(filename, source string) (*Program, []Diagnostic) -- module-aware
+// LoadProgramFromGraph(filename, source string, g *ModuleGraph) (*Program, []Diagnostic)
+// ParseWithVocabulary(source string, modules *ModuleTable) (*Program, []Diagnostic)
+// Vocabulary(filename, source string) (*VocabularyCatalog, []Diagnostic) -- offline catalog
+// Check(source string) []Diagnostic
+// CheckFile(filename, source string) []Diagnostic -- module-aware
+// Format(source string) (string, []Diagnostic)
+// Run(ctx context.Context, program *Program, options Options) (*Result, error)
+// LoadEnv(path string) error -- preserves existing environment, never logs values.
+// Keywords() []string

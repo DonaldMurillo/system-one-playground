@@ -1,0 +1,57 @@
+# Optional manual publishing template for a standalone docs-site repository.
+#
+# A repository named <user>.github.io is served at the root of that domain;
+# any other repository is a project page under /<repo>/, so the export base
+# is derived from the repository name. Enable Pages with "GitHub Actions" as
+# the source once, then push.
+name: pages
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Export
+        run: |
+          case "$GITHUB_REPOSITORY" in
+            */*.github.io) base="" ;;
+            *) base="/${GITHUB_REPOSITORY#*/}" ;;
+          esac
+          owner="${GITHUB_REPOSITORY%%/*}"
+          export PUBLIC_SITE_URL="https://${owner}.github.io${base}"
+          export DOCS_SEARCH_BACKEND=pagefind
+          go run . --export dist --export-base "$base"
+          # Pagefind reads <html lang> per page and builds one index per language.
+          npx --yes pagefind@1.5.2 --site dist
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

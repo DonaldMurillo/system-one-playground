@@ -1,0 +1,13 @@
+{
+  "name": "sos-example",
+  "rules": [
+    {
+      "id": "console-output",
+      "severity": "warning",
+      "where": {"ext": [".js"], "pattern": "console\\.log"},
+      "check": {"always": true},
+      "message": "Console output remains in this source unit.",
+      "why": "Repository policy requires structured logging."
+    }
+  ]
+}

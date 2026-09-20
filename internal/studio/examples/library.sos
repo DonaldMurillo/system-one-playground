@@ -1,0 +1,16 @@
+# Hover an operation, inspect the type hints, or type `call text.` for completion.
+import "std/text" as text
+import "std/json" as json
+
+make title "  support queue  "
+call text.trim with title called clean
+call text.upper with clean called heading
+
+make total 3
+make ready true
+make labels as empty list
+append heading to labels
+call json.encode with labels called payload
+
+show heading
+show payload

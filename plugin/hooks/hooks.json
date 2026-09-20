@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Write|Edit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/bin/typesafe-gate -mode=claude -timeout=6s",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

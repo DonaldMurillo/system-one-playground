@@ -1,0 +1,18 @@
+# Canonical sentences run without a model or credentials.
+command sampler:
+  describe "Offline command sampler"
+  option times as integer default 5
+
+  command count:
+    describe "Count by twos, then double the total"
+    make total 0
+    repeat times times:
+      assign total total + 2
+    show "Total: {total}"
+    assign total total * 2
+    show "Doubled: {total}"
+
+  command pick:
+    describe "Show the chosen criterion"
+    option criterion as text choices "urgent", "all" default "urgent"
+    show "criterion: {criterion}"

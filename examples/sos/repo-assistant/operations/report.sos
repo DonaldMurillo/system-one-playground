@@ -1,0 +1,15 @@
+package operations
+export summarize
+
+# Stable area order makes numbered filenames reproducible.
+to summarize with issues:
+  group issues by area called areas
+  sort areas by key ascending
+  make reports as empty list
+  for each area in areas:
+    make report with:
+      area from area.key
+      count from count of area.items
+      issues from area.items
+    append report to reports
+  return reports

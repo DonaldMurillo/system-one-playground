@@ -1,0 +1,4 @@
+version = 1
+
+[module]
+path = "example.com/support-tools"

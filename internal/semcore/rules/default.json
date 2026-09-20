@@ -1,0 +1,178 @@
+{
+  "name": "default",
+  "description": "General-purpose rules that apply to any codebase. Each one asks something a linter cannot phrase: not whether a construct is present, but whether it does what it claims. These run on Go, JavaScript, TypeScript and Python via the language profiles, so `kind` resolves to the right pattern per file type.",
+  "rules": [
+    {
+      "id": "comment-contradicts-code",
+      "severity": "hint",
+      "why": "A comment stating an invariant the code no longer upholds is worse than no comment. Readers and agents both trust it and stop checking.",
+      "where": {
+        "kind": "function"
+      },
+      "ask": {
+        "instructions": "Read the comment that introduces the function at `site_line`, and compare it with what the function does. Does the comment state something about the function's main behaviour that is plainly false: claiming it reports or returns something it never does, naming an action it does not perform, or describing a guarantee the body contradicts? Judge the headline claim only, not edge cases: an error path that skips a step is not what this asks about. When the code calls a helper, look it up in `module_scope_declarations` first, because a step performed inside a helper still happens. Answer no if the comment is accurate, vague, or merely aspirational.",
+        "yes": "The comment's main claim about the function is plainly false",
+        "no": "The comment is accurate, vague, or only wrong about an edge case",
+        "_calibration": "Measured in the full battery, which is how it runs: the true lying comment scores 0.69-0.72 and the highest non-target 0.54, so 0.61 sits in the gap. Asked alone the same case scores 0.81-0.88, and a threshold calibrated that way missed it every time in a batch. Mid-confidence judgments shift about 0.12 when other questions share the request; confident ones barely move. Always calibrate with the whole set active. This still rests on a single true example, so treat findings as leads.",
+        "threshold": 0.34
+      },
+      "message": "a comment claims behaviour the surrounding code does not implement",
+      "_status": "FRAGILE by measurement: robust gap +0.11, which is under the ~0.12 shift a question takes from the company it keeps. True cases span 0.39-0.93, so it catches a blatantly false headline claim and is unsure about a quiet one. Severity is hint deliberately: report it as a lead, never act on it unreviewed."
+    },
+    {
+      "id": "error-swallowed",
+      "severity": "warning",
+      "why": "An error caught and discarded turns a diagnosable failure into mysterious wrong behaviour later. The cost lands on whoever debugs it, far from here.",
+      "where": {
+        "kind": "catch"
+      },
+      "ask": {
+        "instructions": "In `code`, an error or exception is caught at `site_line`. Is it discarded without being logged, reported, returned, or turned into a deliberate fallback, in a case where losing it would leave a real failure invisible? Answer no if the error is handled, deliberately ignored for a reason the code or a comment gives, or if the failure genuinely does not matter, such as a best-effort cache write or an optional cleanup step.",
+        "yes": "A real failure is silently discarded",
+        "no": "The error is handled, or ignoring it is deliberate and harmless",
+        "threshold": 0.53
+      },
+      "message": "an error is caught and discarded where the failure would matter",
+      "_status": "measured by -separation over three fixtures: WORKABLE +0.19, recheck when the rule set changes. Threshold sits in the middle of the robust gap."
+    },
+    {
+      "id": "name-misleading",
+      "severity": "warning",
+      "why": "Callers read the name, not the body. A name that understates what a function does is how a read turns into a write in someone else's code path.",
+      "where": {
+        "kind": "function"
+      },
+      "ask": {
+        "instructions": "In `code`, look at the name of the function defined at `site_line` and at what it actually does. Does the name meaningfully misdescribe the behaviour: a name suggesting it only reads or computes when it also modifies state, sends something, or deletes something; or a name naming one action when the body does something different? Answer no if the name is accurate, if it is merely vague or short, or if the extra work is an ordinary part of what the name implies.",
+        "yes": "The name misdescribes what the function does",
+        "no": "The name is accurate, or only imprecise",
+        "threshold": 0.51
+      },
+      "message": "the function's name does not describe what it does",
+      "_status": "measured by -separation over three fixtures: ROBUST +0.66. Threshold sits in the middle of the robust gap."
+    },
+    {
+      "id": "error-message-misleading",
+      "severity": "warning",
+      "why": "An error message is the only evidence most failures leave. One that names the wrong condition sends whoever reads it looking in the wrong place.",
+      "where": {
+        "kind": "return-error"
+      },
+      "ask": {
+        "instructions": "In `code`, an error is raised or returned at `site_line`. Does its message describe a different condition from the one that actually triggers it, or is it so generic that it identifies neither what failed nor what the caller passed? Answer no if the message names the real condition, even briefly, or if it includes the offending value or operation.",
+        "yes": "The message names the wrong condition or identifies nothing",
+        "no": "The message describes the actual failure",
+        "threshold": 0.68
+      },
+      "message": "the error message does not describe the condition that produces it",
+      "_status": "measured by -separation over three fixtures: ROBUST +0.48. Threshold sits in the middle of the robust gap."
+    },
+    {
+      "id": "resource-not-released",
+      "severity": "error",
+      "why": "A handle, lock, connection or file acquired on one path and released on another leaks whenever the paths diverge, and the symptom appears under load rather than in a test.",
+      "where": {
+        "kind": "function"
+      },
+      "ask": {
+        "instructions": "In `code`, is something acquired that must be released, such as a file, connection, lock, transaction, subscription, timer, or listener, on a path where the release does not always happen: an early return, a thrown error, or a branch that skips it? Look at `enclosing_scope` too, since the release is often installed by the caller. Answer no if every path releases it, if the language construct used guarantees release, or if nothing here acquires such a resource.",
+        "yes": "A path exists where an acquired resource is never released",
+        "no": "Every path releases it, or nothing needing release is acquired",
+        "threshold": 0.59
+      },
+      "message": "an acquired resource is not released on every path",
+      "_status": "measured by -separation over three fixtures: ROBUST +0.37. Threshold sits in the middle of the robust gap."
+    },
+    {
+      "id": "partial-failure-silent",
+      "severity": "warning",
+      "why": "A loop that keeps going after an item fails reports success while having done part of the work. The caller has no way to tell, so the missing items surface much later.",
+      "where": {
+        "kind": "function"
+      },
+      "ask": {
+        "instructions": "In `code`, is a collection of items processed in a way where one item failing is neither recorded nor surfaced to the caller, so the operation reports success while having skipped some of them? Answer no if failures are collected, counted, logged, returned, or if the code stops on the first failure.",
+        "yes": "Items can fail silently and the caller is told everything succeeded",
+        "no": "Failures stop the work or are reported to the caller",
+        "threshold": 0.74
+      },
+      "message": "items can fail silently while the operation reports success",
+      "_status": "measured by -separation over three fixtures: ROBUST +0.47. Threshold sits in the middle of the robust gap."
+    },
+    {
+      "id": "stale-marker",
+      "severity": "hint",
+      "why": "A TODO describing work that is already done, or referring to code that no longer exists, trains everyone to ignore the next one.",
+      "where": {
+        "pattern": "\\b(TODO|FIXME|XXX|HACK)\\b",
+        "ext": [
+          ".go",
+          ".js",
+          ".ts",
+          ".py"
+        ]
+      },
+      "ask": {
+        "instructions": "A TODO, FIXME, XXX or HACK marker appears at `site_line`. Read what it asks for, then read the function immediately below it in `code`. Does that function already do the thing the marker asks for, so the marker is describing finished work? Answer no if the work is still outstanding, if the function does something different, or if the function is not shown to you.",
+        "yes": "The code below already does what the marker asks for",
+        "no": "The work is still outstanding, or this cannot be judged from what is shown",
+        "threshold": 0.16
+      },
+      "message": "this marker describes work that appears already done",
+      "_status": "FRAGILE by measurement: robust gap +0.13 with true cases at only 0.22-0.30, so the model barely distinguishes a finished TODO from an outstanding one. Kept at hint severity as a lead; do not act on it unreviewed."
+    },
+    {
+      "id": "marker-unattributed",
+      "severity": "hint",
+      "why": "A marker with no owner and no issue reference belongs to nobody, so it is never picked up. This one is decidable from the text, so it costs nothing to check.",
+      "where": {
+        "pattern": "\\b(TODO|FIXME|XXX|HACK)\\b",
+        "ext": [
+          ".go",
+          ".js",
+          ".ts",
+          ".py"
+        ]
+      },
+      "check": {
+        "line_lacks": [
+          "#[0-9]+|@[A-Za-z][\\w.-]*|https?://|[A-Z]+-[0-9]+"
+        ]
+      },
+      "message": "this marker names no owner and no issue reference",
+      "_status": "validated: deterministic, so it is right by construction once the site matches."
+    },
+    {
+      "id": "silent-truncation",
+      "severity": "warning",
+      "why": "Data cut to fit, with nothing recording that it happened, produces output that looks complete and is not. It is usually found by a user, not a test.",
+      "where": {
+        "kind": "function"
+      },
+      "ask": {
+        "instructions": "In `code`, is data shortened, capped, sliced or otherwise cut down so that part of it is lost, in a way that looks accidental or unremarked? Answer no when the cut is the deliberate point of the code, such as evicting old entries to stay under a stated limit, paging, taking a documented head or tail, or trimming for display. Answer no if nothing is truncated.",
+        "yes": "Data is discarded and nothing records that it happened",
+        "no": "Nothing is truncated, or the loss is displayed or reported",
+        "threshold": 0.45
+      },
+      "message": "data is truncated without recording that anything was dropped",
+      "_status": "measured by -separation over three fixtures: MOSTLY +0.52 robust but -0.16 strict; expect occasional edge errors. Threshold sits in the middle of the robust gap."
+    },
+    {
+      "id": "check-then-use-gap",
+      "severity": "warning",
+      "why": "A condition checked once and relied on later is only true if nothing changed in between. When something can change, the check gives false confidence rather than safety.",
+      "where": {
+        "kind": "function"
+      },
+      "ask": {
+        "instructions": "In `code`, is a condition checked and then relied upon later, where the thing checked could have changed in between, for example a file checked for existence before being opened, a value checked before an await or callback, or shared state checked before being modified? Answer no if the check and the use are adjacent with nothing in between that could change the result, or if the code re-checks at the point of use.",
+        "yes": "Something could change between the check and the use that relies on it",
+        "no": "Nothing can change in between, or the condition is rechecked at use",
+        "threshold": 0.51
+      },
+      "message": "a condition is checked well before the code that relies on it",
+      "_status": "measured by -separation over three fixtures: ROBUST +0.44. Threshold sits in the middle of the robust gap."
+    }
+  ]
+}

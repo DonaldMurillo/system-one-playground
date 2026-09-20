@@ -1,0 +1,49 @@
+name: Documentation
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: docs-site
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: docs-site/go.mod
+          cache-dependency-path: docs-site/go.sum
+      - run: python3 scripts/sync_content.py --check
+      - run: go test ./...
+      - run: go vet ./...
+      - name: Export project site
+        env:
+          PUBLIC_SITE_URL: https://donaldmurillo.github.io/system-one-playground
+        run: |
+          go run . --export dist --export-base /system-one-playground
+          python3 scripts/verify_export.py dist /system-one-playground
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs-site/dist
+  deploy:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/configure-pages@v5
+      - id: deployment
+        uses: actions/deploy-pages@v4

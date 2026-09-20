@@ -1,0 +1,4 @@
+[
+  {"id": 10, "team": "core", "kind": "deploy"},
+  {"id": 11, "team": "web", "kind": "rollback"}
+]

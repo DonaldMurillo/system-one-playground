@@ -1,0 +1,15 @@
+make message "I cannot access my account. Please help immediately."
+judge message by jev "The customer requests urgent help" called urgency
+show urgency
+
+classify message by jev "Which team should handle this request?" called team:
+  "access": "Login or account access"
+  "billing": "Payments or invoices"
+  "other": "Neither account access nor billing"
+show team
+
+score message by jev "How urgent is this request?" called priority:
+  0: "No urgency"
+  1: "Some urgency"
+  2: "Immediate assistance requested"
+show priority

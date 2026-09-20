@@ -1,0 +1,11 @@
+# An open import adds readable words; an alias requires its parent.
+import "std/text"
+import "std/json" as json
+
+make title "  support queue  "
+trim title called clean
+uppercase clean called heading
+json.encode heading called payload
+
+show heading
+show payload

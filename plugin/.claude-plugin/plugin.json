@@ -1,0 +1,8 @@
+{
+  "name": "typesafe-gate",
+  "description": "Judges every side-effecting tool call before it runs and asks for confirmation when it looks destructive, irreversible, or outside what you asked for. Uses TypeSafe System One for the judgment and plain Go for the policy.",
+  "version": "0.1.0",
+  "author": { "name": "Donald Murillo" },
+  "homepage": "https://docs.typesafe.ai",
+  "license": "MIT"
+}

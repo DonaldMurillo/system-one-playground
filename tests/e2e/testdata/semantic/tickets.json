@@ -1,0 +1,5 @@
+[
+  {"id": 1, "team": "core", "priority": 3, "status": "open", "message": "The customer is blocked from checkout and needs immediate help"},
+  {"id": 2, "team": "web", "priority": 1, "status": "open", "message": "Question about invoice layout"},
+  {"id": 3, "team": "core", "priority": 2, "status": "closed", "message": "The customer is blocked from login and needs immediate help"}
+]

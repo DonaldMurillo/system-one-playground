@@ -1,0 +1,7 @@
+[
+  {"id":101,"area":" Build ","status":" OPEN ","priority":3,"message":" Release build fails after upgrading the compiler. "},
+  {"id":102,"area":"Docs","status":"open","priority":1,"message":"Please add another introductory tutorial."},
+  {"id":103,"area":"runtime","status":"open","priority":3,"message":"Saving a record truncates unrelated user data after the latest release."},
+  {"id":104,"area":"build","status":"closed","priority":2,"message":"Yesterday's flaky CI issue is fixed."},
+  {"id":105,"area":"Runtime","status":"open","priority":2,"message":"The CLI hangs on an empty input file."}
+]

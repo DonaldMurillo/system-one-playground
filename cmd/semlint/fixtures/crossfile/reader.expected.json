@@ -1,0 +1,7 @@
+{
+  "comment": "The write side percent-encodes the field name and the read side does not, so any field whose name contains a space or punctuation is stored and never found again. Each file is correct in isolation; only the pair is wrong. Nothing here can be caught without cross-file context.",
+  "file": "reader.js",
+  "expect": [
+    {"rule": "storage-read-write-key-mismatch", "line": 11, "what": "loadDraft reads DRAFT_PREFIX + fieldName raw, while writer.js saveDraft writes DRAFT_PREFIX + encodeURIComponent(fieldName)"}
+  ]
+}

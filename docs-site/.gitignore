@@ -1,0 +1,4 @@
+/tmp/
+/dist/
+.fastr-docs-dev-reload-*.go
+.fastr-docs-export-*.exe

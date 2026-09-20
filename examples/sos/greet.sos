@@ -1,0 +1,11 @@
+# Canonical script using a local package and the standard library.
+import "./packages/util"
+import "std/json"
+
+make who "world"
+call util.greet with who called greeting
+show greeting
+
+make payload ""
+call json.encode with greeting called payload
+show payload

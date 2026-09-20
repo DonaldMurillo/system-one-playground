@@ -1,0 +1,107 @@
+{
+  "comment": "Expectations for the general-purpose rules, kept outside general.go so nothing in the linter's input names the defect it must find. This lists every genuine defect, including ones found after the fixture was written: an incomplete truth file scores a rule's correct answer as a false positive and makes it look unusable.",
+  "file": "general.go",
+  "expect": [
+    {
+      "rule": "error-swallowed",
+      "line": 22,
+      "what": "LoadSettings discards both the read and the unmarshal error and returns an empty map, so a typo in the file looks like empty settings"
+    },
+    {
+      "rule": "comment-contradicts-code",
+      "line": 34,
+      "what": "CountActiveUsers' comment says it returns how many users are active; it caps the answer at 1000"
+    },
+    {
+      "rule": "resource-not-released",
+      "line": 35,
+      "what": "rows is never closed on any path"
+    },
+    {
+      "rule": "silent-truncation",
+      "line": 35,
+      "what": "CountActiveUsers caps the count at 1000 and returns it as the real number"
+    },
+    {
+      "rule": "error-swallowed",
+      "line": 51,
+      "what": "GetUserName discards the error from the last_seen update with `_, _ =`, so a failing write is invisible"
+    },
+    {
+      "rule": "name-misleading",
+      "line": 51,
+      "what": "GetUserName also writes last_seen"
+    },
+    {
+      "rule": "comment-contradicts-code",
+      "line": 61,
+      "what": "SendAll's comment says it reports whether the batch was delivered; it always returns nil"
+    },
+    {
+      "rule": "error-swallowed",
+      "line": 62,
+      "what": "SendAll discards each POST error with a bare continue, so a failing delivery leaves no trace"
+    },
+    {
+      "rule": "partial-failure-silent",
+      "line": 62,
+      "what": "SendAll skips failed URLs and returns nil, so the caller is told everything was delivered"
+    },
+    {
+      "rule": "error-message-misleading",
+      "line": 74,
+      "what": "ValidatePort reports 'invalid configuration' for an out-of-range port, naming neither the field nor the value"
+    },
+    {
+      "rule": "silent-truncation",
+      "line": 82,
+      "what": "StoreNote silently cuts a note to 255 characters before storing it and returns the cut value as though it were what was saved"
+    },
+    {
+      "rule": "resource-not-released",
+      "line": 95,
+      "what": "AppendAudit returns on the write error without closing the file, and its comment claims the file is closed on every call"
+    },
+    {
+      "rule": "marker-unattributed",
+      "line": 106,
+      "what": "the TODO names no owner and no issue"
+    },
+    {
+      "rule": "check-then-use-gap",
+      "line": 125,
+      "what": "LookupCached releases the mutex between the miss check and the write, so two callers both compute and the second overwrites"
+    },
+    {
+      "rule": "marker-unattributed",
+      "line": 139,
+      "what": "that TODO also names no owner and no issue"
+    },
+    {
+      "rule": "stale-marker",
+      "line": 139,
+      "what": "the TODO asks for retry on failure; the function directly below already retries"
+    }
+  ],
+  "must_not_fire_on": [
+    {
+      "line": 140,
+      "rule": "silent-truncation",
+      "why": "AuditWithRetry does not truncate anything"
+    },
+    {
+      "line": 152,
+      "rule": "silent-truncation",
+      "why": "RecentEvents caps to an explicit limit the caller passed; a deliberate cap is not a silent loss"
+    },
+    {
+      "line": 165,
+      "why": "WriteReport closes via defer, wraps both errors with the path, and reports every failure"
+    },
+    {
+      "line": 95,
+      "rule": "comment-contradicts-code",
+      "why": "AppendAudit's comment is wrong only about an error path, which the narrowed rule deliberately does not judge; resource-not-released covers the real bug here"
+    }
+  ]
+}

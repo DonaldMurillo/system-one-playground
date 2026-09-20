@@ -1,0 +1,28 @@
+.env
+data/
+plugin/bin/
+bin/
+
+studio/node_modules/
+desktop/build/bin/
+desktop/desktop
+desktop/frontend/wailsjs/
+output/
+.playwright-cli/
+
+.sysone-studio.json
+
+# Documentation previews and local browser artifacts
+docs-site/dist/
+docs-site/tmp/
+.playwright-mcp/
+
+# Local credentials, editor state and internal work notes
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+.DS_Store
+.impeccable.md
+docs/agent-notes.md

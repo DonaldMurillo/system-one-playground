@@ -1,0 +1,5 @@
+# Generated bundles contain upstream template literals with significant spaces.
+internal/studio/webdist/** linguist-generated=true -whitespace
+internal/sosbuild/sources.zip binary linguist-generated=true
+# Preserve upstream notices verbatim.
+studio/public/licenses/** -whitespace

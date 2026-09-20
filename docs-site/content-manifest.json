@@ -1,0 +1,106 @@
+[
+  {
+    "source": "docs/sysonescript-language.md",
+    "slug": "language",
+    "title": "Language reference"
+  },
+  {
+    "source": "docs/sysonescript-commands.md",
+    "slug": "commands",
+    "title": "Commands and actions"
+  },
+  {
+    "source": "docs/sysonescript-packages.md",
+    "slug": "packages",
+    "title": "Packages and standard library"
+  },
+  {
+    "source": "docs/sysonescript-vocabulary.md",
+    "slug": "vocabulary",
+    "title": "Imports and vocabulary"
+  },
+  {
+    "source": "docs/sysonescript-configuration.md",
+    "slug": "configuration",
+    "title": "Configuration and budgets"
+  },
+  {
+    "source": "docs/sysonescript-interpretation.md",
+    "slug": "interpretation",
+    "title": "Jev interpretation"
+  },
+  {
+    "source": "docs/sysonescript-projects.md",
+    "slug": "projects",
+    "title": "Studio projects"
+  },
+  {
+    "source": "docs/sysonescript-project-environment.md",
+    "slug": "project-environment",
+    "title": "Environment settings"
+  },
+  {
+    "source": "docs/sysonescript-agent-interface.md",
+    "slug": "agent-interface",
+    "title": "CLI and MCP"
+  },
+  {
+    "source": "docs/sysonescript-editor.md",
+    "slug": "editor",
+    "title": "Colors, hints and diagnostics"
+  },
+  {
+    "source": "docs/sysonescript-tickets.md",
+    "slug": "tickets",
+    "title": "Tickets walkthrough"
+  },
+  {
+    "source": "examples/sos/repo-assistant/README.md",
+    "slug": "repository-cli",
+    "title": "Build a repository CLI"
+  },
+  {
+    "source": "docs/go-client.md",
+    "slug": "go-client",
+    "title": "TypeSafe Go client",
+    "route": "/client"
+  },
+  {
+    "source": "docs/semlint-guide.md",
+    "slug": "semlint-guide",
+    "title": "semlint",
+    "route": "/semlint"
+  },
+  {
+    "source": "docs/repository-tools.md",
+    "slug": "repository-tools",
+    "title": "Gate, playground and experiments",
+    "route": "/tools"
+  },
+  {
+    "source": "docs/studio-overview.md",
+    "slug": "studio-overview",
+    "title": "SysOneScript Studio",
+    "route": "/studio"
+  },
+  {
+    "source": "docs/sysonescript-question-batches.md",
+    "slug": "question-batches",
+    "title": "Questions and batches"
+  },
+  {
+    "source": "docs/sysonescript-io.md",
+    "slug": "io",
+    "title": "Files, streams and values"
+  },
+  {
+    "source": "docs/sysonescript-parallel.md",
+    "slug": "parallel",
+    "title": "Parallel maps and failures"
+  },
+  {
+    "source": "docs/sysonescript-semlint.md",
+    "slug": "semlint-sos",
+    "title": "Build semlint in SOS"
+  }
+]

@@ -1,0 +1,5 @@
+[
+  {"id": 1, "status": "open", "message": "Our checkout has been down for an hour. Customers cannot buy anything. Please help immediately."},
+  {"id": 2, "status": "open", "message": "Could you add a purple theme sometime? No rush, everything works fine."},
+  {"id": 3, "status": "closed", "message": "Cannot log in; resolved yesterday."}
+]

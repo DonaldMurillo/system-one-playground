@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+  <title id="title">System One Playground documentation — four-tab book</title>
+  <rect width="64" height="64" fill="#171c23"/>
+  <path d="M10 15h19v34H10zM35 15h19v34H35z" fill="#f2ede1"/>
+  <path d="M16 9h7v13h-7z" fill="#66c6b9"/>
+  <path d="M25 9h7v13h-7z" fill="#ae9be0"/>
+  <path d="M34 9h7v13h-7z" fill="#e8ac58"/>
+  <path d="M43 9h7v13h-7z" fill="#7facde"/>
+  <path d="M15 29h9v3h-9zM15 37h9v3h-9zM40 29h9v3h-9zM40 37h9v3h-9z" fill="#747d86"/>
+  <path d="M10 52h44v3H10z" fill="#e8ac58"/>
+</svg>

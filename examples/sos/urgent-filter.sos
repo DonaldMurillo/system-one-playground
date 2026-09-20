@@ -1,0 +1,13 @@
+command tickets:
+  option source as file default "examples/sos/tickets.json"
+
+  read source as json called tickets
+  keep tickets where status is "open"
+  keep tickets where jev:
+    ask "The customer is blocked from doing their work and needs immediate help"
+    using message
+    accept probability at least 0.85
+    on uncertain discard
+    on failure stop with "Jev could not evaluate the ticket"
+
+  show tickets as table with id, status, message

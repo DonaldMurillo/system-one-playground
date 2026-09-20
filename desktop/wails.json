@@ -1,0 +1,13 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "sos-studio",
+  "outputfilename": "sos-studio",
+  "frontend:install": "",
+  "frontend:build": "pnpm --dir ../../studio build",
+  "frontend:devserverWatchDir": "",
+  "info": {
+    "productName": "SysOneScript Studio",
+    "productVersion": "0.6.0",
+    "comments": "SysOneScript editor workbench"
+  }
+}

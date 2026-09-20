@@ -1,0 +1,21 @@
+package operations
+import "std/text" as text
+export normalize
+
+# Keep input validation in the CLI; normalize explicit values in this library.
+to normalize with issues:
+  make normalized as empty list
+  for each issue in issues:
+    call text.trim with issue.area called area
+    call text.lower with area called area_name
+    call text.trim with issue.status called status
+    call text.lower with status called status_name
+    call text.trim with issue.message called message
+    make clean with:
+      id from issue.id
+      area from area_name
+      status from status_name
+      priority from issue.priority
+      message from message
+    append clean to normalized
+  return normalized

@@ -1,0 +1,8 @@
+# Live Jev uses the API key from your working directory or environment.
+make tickets [{"message": "Our checkout has been down for an hour. Customers cannot buy anything. Please help immediately."}, {"message": "Please add a purple theme someday. Everything works fine."}]
+keep tickets where jev:
+  ask "The customer is blocked from doing their work and needs immediate help"
+  using message
+  accept probability at least 0.85
+  on uncertain discard
+show tickets as table with message

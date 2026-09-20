@@ -1,0 +1,33 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: studio/pnpm-lock.yaml
+      - run: pnpm --dir studio install --frozen-lockfile
+      - run: pnpm --dir studio test
+      - run: pnpm --dir studio run lint
+      - run: pnpm --dir studio build
+      - run: go generate ./internal/sosbuild
+      - run: go test ./...
+      - run: go vet ./...
+      - run: go test -race ./tests/e2e -run 'TestParallel|TestSemlintSOS|TestHostIO|TestProcess|TestStandardStreams' -count=1 -timeout=120s
+      - run: go build ./cmd/...

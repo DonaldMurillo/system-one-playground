@@ -1,0 +1,14 @@
+# Canonical sentences run without a model or credentials.
+to double with value:
+  return value * 2
+
+command count:
+  option times as integer default 5
+
+  make total 0
+  repeat times times:
+    assign total total + 2
+  show "Total: {total}"
+
+  call double with total called doubled
+  show "Doubled: {doubled}"

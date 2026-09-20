@@ -1,0 +1,27 @@
+import "std/jev" as jev
+
+command semlint:
+  describe "Evaluate prepared code units with named rule batches"
+  argument source as file
+  read source as json called units
+  make findings []
+  for each unit in units:
+    make entries []
+    for each rule in unit.rules:
+      make entry with:
+        id from rule.id
+        question from rule.question
+      append entry to entries
+    call jev.questions with entries called questions
+    evaluate unit.state by jev using questions called answers
+    for each rule in unit.rules:
+      call jev.answer with answers, rule.id called answer
+      when answer.p_yes >= rule.threshold:
+        make finding with:
+          file from unit.file
+          line from rule.line
+          rule from rule.id
+          message from rule.message
+          confidence from answer.p_yes
+        append finding to findings
+  show findings

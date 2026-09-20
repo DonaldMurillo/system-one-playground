@@ -1,0 +1,57 @@
+expect log-entry with:
+  time as timestamp
+  service as text
+  level as text
+  message as text
+
+command triage:
+  argument source as folder
+  option since as duration default 24h
+  option output as folder default "./reports"
+  switch judge default off
+
+  remember now called started
+  find files under source matching "*.jsonl" called logs
+  read each log in logs as lines of json into entries
+    on failure stop with "Cannot read {log.path}"
+
+  require each entry in entries matches log-entry
+  keep entries where time >= started minus since
+  keep entries where level is "error"
+  sort entries by time ascending
+  group entries by service called services
+  sort services by key ascending
+
+  create folder output if missing
+  make reports as empty list
+
+  for each service in services numbered from 1:
+    make category "unclassified"
+
+    when judge:
+      take first 50 items from service.items called sample
+      classify sample by jev "Primary cause suggested by these errors" called assessment:
+        "capacity": "Resource exhaustion or overload"
+        "dependency": "An unavailable or failing external dependency"
+        "application": "An internal application failure"
+        "unknown": "Evidence does not support the other causes"
+        on failure assign category "review"
+        on success:
+          when assessment.confidence >= 0.8:
+            assign category assessment.value
+          otherwise:
+            assign category "review"
+
+    make report with:
+      service from service.key
+      errors from count of service.items
+      category from category
+      examples from first 3 items of service.items
+
+    append report to reports
+    save report as json under output named "{number}.json"
+      on existing stop
+      on failure stop with "Cannot save report for {service.key}"
+
+  show reports as table with service, errors, category
+  show "{count of entries} errors across {count of services} services"

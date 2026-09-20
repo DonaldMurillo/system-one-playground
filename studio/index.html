@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark" />
+  <link rel="icon" href="data:," />
+  <title>SysOneScript Studio</title>
+  <link rel="stylesheet" href="./src/style.css" />
+</head>
+<body>
+  <header id="topbar">
+    <span id="brand" class="brand">SysOneScript<span class="brand-accent"> Studio</span></span>
+    <select id="studio-mode" class="select" aria-label="Studio mode"><option value="examples">Examples</option><option value="studio">Project workspace</option></select>
+    <button id="project-build" class="btn" type="button" hidden>Build CLI</button>
+    <button id="project-settings" class="btn" type="button">Settings</button>
+    <label id="examples-label" class="ctl" for="examples">Example</label>
+    <select id="examples" class="select"><option value="">Loading…</option></select>
+    <button id="choose-folder" class="btn" type="button" hidden>Folder</button>
+    <span id="workdir" class="workdir" title="run working directory"></span>
+    <span class="spacer"></span>
+    <input id="filename" class="input" value="script.sos" aria-label="file name" spellcheck="false" />
+    <input id="file-input" type="file" accept=".sos,.txt" hidden />
+    <button id="open" class="btn" type="button">Open</button>
+    <button id="format" class="btn" type="button">Format</button>
+    <button id="save" class="btn" type="button">Save</button>
+    <button id="analyze" class="btn" type="button">Analyze</button>
+    <button id="stop" class="btn" type="button" disabled>Stop</button>
+    <button id="run" class="btn btn-accent" type="button">Run</button>
+  </header>
+  <div class="argsbar" id="runbar">
+    <span id="plain-args" class="run-args">
+      <label for="arguments">Arguments</label>
+      <input id="arguments" class="input" value="{}" aria-label="Script arguments as JSON" spellcheck="false" />
+    </span>
+    <span id="command-args" class="run-args" hidden>
+      <label for="command">Command</label>
+      <select id="command" class="select"></select>
+      <span id="command-desc" class="cmd-desc"></span>
+      <span id="command-inputs" class="cmd-inputs"></span>
+    </span>
+    <span class="run-hint">⌘/Ctrl Enter to run · local execution</span>
+  </div>
+  <main id="workbench">
+    <aside id="explorer" hidden aria-label="Project explorer">
+      <div class="explorer-heading"><strong>PROJECT</strong><button id="tree-refresh" class="btn" title="Refresh project files">↻</button></div>
+      <div class="explorer-actions"><button id="project-open" class="btn">Open folder</button><button id="file-new" class="btn">New file</button><button id="folder-new" class="btn">New folder</button></div>
+      <p id="project-status" role="status"></p><nav id="file-tree" aria-label="Project files"></nav>
+    </aside>
+    <section id="editor-host" aria-label="editor"></section>
+    <aside id="side">
+      <nav id="tabs" role="tablist">
+        <button class="tab is-active" data-tab="output" role="tab" type="button">Output</button>
+        <button class="tab" data-tab="diagnostics" role="tab" type="button">Diagnostics <span id="diag-count" class="count"></span></button>
+        <button class="tab" data-tab="trace" role="tab" type="button">Trace</button>
+        <button class="tab" data-tab="vocabulary" role="tab" type="button">Vocabulary</button>
+        <button class="tab" data-tab="interpretation" role="tab" type="button">Interpretation</button>
+      </nav>
+      <section id="panel-output" class="panel is-active" aria-live="polite"><pre id="output" class="pre">Run a script to see output.</pre></section>
+      <section id="panel-diagnostics" class="panel"><ul id="diagnostics" class="diag-list"></ul></section>
+      <section id="panel-trace" class="panel"><div id="trace" class="pre">No judgment traces yet.</div></section>
+      <section id="panel-vocabulary" class="panel">
+        <div class="vocab">
+          <div class="vocab-toolbar">
+            <div class="vocab-views" role="group" aria-label="Vocabulary view">
+              <button id="vocab-view-enabled" class="vocab-view is-active" type="button" aria-pressed="true">Enabled here</button>
+              <button id="vocab-view-library" class="vocab-view" type="button" aria-pressed="false">Library explorer</button>
+            </div>
+            <input id="vocab-search" class="input vocab-search" type="search" placeholder="Search words, descriptions, libraries…" aria-label="Search vocabulary" spellcheck="false" autocomplete="off" />
+            <button id="vocab-library-clear" class="vocab-chip-btn" type="button" hidden></button>
+          </div>
+          <div id="vocab-conflicts" class="vocab-conflicts"></div>
+          <div id="vocab-body" class="vocab-body" role="region" aria-live="polite" aria-label="Vocabulary results"></div>
+        </div>
+      </section>
+      <section id="panel-interpretation" class="panel"><div id="interpretation" class="pre">Use Analyze to interpret the current script on demand.</div></section>
+    </aside>
+  </main>
+  <footer id="statusbar">
+    <span id="run-state">idle</span>
+    <span class="spacer"></span>
+    <span id="cursor-pos">Ln 1, Col 1</span>
+    <span id="check-state"></span>
+    <span id="version"></span>
+  </footer>
+  <script type="module" src="./src/main.js"></script>
+<dialog id="settings-dialog" aria-labelledby="settings-title">
+ <form method="dialog"><button class="btn settings-close" aria-label="Close settings">Close</button></form>
+ <h2 id="settings-title">Project settings</h2>
+ <p>Environment values stay in this project's private .env file. Existing values are never displayed.</p>
+ <div id="environment-list"></div>
+ <form id="environment-form">
+  <label>Variable name<input id="environment-name" class="input" value="TYPESAFE_API_KEY" required pattern="[A-Za-z_][A-Za-z0-9_]*" /></label>
+  <label>New value<input id="environment-value" class="input" type="password" autocomplete="new-password" required /></label>
+  <button class="btn primary" type="submit">Save environment value</button>
+ </form><p id="settings-status" role="status"></p>
+ <p>Agents: use <code>sysone --project PATH mcp</code>. The same files, run engine, and settings are available through the CLI.</p>
+</dialog>
+</body>
+</html>
