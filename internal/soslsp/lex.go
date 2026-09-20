@@ -25,6 +25,7 @@ var tokenLegend = []string{
 	"macro",
 	"enumMember",
 	"operator",
+	"property",
 }
 
 const (
@@ -40,6 +41,7 @@ const (
 	tokSemanticPhrase
 	tokCriterion
 	tokOperator
+	tokProperty
 )
 
 type lexToken struct {
@@ -82,7 +84,9 @@ type roleSpan struct {
 
 var (
 	reCallQualified = regexp.MustCompile(`^\s*call\s+([A-Za-z_]\w*)\.([A-Za-z_]\w*)`)
-	reAsType        = regexp.MustCompile(`\bas\s+((?:text|number|integer|folder|file|duration|boolean|json|table|lines\s+of\s+json|empty\s+list))\b`)
+	reAsType        = regexp.MustCompile(`\bas\s+((?:optional\s+)?(?:text|timestamp|number|integer|folder|file|duration|boolean|json|table|lines\s+of\s+json|empty\s+list|[A-Z][A-Za-z0-9_]*))\b`)
+	reDefineName    = regexp.MustCompile(`^\s*define\s+([A-Z][A-Za-z0-9_]*)`)
+	reDefineField   = regexp.MustCompile(`^\s*([a-z_][A-Za-z0-9_]*)\s+as\s+`)
 )
 
 // nameRoleRegexes map a captured identifier group to its semantic role. The
@@ -124,6 +128,12 @@ func lineRoles(line string) []roleSpan {
 		for _, m := range r.re.FindAllStringSubmatchIndex(code, -1) {
 			add(r.kind, m[2], m[3])
 		}
+	}
+	if m := reDefineName.FindStringSubmatchIndex(code); m != nil {
+		add(tokType, m[2], m[3])
+	}
+	if m := reDefineField.FindStringSubmatchIndex(code); m != nil {
+		add(tokProperty, m[2], m[3])
 	}
 	// Type words after `as`, including the phrases "lines of json" and
 	// "empty list": every word inside the captured phrase is a type token.

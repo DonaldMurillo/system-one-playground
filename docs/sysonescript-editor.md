@@ -138,6 +138,12 @@ and their effects. Inlay hints annotate values/types only when local analysis ca
 justify them, including confidently typed variables inside interpolations; they
 do not predict provider answers. Colon-led blocks can be folded.
 
+Named record definitions participate in the same offline editor model: type
+names after `as` complete and navigate to `define`, hover shows the ordered
+required/optional field shape, and definition/field tokens receive semantic
+highlighting. Known fields in `field of value` and dotted access are checked by
+the core; dynamic records continue to defer unknown-field errors to runtime.
+
 LSP positions use UTF-16 columns, including for emoji. Comments and quoted strings
 are scanned before keywords. The tolerant syntax engine (`internal/sossyntax`)
 reuses tokenized unchanged prefix/suffix lines across document snapshots and rebuilds

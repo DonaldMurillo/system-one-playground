@@ -40,9 +40,10 @@ type Module struct {
 	Name string
 	// Files are the package's source files in deterministic order.
 	Files []ModuleFile
-	// Actions and Schemas are the package-wide declaration tables.
-	Actions map[string]*Statement
-	Schemas map[string]*Statement
+	// Actions, Schemas, and Definitions are the package-wide declaration tables.
+	Actions     map[string]*Statement
+	Schemas     map[string]*Statement
+	Definitions map[string]*RecordDef
 	// fileImports maps each action to its defining file's import scope;
 	// fileVocabs maps it to that file's definition-site vocabulary.
 	fileImports map[string]map[string]*Module
@@ -486,6 +487,7 @@ func buildModule(key string, files []*moduleFileDecls) (*Module, []Diagnostic) {
 		Key:         key,
 		Actions:     map[string]*Statement{},
 		Schemas:     map[string]*Statement{},
+		Definitions: map[string]*RecordDef{},
 		fileImports: map[string]map[string]*Module{},
 		fileVocabs:  map[string]*fileVocab{},
 		Exports:     map[string]bool{},
@@ -518,11 +520,25 @@ func buildModule(key string, files []*moduleFileDecls) (*Module, []Diagnostic) {
 					continue
 				}
 				m.Schemas[name] = s
+			case "define":
+				name := match("define", s.Text)[1]
+				if m.Definitions[name] != nil {
+					ds = append(ds, Diagnostic{s.Line, 1, "duplicate definition " + name + " in package"})
+					continue
+				}
+				definition, definitionDiagnostics := parseRecordDefinition(s)
+				for _, diagnostic := range definitionDiagnostics {
+					ds = append(ds, diagnostic)
+				}
+				m.Definitions[name] = definition
 			case "import", "export", "word":
 			default:
 				ds = append(ds, Diagnostic{s.Line, 1, "module top level allows only package, import, export, word, and declarations"})
 			}
 		}
+	}
+	for _, problem := range validateRecordDefinitions(m.Definitions) {
+		ds = append(ds, Diagnostic{1, 1, problem})
 	}
 	seen := map[string]bool{}
 	for _, f := range files {
@@ -531,7 +547,7 @@ func buildModule(key string, files []*moduleFileDecls) (*Module, []Diagnostic) {
 				continue
 			}
 			name := match("export", s.Text)[1]
-			if m.Actions[name] == nil && m.Schemas[name] == nil {
+			if m.Actions[name] == nil && m.Schemas[name] == nil && m.Definitions[name] == nil {
 				ds = append(ds, Diagnostic{s.Line, 1, "export " + name + " has no matching declaration"})
 				continue
 			}

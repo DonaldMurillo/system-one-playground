@@ -18,7 +18,7 @@ import (
 // construction changes; the prompt version changes when the discrimination
 // question or state shape changes. Both participate in the policy hash.
 const (
-	semanticAnalysisVersion = 2
+	semanticAnalysisVersion = 3
 	semanticRegistryVersion = "2"
 	semanticPromptVersion   = "1"
 	// semanticMinConfidence is the conservative acceptance policy for model

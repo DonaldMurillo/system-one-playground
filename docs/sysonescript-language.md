@@ -2,7 +2,9 @@
 
 Files use `.sos`.
 
-This file describes implemented behavior. The design proposal and CLI sketch contain ideas that are not implemented.
+This file describes implemented behavior. The named-record proposal is shipped
+in the current language core; the design proposal remains the compatibility
+and migration reference.
 
 ## Sentence grammar
 
@@ -23,6 +25,47 @@ for each value in values numbered from 1:
 show "Total: {total}"
 ```
 
+## Named records
+
+Named records give reusable, closed structural shapes to ordinary SOS records.
+Definitions are visible throughout their file or package, regardless of source
+order, and exported definitions are available to importing programs by their
+exported name.
+
+```text
+define User:
+  name as text
+  age as optional integer
+  active as boolean
+
+make donald as User with:
+  name from "Donald"
+  active from true
+
+to greet with user as User using name:
+  return "Hello {name}"
+```
+
+Required fields must be supplied exactly once and must be non-null. Optional
+fields may be omitted or explicitly set to `null`; reading an omitted optional
+field returns `null`. Unknown and duplicate fields are errors, and named
+records reject undeclared fields at typed boundaries. JSON-origin records can
+be passed directly when their complete shape matches. Nested named records and
+`list of TYPE` fields are supported; recursive definitions are rejected.
+
+Action parameters may use scalar, named-record, list, or `any` types:
+`to greet with user as User, greeting as text:`. Typed arguments are validated
+before the action body begins. Untyped parameters remain `any`. A single
+named-record parameter may use `using field, other_field` to bind selected
+fields at action entry; selected fields must exist and cannot collide with a
+parameter or another selected field.
+
+The idiomatic access form is `field of value`, including nested access such as
+`name of manager of user`. Existing `value.field` access remains supported for
+compatibility. Dots remain the normal spelling for imported module and standard
+library action targets. The runtime keeps named records as ordinary immutable
+record values, so JSON output contains no hidden type marker.
+
 ## Control flow and reusable actions
 
 ```text
@@ -42,7 +85,7 @@ while answer > 0:
   assign answer answer - 1
 ```
 
-Declare actions before calling them. Arguments are comma-separated expressions. Actions receive local bindings and explicit return values; assignments inside them do not change the caller's variables. Loops restore their item/counter bindings when done. Other variables are dynamically typed and remain in the run environment. The checker validates constructions, names, delimiters, and some literal conditions; it is not a complete static type system. Data shapes are validated at runtime.
+Declare actions before calling them. Arguments are comma-separated expressions. Actions receive local bindings and explicit return values; assignments inside them do not change the caller's variables. Loops restore their item/counter bindings when done. Other variables are dynamically typed and remain in the run environment. The checker validates constructions, names, delimiters, known named-record fields, and some literal conditions; runtime action boundaries validate declared types and data shapes.
 
 ## Files, collections, and schemas
 

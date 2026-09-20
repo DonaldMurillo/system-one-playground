@@ -71,18 +71,25 @@ func lex(s string) ([]token, error) {
 }
 
 type exprParser struct {
-	t    []token
-	i    int
-	env  map[string]any
-	item any
+	t        []token
+	i        int
+	env      map[string]any
+	item     any
+	types    map[string]TypeRef
+	defs     map[string]*RecordDef
+	lastType TypeRef
 }
 
 func evaluate(s string, env map[string]any, item any) (any, error) {
+	return evaluateWithTypes(s, env, item, nil, nil)
+}
+
+func evaluateWithTypes(s string, env map[string]any, item any, types map[string]TypeRef, defs map[string]*RecordDef) (any, error) {
 	t, e := lex(strings.TrimSpace(s))
 	if e != nil {
 		return nil, e
 	}
-	p := &exprParser{t: t, env: env, item: item}
+	p := &exprParser{t: t, env: env, item: item, types: types, defs: defs}
 	v, e := p.expr(0)
 	if e == nil && p.i < len(t) {
 		e = fmt.Errorf("unexpected %q in expression", t[p.i].text)
@@ -165,6 +172,7 @@ func (p *exprParser) atom() (any, error) {
 	t := p.t[p.i]
 	p.i++
 	if t.quoted {
+		p.lastType = TypeRef{}
 		return interpolate(t.text, p.env, p.item)
 	}
 	switch t.text {
@@ -221,10 +229,13 @@ func (p *exprParser) atom() (any, error) {
 		}
 		return m, nil
 	case "true", "on":
+		p.lastType = TypeRef{Name: "boolean"}
 		return true, nil
 	case "false", "off":
+		p.lastType = TypeRef{Name: "boolean"}
 		return false, nil
 	case "null":
+		p.lastType = TypeRef{}
 		return nil, nil
 	case "now":
 		return time.Now().UTC(), nil
@@ -303,6 +314,7 @@ func (p *exprParser) atom() (any, error) {
 		if math.IsNaN(n) || math.IsInf(n, 0) {
 			return nil, fmt.Errorf("number must be finite")
 		}
+		p.lastType = TypeRef{Name: "number"}
 		return n, nil
 	}
 	if d, e := time.ParseDuration(t.text); e == nil {
@@ -314,7 +326,12 @@ func (p *exprParser) atom() (any, error) {
 		if e != nil {
 			return nil, e
 		}
-		return property(v, t.text)
+		got, fieldType, e := propertyTyped(v, t.text, p.lastType, p.defs)
+		if e != nil {
+			return nil, e
+		}
+		p.lastType = fieldType
+		return got, nil
 	}
 	parts := strings.Split(t.text, ".")
 	var v any
@@ -330,13 +347,18 @@ func (p *exprParser) atom() (any, error) {
 	if !ok {
 		return nil, fmt.Errorf("unknown name %q", parts[0])
 	}
+	receiverType := TypeRef{}
+	if p.types != nil {
+		receiverType = p.types[parts[0]]
+	}
 	for _, part := range parts[1:] {
 		var e error
-		v, e = property(v, part)
+		v, receiverType, e = propertyTyped(v, part, receiverType, p.defs)
 		if e != nil {
 			return nil, e
 		}
 	}
+	p.lastType = receiverType
 	return v, nil
 }
 func property(v any, key string) (any, error) {

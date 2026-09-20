@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/DonaldMurillo/system-one-playground/internal/sossyntax"
 	"github.com/DonaldMurillo/system-one-playground/sos"
 )
 
@@ -223,9 +224,11 @@ func (s *server) sentenceHover(params json.RawMessage) any {
 func (s *server) completion(params json.RawMessage) any {
 	uri, text, pos, ok := s.documentAt(params)
 	prefix := ""
+	currentLine := ""
 	var replace *lspRange
 	if ok {
 		line := lineAt(text, pos.Line)
+		currentLine = line
 		col := charToByte(line, pos.Character)
 		start, end := col, col
 		isPart := func(c byte) bool {
@@ -270,6 +273,27 @@ func (s *server) completion(params json.RawMessage) any {
 			"label": b.name, "kind": 6, "detail": b.detail, "textEdit": wordEdit(b.name),
 		})
 	}
+	if program := parseProgram(text); program != nil {
+		for name, definition := range program.Definitions {
+			if prefix != "" && !strings.HasPrefix(strings.ToLower(name), prefix) {
+				continue
+			}
+			items = append(items, map[string]any{
+				"label":    name,
+				"kind":     7,
+				"detail":   recordSignature(definition),
+				"textEdit": wordEdit(name),
+			})
+		}
+		for _, field := range recordFieldCompletions(program, text, currentLine, prefix) {
+			items = append(items, map[string]any{
+				"label":    field,
+				"kind":     10,
+				"detail":   "record field",
+				"textEdit": wordEdit(field),
+			})
+		}
+	}
 	// Vocabulary words from the shared catalog: exactly the forms enabled by
 	// this document's imports. Open imports offer the bare sentence; aliased
 	// imports offer the qualifier form only — a bare hint under an alias
@@ -305,6 +329,44 @@ func (s *server) completion(params json.RawMessage) any {
 		}
 	}
 	return items
+}
+
+func recordSignature(definition *sos.RecordDef) string {
+	if definition == nil {
+		return "record"
+	}
+	parts := make([]string, 0, len(definition.Fields))
+	for _, field := range definition.Fields {
+		parts = append(parts, field.Name+" as "+field.Type.String())
+	}
+	return "record " + definition.Name + " { " + strings.Join(parts, ", ") + " }"
+}
+
+func recordFieldCompletions(program *sos.Program, source, line, prefix string) []string {
+	if program == nil || prefix == "" {
+		return nil
+	}
+	typeName := ""
+	if match := regexp.MustCompile(`\bas\s+([A-Z][A-Za-z0-9_]*)(?:\s+using|\s*[,\:])`).FindStringSubmatch(line); match != nil {
+		typeName = match[1]
+	}
+	if match := regexp.MustCompile(`\bof\s+([a-z_][A-Za-z0-9_]*)`).FindStringSubmatch(line); match != nil {
+		receiver := match[1]
+		if declaration := regexp.MustCompile(`(?m)^\s*(?:make|assign|set)\s+` + regexp.QuoteMeta(receiver) + `\s+as\s+([A-Z][A-Za-z0-9_]*)`).FindStringSubmatch(source); declaration != nil {
+			typeName = declaration[1]
+		}
+	}
+	definition := program.Definitions[typeName]
+	if definition == nil {
+		return nil
+	}
+	fields := make([]string, 0, len(definition.Fields))
+	for _, field := range definition.Fields {
+		if strings.HasPrefix(strings.ToLower(field.Name), prefix) {
+			fields = append(fields, field.Name)
+		}
+	}
+	return fields
 }
 
 // completionForm is one offerable label with the text inserted for it.
@@ -404,6 +466,31 @@ func (s *server) definition(params json.RawMessage) any {
 	if word == "" {
 		return nil
 	}
+	if program := parseProgram(text); program != nil {
+		if definition := program.Definitions[word]; definition != nil {
+			defineLine := definition.Line - 1
+			src := lineAt(text, defineLine)
+			start := strings.Index(src, word)
+			if start < 0 {
+				start = 0
+			}
+			return map[string]any{"uri": uri, "range": lspRange{Start: lspPosition{Line: defineLine, Character: byteToChar(src, start)}, End: lspPosition{Line: defineLine, Character: byteToChar(src, start+len(word))}}}
+		}
+		for _, definition := range program.Definitions {
+			for _, field := range definition.Fields {
+				if field.Name != word {
+					continue
+				}
+				fieldLine := field.Line - 1
+				src := lineAt(text, fieldLine)
+				start := strings.Index(src, word)
+				if start < 0 {
+					start = 0
+				}
+				return map[string]any{"uri": uri, "range": lspRange{Start: lspPosition{Line: fieldLine, Character: byteToChar(src, start)}, End: lspPosition{Line: fieldLine, Character: byteToChar(src, start+len(word))}}}
+			}
+		}
+	}
 	stmts := statementsOf(text)
 	numLines := lineCount(text)
 	bestLine := -1
@@ -435,6 +522,72 @@ func (s *server) definition(params json.RawMessage) any {
 			End:   lspPosition{Line: bestLine, Character: byteToChar(srcLine, idx+len(word))},
 		},
 	}
+}
+
+func (s *server) references(params json.RawMessage) any {
+	uri, text, pos, ok := s.documentAt(params)
+	if !ok {
+		return nil
+	}
+	line := lineAt(text, pos.Line)
+	word, _, _ := wordAt(line, charToByte(line, pos.Character))
+	if word == "" {
+		return []any{}
+	}
+	locations := []map[string]any{}
+	for lineNo, sourceLine := range strings.Split(text, "\n") {
+		for _, token := range sossyntax.Parse(sourceLine).Lines[0].Tokens {
+			if token.Kind != "identifier" || token.Text != word {
+				continue
+			}
+			locations = append(locations, map[string]any{
+				"uri":   uri,
+				"range": lspRange{Start: lspPosition{Line: lineNo, Character: token.Start}, End: lspPosition{Line: lineNo, Character: token.End}},
+			})
+		}
+	}
+	return locations
+}
+
+func (s *server) rename(params json.RawMessage) any {
+	var request struct {
+		TextDocument textDocumentIdentifier `json:"textDocument"`
+		Position     lspPosition            `json:"position"`
+		NewName      string                 `json:"newName"`
+	}
+	if err := json.Unmarshal(params, &request); err != nil || !validRename(request.NewName) {
+		return nil
+	}
+	doc, ok := s.docs[request.TextDocument.URI]
+	if !ok {
+		return nil
+	}
+	line := lineAt(doc.text, request.Position.Line)
+	word, _, _ := wordAt(line, charToByte(line, request.Position.Character))
+	if word == "" {
+		return nil
+	}
+	edits := []map[string]any{}
+	for lineNo, sourceLine := range strings.Split(doc.text, "\n") {
+		for _, token := range sossyntax.Parse(sourceLine).Lines[0].Tokens {
+			if token.Kind == "identifier" && token.Text == word {
+				edits = append(edits, map[string]any{"range": lspRange{Start: lspPosition{Line: lineNo, Character: token.Start}, End: lspPosition{Line: lineNo, Character: token.End}}, "newText": request.NewName})
+			}
+		}
+	}
+	return map[string]any{"changes": map[string]any{request.TextDocument.URI: edits}}
+}
+
+func validRename(name string) bool {
+	if name == "" || (name[0] >= '0' && name[0] <= '9') {
+		return false
+	}
+	for _, r := range name {
+		if !(r == '_' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9') {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *server) formatting(params json.RawMessage) any {

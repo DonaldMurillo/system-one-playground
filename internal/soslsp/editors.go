@@ -278,6 +278,33 @@ func (s *server) codeActions(params json.RawMessage) any {
 			},
 		})
 	}
+	// Dotted data access remains valid, but this opt-in action gives users the
+	// idiomatic `field of value` spelling without rewriting source silently.
+	dotted := regexp.MustCompile(`\b([a-z_][A-Za-z0-9_]*)\.([a-z_][A-Za-z0-9_]*)\b`)
+	for lineNo, line := range strings.Split(doc.text, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if lineNo < p.Range.Start.Line || lineNo > p.Range.End.Line || strings.HasPrefix(trimmed, "call ") || strings.HasPrefix(trimmed, "import ") {
+			continue
+		}
+		match := dotted.FindStringSubmatchIndex(stripLineComment(line))
+		if match == nil {
+			continue
+		}
+		indent := len(line) - len(strings.TrimLeft(line, " \t"))
+		if match[0] == indent && !strings.HasPrefix(trimmed, "show ") && !strings.HasPrefix(trimmed, "return ") {
+			continue
+		}
+		receiver, field := line[match[2]:match[3]], line[match[4]:match[5]]
+		edit := map[string]any{
+			"range":   lspRange{Start: lspPosition{Line: lineNo, Character: byteToChar(line, match[0])}, End: lspPosition{Line: lineNo, Character: byteToChar(line, match[1])}},
+			"newText": field + " of " + receiver,
+		}
+		actions = append(actions, map[string]any{
+			"title": "Use field of value access",
+			"kind":  "quickfix",
+			"edit":  map[string]any{"changes": map[string]any{p.TextDocument.URI: []any{edit}}},
+		})
+	}
 	return actions
 }
 

@@ -3,8 +3,8 @@ package soslsp
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 	"github.com/DonaldMurillo/system-one-playground/sos"
+	"strings"
 )
 
 // hover combines a precise lexical selection with its containing sentence.
@@ -27,6 +27,12 @@ func (s *server) hover(params json.RawMessage) any {
 		detail := ""
 		if token.Kind == "identifier" {
 			role = "name"
+			if program := parseProgram(text); program != nil {
+				if definition := program.Definitions[token.Text]; definition != nil {
+					role = "type"
+					detail = recordSignature(definition)
+				}
+			}
 			for _, t := range syntaxTokens(tree, s.sentHeads(uri, text)) {
 				if t.line == pos.Line && t.start == token.Start {
 					role = tokenLegend[t.kind]

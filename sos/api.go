@@ -29,11 +29,12 @@ type Command struct {
 	Line        int          `json:"line"`
 }
 type Program struct {
-	RootCommand *Command     `json:"rootCommand,omitempty"`
-	Source      string       `json:"source"`
-	Statements  []*Statement `json:"statements"`
-	Command     string       `json:"command,omitempty"`
-	Parameters  []Parameter  `json:"parameters,omitempty"`
+	RootCommand *Command              `json:"rootCommand,omitempty"`
+	Source      string                `json:"source"`
+	Statements  []*Statement          `json:"statements"`
+	Command     string                `json:"command,omitempty"`
+	Parameters  []Parameter           `json:"parameters,omitempty"`
+	Definitions map[string]*RecordDef `json:"definitions,omitempty"`
 	// Modules is the resolved import graph; nil for plain Parse results.
 	Modules *ModuleTable `json:"-"`
 }
@@ -67,6 +68,9 @@ type DebugFrame struct {
 	Kind   string `json:"kind,omitempty"`
 	Text   string `json:"text,omitempty"`
 	Depth  int    `json:"depth"`
+	// VariableTypes identifies statically known named-record shapes for the
+	// debugger without adding metadata to the underlying JSON-shaped values.
+	VariableTypes map[string]string `json:"variableTypes,omitempty"`
 }
 
 // Debugger is the runtime boundary used by the native debug adapter. The

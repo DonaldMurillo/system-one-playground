@@ -156,7 +156,7 @@ func scanSemantic(source string) *semanticScan {
 }
 
 var (
-	semanticSchemaFieldRe = regexp.MustCompile(`^\w+ as (text|timestamp|number|integer|boolean|list)$`)
+	semanticSchemaFieldRe = regexp.MustCompile(`^\w+ as (?:optional )?(?:(?:list of )*(?:text|timestamp|number|integer|boolean|duration|[A-Z][A-Za-z0-9_]*))$`)
 	semanticMakeFieldRe   = regexp.MustCompile(`^\w+ from .+$`)
 	semanticChoiceRe      = regexp.MustCompile(`^(?:"[^"\n]+"|[0-9]+): ".*"$`)
 )
@@ -168,7 +168,7 @@ func classifyUnderParent(parent *semNode, text string) (string, string) {
 		return "unknown", ""
 	}
 	switch parent.form {
-	case "schema":
+	case "schema", "define":
 		if semanticSchemaFieldRe.MatchString(text) {
 			return "canonical", "field"
 		}

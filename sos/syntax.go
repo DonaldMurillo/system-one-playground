@@ -3,9 +3,9 @@ package sos
 import (
 	"errors"
 	"fmt"
+	"github.com/DonaldMurillo/system-one-playground/sosconfig"
 	"regexp"
 	"strings"
-	"github.com/DonaldMurillo/system-one-playground/sosconfig"
 )
 
 var forms = []struct{ kind, pattern string }{
@@ -14,6 +14,7 @@ var forms = []struct{ kind, pattern string }{
 	{"package", `^package ([A-Za-z_]\w*)$`},
 	{"import", `^import "([^"\n]+)"(?: as ([A-Za-z_]\w*))?$`},
 	{"export", `^export ([A-Za-z_]\w*)$`},
+	{"define", `^define ([A-Z][A-Za-z0-9_]*)\s*:$`},
 	{"word", `^word ([A-Za-z_]\w*) of ([A-Za-z_]\w*)$`},
 	{"describe", `^describe (".*")$`},
 	{"schema", `^expect ([\w-]+) with:$`},
@@ -79,7 +80,7 @@ func match(kind, text string) []string {
 }
 
 func Keywords() []string {
-	return []string{"rethrow", "map", "evaluate", "describe", "choices", "read", "keep", "sort", "group", "save", "show", "make", "assign", "remember", "find", "for each", "when", "otherwise", "classify", "jev", "called", "where", "by", "as", "into", "on failure", "to", "call", "return", "while", "repeat", "judge", "score", "create folder", "take", "append", "require", "expect", "command", "option", "argument", "switch", "using", "ask", "accept", "model", "on uncertain", "on existing", "package", "import", "export"}
+	return []string{"rethrow", "map", "evaluate", "describe", "choices", "read", "keep", "sort", "group", "save", "show", "make", "assign", "remember", "find", "for each", "when", "otherwise", "classify", "jev", "called", "where", "by", "as", "optional", "into", "on failure", "to", "call", "return", "while", "repeat", "judge", "score", "create folder", "take", "append", "require", "expect", "define", "command", "option", "argument", "switch", "using", "ask", "accept", "model", "on uncertain", "on existing", "package", "import", "export"}
 }
 func classifyLine(text string) string {
 	for _, f := range forms {
@@ -162,8 +163,12 @@ func Parse(source string) (*Program, []Diagnostic) {
 		kind := classifyLine(text)
 		if kind == "" && fr.parent != nil {
 			switch fr.parent.Kind {
+			case "define":
+				if _, err := parseFieldDecl(text); err == nil {
+					kind = "field"
+				}
 			case "schema":
-				if regexp.MustCompile(`^\w+ as (text|timestamp|number|integer|boolean|list)$`).MatchString(text) {
+				if regexp.MustCompile(`^\w+ as (?:optional )?(?:text|timestamp|number|integer|boolean|duration|[A-Z][A-Za-z0-9_]*|list of (?:text|timestamp|number|integer|boolean|duration|[A-Z][A-Za-z0-9_]*))$`).MatchString(text) {
 					kind = "field"
 				}
 			case "make":
@@ -194,6 +199,9 @@ func Parse(source string) (*Program, []Diagnostic) {
 		if kind == "command" && fr.parent != nil && fr.parent.Kind != "command" {
 			ds = append(ds, Diagnostic{i + 1, 1, "command belongs at top level or directly inside a command"})
 		}
+		if kind == "define" && fr.parent != nil {
+			ds = append(ds, Diagnostic{i + 1, 1, "define declarations belong at top level or in a package"})
+		}
 		if kind == "package" || kind == "import" || kind == "export" || kind == "word" {
 			if fr.parent != nil {
 				ds = append(ds, Diagnostic{i + 1, 1, kind + " declarations belong at top level"})
@@ -212,7 +220,7 @@ func Parse(source string) (*Program, []Diagnostic) {
 	var validate func([]*Statement)
 	validate = func(sts []*Statement) {
 		for _, s := range sts {
-			block := semanticCriterionDeclRe.MatchString(s.Text) || s.Kind == "map" || s.Kind == "for" || s.Kind == "while" || s.Kind == "repeat" || s.Kind == "when" || s.Kind == "otherwise" || s.Kind == "to" || s.Kind == "command" || s.Kind == "schema" || s.Kind == "classify" || s.Kind == "score" || strings.HasSuffix(s.Text, "with:") || strings.HasSuffix(s.Text, "jev:") || s.Kind == "handler" && strings.HasSuffix(s.Text, ":")
+			block := semanticCriterionDeclRe.MatchString(s.Text) || s.Kind == "map" || s.Kind == "for" || s.Kind == "while" || s.Kind == "repeat" || s.Kind == "when" || s.Kind == "otherwise" || s.Kind == "to" || s.Kind == "command" || s.Kind == "schema" || s.Kind == "define" || s.Kind == "classify" || s.Kind == "score" || strings.HasSuffix(s.Text, "with:") || strings.HasSuffix(s.Text, "jev:") || s.Kind == "handler" && strings.HasSuffix(s.Text, ":")
 			if block && len(s.Body) == 0 {
 				ds = append(ds, Diagnostic{s.Line, 1, "expected an indented body"})
 			}
@@ -225,6 +233,7 @@ func Parse(source string) (*Program, []Diagnostic) {
 		}
 	}
 	validate(p.Statements)
+	p.Definitions, _ = collectRecordDefinitions(p.Statements)
 	ds = append(ds, buildCommands(p)...)
 	return p, ds
 }

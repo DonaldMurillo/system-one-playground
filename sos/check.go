@@ -15,7 +15,26 @@ func analyze(p *Program) []Diagnostic {
 	}
 	funcs := map[string]bool{}
 	schemas := map[string]bool{}
+	types := map[string]TypeRef{}
+	actions := map[string]*Statement{}
 	var ds []Diagnostic
+	localDefinitions, definitionDiagnostics := collectRecordDefinitions(p.Statements)
+	p.Definitions = localDefinitions
+	ds = append(ds, definitionDiagnostics...)
+	visibleDefs, importedTypeProblems := visibleDefinitions(localDefinitions, func() map[string]*Module {
+		if p.Modules == nil {
+			return nil
+		}
+		return p.Modules.Aliases
+	}())
+	for _, problem := range importedTypeProblems {
+		ds = append(ds, Diagnostic{1, 1, problem})
+	}
+	for _, statement := range p.Statements {
+		if statement.Kind == "to" {
+			actions[match("to", statement.Text)[1]] = statement
+		}
+	}
 	add := func(s *Statement, msg string) { ds = append(ds, Diagnostic{s.Line, 1, msg}) }
 	var checkExpr func(*Statement, string, bool)
 	checkExpr = func(s *Statement, expr string, fields bool) {
@@ -57,10 +76,20 @@ func analyze(p *Program) []Diagnostic {
 				continue
 			}
 			if i+1 < len(tokens) && tokens[i+1].text == "of" {
+				if i+2 < len(tokens) && !tokens[i+2].quoted {
+					if message := knownFieldProblem(t.text, tokens[i+2].text, types, visibleDefs, fields); message != "" {
+						add(s, message)
+					}
+				}
 				continue
 			} // a field name in "field of object"
 			base := strings.Split(t.text, ".")[0]
 			if !validName(base) || names[base] || fields {
+				if !fields && names[base] && strings.Contains(t.text, ".") {
+					if message := dottedFieldProblem(t.text, types, visibleDefs); message != "" {
+						add(s, message)
+					}
+				}
 				continue
 			}
 			switch base {
@@ -79,32 +108,85 @@ func analyze(p *Program) []Diagnostic {
 			m := match(s.Kind, s.Text)
 			switch s.Kind {
 			case "command":
-				oldNames, oldFuncs, oldSchemas := names, funcs, schemas
+				oldNames, oldFuncs, oldSchemas, oldTypes := names, funcs, schemas, types
 				names, funcs, schemas = copyNames(names), copyNames(funcs), copyNames(schemas)
+				types = copyTypes(types)
 				for _, child := range s.Body {
 					if child.Kind == "parameter" {
 						names[match("parameter", child.Text)[2]] = true
 					}
 				}
 				walk(s.Body)
-				names, funcs, schemas = oldNames, oldFuncs, oldSchemas
+				names, funcs, schemas, types = oldNames, oldFuncs, oldSchemas, oldTypes
 				continue
 			case "describe", "parameter", "field", "choice":
 				continue
 			case "schema":
 				schemas[m[1]] = true
 				continue
+			case "define":
+				continue
 			case "to":
 				funcs[m[1]] = true
-				old := names
+				decl, err := parseActionDecl(s.Text)
+				if err != nil {
+					add(s, err.Error())
+					continue
+				}
+				seenParams := map[string]bool{}
+				for _, param := range decl.Params {
+					if seenParams[param.Name] {
+						add(s, "duplicate action parameter "+param.Name)
+					}
+					seenParams[param.Name] = true
+					if err := validateTypeRefs(param.Type, visibleDefs, map[string]bool{}); err != nil && param.Type.Name != "any" {
+						add(s, "parameter "+param.Name+": "+err.Error())
+					}
+				}
+				if len(decl.Using) > 0 {
+					if len(decl.Params) != 1 || decl.Params[0].Type.Name == "any" || decl.Params[0].Type.Element != nil {
+						add(s, "using is allowed only for one named-record parameter")
+					} else if def := visibleDefs[decl.Params[0].Type.Name]; def == nil {
+						add(s, "using requires a named-record parameter")
+					} else {
+						fields := fieldsByName(def)
+						usingSeen := map[string]bool{}
+						for _, field := range decl.Using {
+							if usingSeen[field] {
+								add(s, "using field "+field+" is selected more than once")
+							}
+							usingSeen[field] = true
+							if _, ok := fields[field]; !ok {
+								add(s, fmt.Sprintf("%s has no field %s", def.Name, field))
+							}
+							if seenParams[field] {
+								add(s, "using field "+field+" conflicts with parameter name")
+							}
+							if actionBodyBinds(s.Body, field) {
+								add(s, "using field "+field+" conflicts with a local binding")
+							}
+						}
+					}
+				}
+				old, oldTypes := names, types
 				names = copyNames(names)
-				for _, n := range strings.Split(m[2], ",") {
-					if n = strings.TrimSpace(n); n != "" {
-						names[n] = true
+				types = copyTypes(types)
+				for _, param := range decl.Params {
+					names[param.Name] = true
+					if param.Type.Name != "any" {
+						types[param.Name] = param.Type.base()
+					}
+				}
+				for _, field := range decl.Using {
+					names[field] = true
+					if def := visibleDefs[decl.Params[0].Type.Name]; def != nil {
+						if selected, ok := fieldsByName(def)[field]; ok {
+							types[field] = selected.Type.base()
+						}
 					}
 				}
 				walk(s.Body)
-				names = old
+				names, types = old, oldTypes
 				continue
 			case "sent":
 				m := matchSent(s.Text)
@@ -126,6 +208,18 @@ func analyze(p *Program) []Diagnostic {
 				}
 				for _, v := range args {
 					checkExpr(s, v, false)
+				}
+				if fn := actions[m[1]]; fn != nil {
+					if decl, err := parseActionDecl(fn.Text); err == nil {
+						for i, arg := range args {
+							if i >= len(decl.Params) {
+								break
+							}
+							if message := staticArgumentProblem(arg, decl.Params[i].Type, types, visibleDefs, m[1], decl.Params[i].Name); message != "" {
+								add(s, message)
+							}
+						}
+					}
 				}
 				if m[4] != "" {
 					names[m[4]] = true
@@ -163,6 +257,7 @@ func analyze(p *Program) []Diagnostic {
 				}
 				if m[3] != "" {
 					names[m[3]] = true
+					delete(types, m[3])
 				}
 			case "remember":
 				checkExpr(s, m[1], false)
@@ -172,20 +267,58 @@ func analyze(p *Program) []Diagnostic {
 				if !strings.HasPrefix(s.Text, "make ") && !names[m[1]] {
 					add(s, "cannot assign unknown name "+m[1])
 				}
-				if expr == "with:" {
+				if expr == "with:" || strings.HasSuffix(expr, " with:") {
+					var definition *RecordDef
+					if strings.HasSuffix(strings.TrimPrefix(m[2], "as "), " with:") {
+						typeName := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(m[2], "as "), " with:"))
+						definition = visibleDefs[typeName]
+						if definition == nil {
+							add(s, "unknown type "+typeName)
+						}
+					}
+					seenFields := map[string]bool{}
+					if strings.HasSuffix(expr, " with:") {
+						expr = "with:"
+					}
 					for _, f := range s.Body {
 						if f.Kind == "field" {
-							_, v, _ := strings.Cut(f.Text, " from ")
+							key, v, _ := strings.Cut(f.Text, " from ")
+							if definition != nil {
+								if seenFields[key] {
+									add(f, fmt.Sprintf("%s field %s appears more than once", definition.Name, key))
+								}
+								seenFields[key] = true
+								field, known := fieldsByName(definition)[key]
+								if !known {
+									add(f, fmt.Sprintf("%s has no field %s", definition.Name, key))
+								} else if message := staticArgumentProblem(v, field.Type, types, visibleDefs, definition.Name, key); message != "" {
+									add(f, message)
+								}
+							}
 							checkExpr(f, v, false)
+						}
+					}
+					if definition != nil {
+						for _, field := range definition.Fields {
+							if !field.Type.Optional && !seenFields[field.Name] {
+								add(s, fmt.Sprintf("%s requires field %s as %s", definition.Name, field.Name, field.Type.String()))
+							}
 						}
 					}
 				} else {
 					checkExpr(s, expr, false)
 				}
 				names[m[1]] = true
+				if strings.HasSuffix(strings.TrimPrefix(m[2], "as "), " with:") {
+					typeName := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(m[2], "as "), " with:"))
+					if _, ok := visibleDefs[typeName]; ok {
+						types[m[1]] = TypeRef{Name: typeName}
+					}
+				}
 			case "read":
 				checkExpr(s, m[1], false)
 				names[m[3]] = true
+				delete(types, m[3])
 			case "readEach":
 				checkExpr(s, m[2], false)
 				names[m[1]] = true
@@ -348,7 +481,7 @@ func analyze(p *Program) []Diagnostic {
 			continue
 		}
 		name := match("export", s.Text)[1]
-		if !funcs[name] && !schemas[name] {
+		if !funcs[name] && !schemas[name] && p.Definitions[name] == nil {
 			add(s, "export "+name+" has no matching declaration")
 			continue
 		}
@@ -395,4 +528,116 @@ func copyNames(m map[string]bool) map[string]bool {
 		n[k] = v
 	}
 	return n
+}
+
+func copyTypes(m map[string]TypeRef) map[string]TypeRef {
+	result := map[string]TypeRef{}
+	for name, typ := range m {
+		result[name] = typ
+	}
+	return result
+}
+
+func staticArgumentProblem(expression string, wanted TypeRef, known map[string]TypeRef, defs map[string]*RecordDef, action, parameter string) string {
+	if wanted.Name == "any" {
+		return ""
+	}
+	tokens, err := lex(strings.TrimSpace(expression))
+	if err != nil || len(tokens) != 1 {
+		return ""
+	}
+	if tokens[0].quoted {
+		if wanted.Name != "text" && wanted.Name != "any" {
+			return fmt.Sprintf("%s.%s must be %s; received text", action, parameter, wanted.String())
+		}
+		return ""
+	}
+	if actual, ok := known[tokens[0].text]; ok {
+		if actual.Name == wanted.Name && actual.Element == nil && wanted.Element == nil {
+			return ""
+		}
+		return ""
+	}
+	if tokens[0].text == "null" {
+		if !wanted.Optional {
+			return fmt.Sprintf("%s.%s must be %s; received null", action, parameter, wanted.String())
+		}
+		return ""
+	}
+	value, evalErr := evaluate(expression, nil, nil)
+	if evalErr != nil {
+		return ""
+	}
+	if !typeMatchesRef(value, wanted, defs) {
+		return fmt.Sprintf("%s.%s must be %s; received %s", action, parameter, wanted.String(), valueTypeName(value))
+	}
+	return ""
+}
+
+func knownFieldProblem(field, receiver string, types map[string]TypeRef, defs map[string]*RecordDef, inFields bool) string {
+	if inFields {
+		return ""
+	}
+	typ := types[receiver]
+	if typ.Name == "" || typ.Name == "any" || typ.Element != nil {
+		return ""
+	}
+	if def := defs[typ.Name]; def != nil {
+		if _, ok := fieldsByName(def)[field]; !ok {
+			return fmt.Sprintf("%s has no field %s", typ.Name, field)
+		}
+	}
+	return ""
+}
+
+func dottedFieldProblem(expression string, types map[string]TypeRef, defs map[string]*RecordDef) string {
+	parts := strings.Split(expression, ".")
+	if len(parts) < 2 {
+		return ""
+	}
+	typ := types[parts[0]]
+	for _, field := range parts[1:] {
+		if typ.Name == "" || typ.Name == "any" || typ.Element != nil {
+			return ""
+		}
+		def := defs[typ.Name]
+		if def == nil {
+			return ""
+		}
+		declared, ok := fieldsByName(def)[field]
+		if !ok {
+			return fmt.Sprintf("%s has no field %s", typ.Name, field)
+		}
+		typ = declared.Type.base()
+	}
+	return ""
+}
+
+func actionBodyBinds(stmts []*Statement, wanted string) bool {
+	for _, statement := range stmts {
+		switch statement.Kind {
+		case "make":
+			m := match("make", statement.Text)
+			if len(m) > 1 && m[1] == wanted {
+				return true
+			}
+		case "remember":
+			m := match("remember", statement.Text)
+			if len(m) > 2 && m[2] == wanted {
+				return true
+			}
+		case "call":
+			if m := match("call", statement.Text); len(m) > 3 && m[3] == wanted {
+				return true
+			}
+		case "sent":
+			if m := matchSent(statement.Text); len(m) > 4 && m[4] == wanted {
+				return true
+			}
+		}
+		if actionBodyBinds(statement.Body, wanted) {
+			return true
+		}
+	}
+	return false
 }

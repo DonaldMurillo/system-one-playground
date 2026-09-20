@@ -510,9 +510,15 @@ func (s *dapServer) variables(request dapRequest) error {
 	if err := json.Unmarshal(request.Arguments, &args); err != nil {
 		return err
 	}
+	knownTypes := map[string]string{}
+	if args.VariablesReference == 1 {
+		if snapshot, ok := s.session.snapshot(); ok {
+			knownTypes = snapshot.Frame.VariableTypes
+		}
+	}
 	s.session.mu.Lock()
 	value := s.session.variableRefs[args.VariablesReference]
-	variables := debugVariables(value, &s.session.variableRefs, &s.session.nextVarRef)
+	variables := debugVariables(value, &s.session.variableRefs, &s.session.nextVarRef, knownTypes)
 	s.session.mu.Unlock()
 	s.respond(request.Seq, request.Command, map[string]any{"variables": variables}, nil)
 	return nil
@@ -730,7 +736,7 @@ func secretValue(name string, value any) bool {
 	return false
 }
 
-func debugVariables(value any, refs *map[int]any, next *int) []any {
+func debugVariables(value any, refs *map[int]any, next *int, knownTypes map[string]string) []any {
 	var out []any
 	switch typed := value.(type) {
 	case map[string]any:
@@ -742,6 +748,9 @@ func debugVariables(value any, refs *map[int]any, next *int) []any {
 		for _, key := range keys {
 			item := typed[key]
 			result := debugValue(item)
+			if namedType := knownTypes[key]; namedType != "" {
+				result["type"] = namedType
+			}
 			result["name"] = key
 			if secretValue(key, item) {
 				result["value"] = "<redacted>"

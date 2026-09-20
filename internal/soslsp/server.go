@@ -173,6 +173,10 @@ func (s *server) handleMessage(body []byte) (bool, error) {
 		s.writeResult(msg.ID, s.completion(msg.Params))
 	case "textDocument/definition":
 		s.writeResult(msg.ID, s.definition(msg.Params))
+	case "textDocument/references":
+		s.writeResult(msg.ID, s.references(msg.Params))
+	case "textDocument/rename":
+		s.writeResult(msg.ID, s.rename(msg.Params))
 	case "textDocument/formatting":
 		s.writeResult(msg.ID, s.formatting(msg.Params))
 	case "textDocument/semanticTokens/full":
@@ -259,6 +263,8 @@ func initializeResult() map[string]any {
 			"hoverProvider":              true,
 			"completionProvider":         map[string]any{"triggerCharacters": []string{":", " "}},
 			"definitionProvider":         true,
+			"referencesProvider":         true,
+			"renameProvider":             true,
 			"documentFormattingProvider": true,
 			"semanticTokensProvider": map[string]any{
 				"legend": map[string]any{

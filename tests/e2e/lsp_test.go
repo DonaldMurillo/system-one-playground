@@ -146,7 +146,7 @@ func TestServeProtocolSession(t *testing.T) {
 		"textDocument": map[string]any{"uri": testURI}, "options": map[string]any{"tabSize": 2, "insertSpaces": true},
 	}))
 	input.Write(frameBody([]byte("{not json")))
-	input.Write(request(6, "textDocument/references", map[string]any{}))
+	input.Write(request(6, "textDocument/unknown", map[string]any{}))
 	input.Write(notification("some/unknownNotification", map[string]any{}))
 	input.Write(request(7, "shutdown", nil))
 	input.Write(notification("exit", nil))

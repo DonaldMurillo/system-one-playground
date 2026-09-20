@@ -29,6 +29,8 @@ type runtime struct {
 	env              map[string]any
 	functions        map[string]*Statement
 	schemas          map[string]*Statement
+	definitions      map[string]*RecordDef
+	types            map[string]TypeRef
 	imports          map[string]*Module
 	module           *Module
 	vocab            *fileVocab
@@ -160,13 +162,24 @@ func Run(ctx context.Context, p *Program, opts Options) (result *Result, err err
 			logicalPath = absolute
 		}
 	}
-	r := &runtime{shared: &executionState{}, logicalPath: logicalPath, ctx: ctx, p: p, opts: opts, replay: replay, env: map[string]any{}, functions: map[string]*Statement{}, schemas: map[string]*Statement{}, imports: map[string]*Module{}, result: &Result{Traces: []Trace{}}}
+	r := &runtime{shared: &executionState{}, logicalPath: logicalPath, ctx: ctx, p: p, opts: opts, replay: replay, env: map[string]any{}, functions: map[string]*Statement{}, schemas: map[string]*Statement{}, definitions: p.Definitions, types: map[string]TypeRef{}, imports: map[string]*Module{}, result: &Result{Traces: []Trace{}}}
 	if p.Modules != nil {
 		r.imports = p.Modules.Aliases
 		r.vocab = p.Modules.vocab
 	}
+	r.definitions, _ = visibleDefinitions(p.Definitions, r.imports)
 	for k, v := range opts.Args {
 		r.env[k] = v
+	}
+	// Declarations are scope-visible independent of source order, matching the
+	// checker and allowing a call before the action's definition line.
+	for _, statement := range p.Statements {
+		switch statement.Kind {
+		case "to":
+			r.functions[match("to", statement.Text)[1]] = statement
+		case "schema":
+			r.schemas[match("schema", statement.Text)[1]] = statement
+		}
 	}
 	execution := p.Statements
 	if p.RootCommand != nil {
@@ -213,7 +226,9 @@ func (r *runtime) tick() error {
 	}
 	return nil
 }
-func (r *runtime) eval(s string, item any) (any, error) { return evaluate(s, r.env, item) }
+func (r *runtime) eval(s string, item any) (any, error) {
+	return evaluateWithTypes(s, r.env, item, r.types, r.definitions)
+}
 func (r *runtime) text(s string) (string, error) {
 	v, e := r.eval(s, nil)
 	if e != nil {
@@ -328,7 +343,13 @@ func (r *runtime) debugBefore(s *Statement) error {
 	if r.opts.Debugger == nil {
 		return nil
 	}
-	frame := DebugFrame{Path: r.logicalPath, Line: s.Line, Column: 1, Kind: s.Kind, Text: s.Text, Depth: r.depth}
+	knownTypes := map[string]string{}
+	for name, typ := range r.types {
+		if typ.Name != "" && typ.Name != "any" {
+			knownTypes[name] = typ.Name
+		}
+	}
+	frame := DebugFrame{Path: r.logicalPath, Line: s.Line, Column: 1, Kind: s.Kind, Text: s.Text, Depth: r.depth, VariableTypes: knownTypes}
 	stack := make([]DebugFrame, len(r.debugStack))
 	copy(stack, r.debugStack)
 	variables, err := cloneValue(r.env)
@@ -362,7 +383,7 @@ func (r *runtime) handler(h *Statement) error {
 func (r *runtime) execute(s *Statement) error {
 	m := match(s.Kind, s.Text)
 	switch s.Kind {
-	case "command", "parameter", "import", "package", "export":
+	case "command", "parameter", "import", "package", "export", "define":
 		return nil
 	case "schema":
 		r.schemas[m[1]] = s
@@ -403,17 +424,16 @@ func (r *runtime) execute(s *Statement) error {
 		if !ok {
 			return fmt.Errorf("unknown action %q", m[1])
 		}
-		fm := match("to", fn.Text)
-		names := []string{}
-		if fm[2] != "" {
-			names = strings.Split(fm[2], ",")
+		decl, declErr := parseActionDecl(fn.Text)
+		if declErr != nil {
+			return declErr
 		}
 		vals, e := splitExpressions(m[2])
 		if e != nil {
 			return e
 		}
-		if len(vals) != len(names) {
-			return fmt.Errorf("action %s expects %d arguments", m[1], len(names))
+		if len(vals) != len(decl.Params) {
+			return fmt.Errorf("action %s expects %d arguments", m[1], len(decl.Params))
 		}
 		local := map[string]any{}
 		if r.module == nil {
@@ -421,20 +441,52 @@ func (r *runtime) execute(s *Statement) error {
 				local[k] = v
 			}
 		}
-		for i, name := range names {
+		localTypes := map[string]TypeRef{}
+		for i, param := range decl.Params {
 			v, e := r.eval(vals[i], nil)
 			if e != nil {
 				return e
 			}
-			local[strings.TrimSpace(name)] = v
+			if param.Type.Name != "any" && !typeMatchesRef(v, param.Type, r.definitions) {
+				return fmt.Errorf("%s.%s must be %s; received %s", m[1], param.Name, param.Type.String(), valueTypeName(v))
+			}
+			local[param.Name] = v
+			localTypes[param.Name] = param.Type.base()
+		}
+		if len(decl.Using) > 0 {
+			fieldTypes := map[string]TypeRef{}
+			def := r.definitions[decl.Params[0].Type.Name]
+			if def != nil {
+				for _, field := range def.Fields {
+					fieldTypes[field.Name] = field.Type
+				}
+			}
+			for _, field := range decl.Using {
+				v, fieldType, err := propertyTyped(local[decl.Params[0].Name], field, decl.Params[0].Type.base(), r.definitions)
+				if err != nil {
+					return err
+				}
+				local[field] = v
+				if declared, ok := fieldTypes[field]; ok {
+					localTypes[field] = declared.base()
+				} else {
+					localTypes[field] = fieldType
+				}
+			}
 		}
 		outer := r.env
-		outerImports, outerVocab := r.imports, r.vocab
+		outerImports, outerVocab, outerTypes, outerDefs := r.imports, r.vocab, r.types, r.definitions
 		if r.module != nil {
 			r.imports = r.module.scope(m[1])
 			r.vocab = r.module.vocabulary(m[1])
 		}
 		r.env = local
+		r.types = localTypes
+		definitionBase := r.p.Definitions
+		if r.module != nil {
+			definitionBase = r.module.Definitions
+		}
+		r.definitions, _ = visibleDefinitions(definitionBase, r.imports)
 		r.depth++
 		r.debugStack = append(r.debugStack, DebugFrame{Path: r.logicalPath, Line: fn.Line, Column: 1, Name: m[1], Kind: "action", Text: fn.Text, Depth: r.depth})
 		e = r.block(fn.Body)
@@ -443,6 +495,8 @@ func (r *runtime) execute(s *Statement) error {
 		r.env = outer
 		r.imports = outerImports
 		r.vocab = outerVocab
+		r.types = outerTypes
+		r.definitions = outerDefs
 		var ret returnValue
 		if errors.As(e, &ret) {
 			if m[3] != "" {
@@ -467,24 +521,74 @@ func (r *runtime) execute(s *Statement) error {
 				return fmt.Errorf("cannot assign unknown name %q", name)
 			}
 		}
-		if expr == "with:" {
+		if expr == "with:" || strings.HasSuffix(expr, " with:") {
+			typeText := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(strings.TrimPrefix(m[2], "as ")), "with:"))
+			if typeText == "" {
+				record := map[string]any{}
+				for _, f := range s.Body {
+					if f.Kind != "field" {
+						continue
+					}
+					key, value, _ := strings.Cut(f.Text, " from ")
+					v, e := r.eval(value, nil)
+					if e != nil {
+						return e
+					}
+					record[key] = v
+				}
+				r.env[name] = record
+				return nil
+			}
+			definition, ok := r.definitions[typeText]
+			if !ok {
+				return fmt.Errorf("unknown record type %q", typeText)
+			}
 			record := map[string]any{}
+			seen := map[string]bool{}
+			fields := fieldsByName(definition)
 			for _, f := range s.Body {
 				if f.Kind != "field" {
 					continue
 				}
 				key, value, _ := strings.Cut(f.Text, " from ")
+				if seen[key] {
+					return fmt.Errorf("%s field %s appears more than once", typeText, key)
+				}
+				seen[key] = true
+				field, known := fields[key]
+				if !known {
+					return fmt.Errorf("%s has no field %s", typeText, key)
+				}
 				v, e := r.eval(value, nil)
 				if e != nil {
 					return e
 				}
+				if !typeMatchesRef(v, field.Type, r.definitions) {
+					return fmt.Errorf("%s.%s must be %s; received %s", typeText, key, field.Type.String(), valueTypeName(v))
+				}
 				record[key] = v
 			}
+			for _, field := range definition.Fields {
+				if !field.Type.Optional && !seen[field.Name] {
+					return fmt.Errorf("%s requires field %s as %s", typeText, field.Name, field.Type.String())
+				}
+			}
 			r.env[name] = record
+			r.types[name] = TypeRef{Name: typeText}
 			return nil
 		}
 		v, e := r.eval(expr, nil)
 		if e == nil {
+			if strings.HasPrefix(strings.TrimSpace(m[2]), "as ") {
+				typeText := strings.TrimSpace(strings.TrimPrefix(m[2], "as "))
+				t, typeErr := parseType(typeText, false)
+				if typeErr == nil {
+					if !typeMatchesRef(v, t, r.definitions) {
+						return fmt.Errorf("%s must be %s; received %s", name, t.String(), valueTypeName(v))
+					}
+					r.types[name] = t.base()
+				}
+			}
 			r.env[name] = v
 		}
 		return e
@@ -1003,27 +1107,42 @@ func (r *runtime) callModule(s *Statement, mod *Module, action, display string, 
 	if fn == nil {
 		return fmt.Errorf("%s is not a callable action", display)
 	}
-	fm := match("to", fn.Text)
-	names := []string{}
-	if fm[2] != "" {
-		names = strings.Split(fm[2], ",")
+	decl, declErr := parseActionDecl(fn.Text)
+	if declErr != nil {
+		return declErr
 	}
-	if len(vals) != len(names) {
-		return fmt.Errorf("action %s expects %d arguments", display, len(names))
+	if len(vals) != len(decl.Params) {
+		return fmt.Errorf("action %s expects %d arguments", display, len(decl.Params))
 	}
 	if r.depth >= 128 {
 		return fmt.Errorf("action recursion limit exceeded")
 	}
 	local := map[string]any{}
-	for i, name := range names {
+	localTypes := map[string]TypeRef{}
+	actionDefs, _ := visibleDefinitions(mod.Definitions, mod.scope(action))
+	for i, param := range decl.Params {
 		v, e := r.eval(vals[i], nil)
 		if e != nil {
 			return e
 		}
-		local[strings.TrimSpace(name)] = v
+		if param.Type.Name != "any" && !typeMatchesRef(v, param.Type, actionDefs) {
+			return fmt.Errorf("%s.%s must be %s; received %s", display, param.Name, param.Type.String(), valueTypeName(v))
+		}
+		local[param.Name] = v
+		localTypes[param.Name] = param.Type.base()
+	}
+	if len(decl.Using) > 0 {
+		for _, field := range decl.Using {
+			v, fieldType, err := propertyTyped(local[decl.Params[0].Name], field, decl.Params[0].Type.base(), actionDefs)
+			if err != nil {
+				return err
+			}
+			local[field] = v
+			localTypes[field] = fieldType
+		}
 	}
 	outer := r.env
-	outerFns, outerSchemas, outerImports, outerVocab := r.functions, r.schemas, r.imports, r.vocab
+	outerFns, outerSchemas, outerImports, outerVocab, outerTypes, outerDefs := r.functions, r.schemas, r.imports, r.vocab, r.types, r.definitions
 	outerModule := r.module
 	r.module = mod
 	imports := mod.scope(action)
@@ -1032,6 +1151,8 @@ func (r *runtime) callModule(s *Statement, mod *Module, action, display string, 
 	}
 	r.env = local
 	r.functions, r.schemas, r.imports, r.vocab = copyStatements(mod.Actions), copyStatements(mod.Schemas), imports, mod.vocabulary(action)
+	r.types = localTypes
+	r.definitions = actionDefs
 	r.depth++
 	modulePath := mod.Key
 	if !filepath.IsAbs(modulePath) && r.logicalPath != "" {
@@ -1043,6 +1164,7 @@ func (r *runtime) callModule(s *Statement, mod *Module, action, display string, 
 	r.depth--
 	r.env = outer
 	r.functions, r.schemas, r.imports, r.vocab = outerFns, outerSchemas, outerImports, outerVocab
+	r.types, r.definitions = outerTypes, outerDefs
 	r.module = outerModule
 	var ret returnValue
 	if errors.As(e, &ret) {
