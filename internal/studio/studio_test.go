@@ -240,6 +240,39 @@ func TestRunEnvelope(t *testing.T) {
 	}
 }
 
+func TestRunTypedFailurePreservesPayloadAndFrames(t *testing.T) {
+	s, ts := newTestServer(t)
+	source := "define failure InvalidCity:\n  city as text\nto reject returning text may fail with InvalidCity:\n  fail InvalidCity with \"city rejected\":\n    city from \"Atlantis\"\ncall reject called result\n"
+	raw, _ := json.Marshal(map[string]any{"source": source})
+	res, data := post(t, ts, s.Token(), "/api/run", string(raw))
+	if res.StatusCode != http.StatusOK || data["ok"] != false {
+		t.Fatalf("run = %d %+v", res.StatusCode, data)
+	}
+	failure, _ := data["error"].(map[string]any)
+	if failure["kind"] != "InvalidCity" || failure["city"] != "Atlantis" {
+		t.Fatalf("typed payload lost: %+v", failure)
+	}
+	if frames, _ := failure["frames"].([]any); len(frames) == 0 {
+		t.Fatalf("failure frames lost: %+v", failure)
+	}
+}
+
+func TestCheckSurfacesActionPossibleFailures(t *testing.T) {
+	s, ts := newTestServer(t)
+	source := "define failure InvalidCity:\n  city as text\nto reject returning text may fail with InvalidCity:\n  fail InvalidCity with \"city rejected\":\n    city from \"Atlantis\"\n"
+	raw, _ := json.Marshal(map[string]any{"source": source})
+	_, data := post(t, ts, s.Token(), "/api/check", string(raw))
+	actions, _ := data["actions"].([]any)
+	if len(actions) != 1 {
+		t.Fatalf("actions missing: %+v", data)
+	}
+	action := actions[0].(map[string]any)
+	failures, _ := action["possibleFailures"].([]any)
+	if len(failures) != 1 || failures[0] != "InvalidCity" {
+		t.Fatalf("possible failures missing: %+v", action)
+	}
+}
+
 func TestCancelWithoutRunIsConflict(t *testing.T) {
 	s, ts := newTestServer(t)
 	res, data := post(t, ts, s.Token(), "/api/cancel", `{}`)

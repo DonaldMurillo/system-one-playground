@@ -2,10 +2,13 @@ package soslsp
 
 import (
 	"encoding/json"
+	"github.com/DonaldMurillo/system-one-playground/internal/sossyntax"
+	"github.com/DonaldMurillo/system-one-playground/sos"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
-	"github.com/DonaldMurillo/system-one-playground/sos"
 )
 
 func TestCompletionQualifiedImportEditsStayExecutable(t *testing.T) {
@@ -92,5 +95,61 @@ func TestHintsUseBindingOffsetsAndTypes(t *testing.T) {
 	}
 	if len(want) > 0 {
 		t.Fatalf("missing hints: %+v", want)
+	}
+}
+
+func TestFailureCompletionAfterCommaIncludesImportedFailures(t *testing.T) {
+	root := t.TempDir()
+	writeModule(t, root, "example.com/demo", map[string]string{
+		"util/failures.sos": "package util\nexport fetch\nexport NotFound\ndefine failure NotFound:\n  path as text\nto fetch returning text may fail with NotFound:\n  fail NotFound with \"missing\":\n    path from \"x\"\n",
+	})
+	if err := os.WriteFile(filepath.Join(root, "sos.toml"), []byte("version = 1\n[module]\npath = \"example.com/demo\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	source := "import \"example.com/demo/util\"\ndefine failure InvalidCity:\n  city as text\nto load returning text may fail with InvalidCity, NotFound:\n  finish with \"ok\"\n"
+	mainPath := filepath.Join(root, "main.sos")
+	if err := os.WriteFile(mainPath, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	uri := "file://" + mainPath
+	catalog, diagnostics := sos.Vocabulary(mainPath, source)
+	if len(catalog.Failures) < 2 {
+		t.Fatalf("fixture did not resolve imported failures: failures=%+v diagnostics=%+v", catalog.Failures, diagnostics)
+	}
+	messages, err := runLSP(t,
+		lspRequest(1, "initialize", map[string]any{"rootUri": "file://" + root}),
+		openDoc(uri, source),
+		lspRequest(2, "textDocument/completion", map[string]any{"textDocument": map[string]any{"uri": uri}, "position": map[string]int{"line": 3, "character": 51}}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := lspResult(t, messages, 2)["result"].([]any)
+	found := false
+	for _, raw := range items {
+		item := raw.(map[string]any)
+		if item["label"] == "NotFound" {
+			found = true
+			if !strings.Contains(item["detail"].(string), "path as text") {
+				t.Fatalf("missing imported failure detail: %+v", item)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("imported failure completion missing after comma: %+v", items)
+	}
+}
+
+func TestFailureSyntaxRolesAreTypes(t *testing.T) {
+	toks := syntaxTokens(sossyntax.Parse("define failure InvalidCity:\n  city as text\nto load returning text may fail with InvalidCity, NotFound:"), nil)
+	for _, want := range []struct {
+		line, start int
+		text        string
+	}{
+		{0, 15, "InvalidCity"}, {2, 37, "InvalidCity"}, {2, 50, "NotFound"},
+	} {
+		if !tokenIs(toks, want.line, want.start, tokType, want.text) {
+			t.Fatalf("failure type token missing: %+v in %+v", want, toks)
+		}
 	}
 }

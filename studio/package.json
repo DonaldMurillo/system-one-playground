@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "lint": "node --check src/main.js && node --check src/sos.js && node --check src/lsp.js && node --check src/commands.js && node --check src/vocabulary.js && node --check src/projects.js",
+    "lint": "node --check src/main.js && node --check src/sos.js && node --check src/lsp.js && node --check src/commands.js && node --check src/vocabulary.js && node --check src/projects.js && node --check src/failures.js",
     "test": "node --test src/*.test.js"
   },
   "dependencies": {

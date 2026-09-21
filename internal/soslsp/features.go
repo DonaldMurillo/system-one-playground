@@ -243,7 +243,7 @@ func (s *server) completion(params json.RawMessage) any {
 		}
 		prefix = strings.ToLower(line[start:col])
 		lineContext = strings.ToLower(strings.TrimSpace(line[:col]))
-		semanticContext := strings.HasSuffix(lineContext, "may fail with") || strings.HasSuffix(lineContext, "fail") || strings.Contains(lineContext, "on failure")
+		semanticContext := failureCompletionContext(lineContext)
 		if prefix != "" || semanticContext {
 			replace = &lspRange{Start: lspPosition{Line: pos.Line, Character: byteToChar(line, start)}, End: lspPosition{Line: pos.Line, Character: byteToChar(line, end)}}
 		}
@@ -263,7 +263,7 @@ func (s *server) completion(params json.RawMessage) any {
 		}
 		items = append(items, item)
 	}
-	semanticContext := strings.HasSuffix(lineContext, "may fail with") || strings.HasSuffix(lineContext, "fail") || strings.Contains(lineContext, "on failure")
+	semanticContext := failureCompletionContext(lineContext)
 	if !ok || replace == nil || (prefix == "" && !semanticContext) {
 		// Empty prefix keeps the canonical keyword list exactly, matching
 		// long-standing clients.
@@ -307,6 +307,23 @@ func (s *server) completion(params json.RawMessage) any {
 			})
 		}
 	}
+	// The vocabulary catalog includes exported failure types from resolved
+	// imports. They are types, not callable word targets, so complete them
+	// directly in failure positions (including every slot after a comma).
+	if semanticContext {
+		catalog, _ := s.vocabularyFor(uri, vocabFilename(uri, s.workspaceRoot), text)
+		seen := map[string]bool{}
+		for _, item := range items {
+			seen[strings.ToLower(item["label"].(string))] = true
+		}
+		for i := range catalog.Failures {
+			definition := &catalog.Failures[i]
+			if seen[strings.ToLower(definition.Name)] || prefix != "" && !strings.HasPrefix(strings.ToLower(definition.Name), prefix) {
+				continue
+			}
+			items = append(items, map[string]any{"label": definition.Name, "kind": 7, "detail": failureSignature(definition), "textEdit": wordEdit(definition.Name)})
+		}
+	}
 	// Vocabulary words from the shared catalog: exactly the forms enabled by
 	// this document's imports. Open imports offer the bare sentence; aliased
 	// imports offer the qualifier form only — a bare hint under an alias
@@ -342,6 +359,18 @@ func (s *server) completion(params json.RawMessage) any {
 		}
 	}
 	return items
+}
+
+func failureCompletionContext(line string) bool {
+	line = strings.ToLower(strings.TrimSpace(line))
+	if strings.Contains(line, "on failure") || strings.HasSuffix(line, "fail") {
+		return true
+	}
+	i := strings.LastIndex(line, "may fail with")
+	if i < 0 {
+		return false
+	}
+	return !strings.Contains(line[i+len("may fail with"):], ":")
 }
 
 func recordSignature(definition *sos.RecordDef) string {

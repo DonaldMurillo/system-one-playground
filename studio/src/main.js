@@ -3,6 +3,7 @@ import { usageLine } from './usage.js'
 import { commandLeaves, effectiveInputs, findByPath } from './commands.js'
 import { normalizeCatalog, searchEntries, searchLibraries, enabledView, libraryView, libraryEnabled, importPreview, entrySignature, needsJev, diagnosticsFor } from './vocabulary.js'
 import { installLanguageServices, diagnosticColumn } from './lsp.js'
+import { actionFailureContracts, failureOutput } from './failures.js'
 import * as monaco from 'monaco-editor'
 import editorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker'
 import { registerSOSLanguage } from './sos.js'
@@ -22,7 +23,7 @@ if (!TOKEN) {
 if (location.search) history.replaceState(null, '', location.pathname)
 
 const $ = (id) => document.getElementById(id)
-const state = { session: null, running: false, diagnostics: [], analyzing: false, analysisAbort: null, analysis: null }
+const state = { session: null, running: false, diagnostics: [], actions: [], analyzing: false, analysisAbort: null, analysis: null }
 
 let activeProjectPath = ''
 let projects
@@ -170,7 +171,9 @@ function scheduleCheck() {
       const r = await api('/api/check', { source: editor.getValue() })
       if (version === editor.getModel().getVersionId() && epoch === diagnosticEpoch) {
         setMarkers(r.diagnostics)
+        state.actions = r.actions || []
         renderCommands(r.commands || null)
+        if (vocab.data) renderVocabulary()
       }
     } catch { /* transient */ }
   }, 350)
@@ -181,6 +184,7 @@ async function refreshCommands() {
   const version = model.getVersionId()
   const result = await api('/api/check', { source: model.getValue() })
   if (version !== model.getVersionId()) throw new Error('Source changed; try again')
+  state.actions = result.actions || []
   renderCommands(result.commands || null)
 }
 
@@ -730,6 +734,22 @@ function renderVocabDiagnostics(host) {
 // actually enable, grouped by their libraries with provenance.
 function renderVocabEnabled(body, query) {
   const view = enabledView(vocab.data)
+  const contracts = actionFailureContracts(state.actions)
+  if (contracts.length && !vocab.library && !query.trim()) {
+    const section = document.createElement('article')
+    section.className = 'vocab-lib-card is-enabled'
+    const title = document.createElement('div')
+    title.className = 'vocab-lib'
+    title.textContent = 'Actions declared here'
+    section.appendChild(title)
+    for (const contract of contracts) {
+      const row = document.createElement('p')
+      row.className = 'vocab-preview'
+      row.textContent = `${contract.name} may fail with ${contract.failures.join(', ')}`
+      section.appendChild(row)
+    }
+    body.appendChild(section)
+  }
   const entries = searchEntries(view.entries, query)
   const byPath = new Map()
   for (const e of entries) {
@@ -1004,7 +1024,7 @@ $('run').addEventListener('click', async () => {
     const parts = []
     if (r.output) parts.push(r.output)
     if (r.stderr) parts.push(r.stderr)
-    showOutput(parts.join('\n') || (r.ok ? `(no output, ${r.steps} steps)` : ''), r.ok ? null : r.error ? `${r.error.kind}: ${r.error.message}` : 'run failed')
+    showOutput(parts.join('\n') || (r.ok ? `(no output, ${r.steps} steps)` : ''), r.ok ? null : failureOutput(r.error))
     renderTraces(r.traces, r.usage)
     diagnosticEpoch++
     if (r.analysis) {

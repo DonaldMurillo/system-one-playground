@@ -86,7 +86,10 @@ var (
 	reCallQualified = regexp.MustCompile(`^\s*call\s+([A-Za-z_]\w*)\.([A-Za-z_]\w*)`)
 	reAsType        = regexp.MustCompile(`\bas\s+((?:optional\s+)?(?:text|timestamp|number|integer|folder|file|duration|boolean|json|table|lines\s+of\s+json|empty\s+list|[A-Z][A-Za-z0-9_]*))\b`)
 	reDefineName    = regexp.MustCompile(`^\s*define\s+([A-Z][A-Za-z0-9_]*)`)
+	reFailureName   = regexp.MustCompile(`^\s*define\s+failure\s+([A-Z][A-Za-z0-9_]*)`)
 	reDefineField   = regexp.MustCompile(`^\s*([a-z_][A-Za-z0-9_]*)\s+as\s+`)
+	reFailureList   = regexp.MustCompile(`\bmay\s+fail\s+with\s+(.+)$`)
+	reFailureType   = regexp.MustCompile(`[A-Z][A-Za-z0-9_]*`)
 )
 
 // nameRoleRegexes map a captured identifier group to its semantic role. The
@@ -131,6 +134,14 @@ func lineRoles(line string) []roleSpan {
 	}
 	if m := reDefineName.FindStringSubmatchIndex(code); m != nil {
 		add(tokType, m[2], m[3])
+	}
+	if m := reFailureName.FindStringSubmatchIndex(code); m != nil {
+		add(tokType, m[2], m[3])
+	}
+	if m := reFailureList.FindStringSubmatchIndex(code); m != nil {
+		for _, part := range reFailureType.FindAllStringIndex(code[m[2]:m[3]], -1) {
+			add(tokType, m[2]+part[0], m[2]+part[1])
+		}
 	}
 	if m := reDefineField.FindStringSubmatchIndex(code); m != nil {
 		add(tokProperty, m[2], m[3])

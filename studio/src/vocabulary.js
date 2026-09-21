@@ -14,6 +14,7 @@ export function normalizeCatalog(result) {
     root: typeof result.root === 'string' ? result.root : '',
     entries: (Array.isArray(catalog.entries) ? catalog.entries : []).filter(isEntry),
     libraries: (Array.isArray(catalog.libraries) ? catalog.libraries : []).filter(isLibrary),
+    failures: (Array.isArray(catalog.failures) ? catalog.failures : []).filter(f => f && typeof f.name === 'string'),
     diagnostics: (Array.isArray(result.diagnostics) ? result.diagnostics : []).filter(isDiagnostic)
   }
   completeLibraries(out)
@@ -165,7 +166,9 @@ export function importPreview(library, sampleWords) {
 export function entrySignature(entry) {
   const params = stringsOf(entry.params).map((p) => p && `${p.name} as ${p.type}`).filter(Boolean)
   const head = `${entry.name}(${params.join(', ')})`
-  return entry.result ? `${head} → ${entry.result}` : head
+  const result = entry.result ? `${head} → ${entry.result}` : head
+  const failures = stringsOf(entry.possibleFailures).filter(Boolean)
+  return failures.length ? `${result} · may fail with ${failures.join(', ')}` : result
 }
 
 // needsJev reports whether invoking an entry spends provider budget.

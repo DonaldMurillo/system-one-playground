@@ -12,6 +12,9 @@
       "include": "#numbers"
     },
     {
+      "include": "#failureTypes"
+    },
+    {
       "include": "#keywords"
     },
     {
@@ -127,6 +130,29 @@
         {
           "name": "storage.type.sos",
           "match": "\\b(?:optional|text|timestamp|duration|folder|list|json|table|number|integer|boolean|switch|[A-Z][A-Za-z0-9_]*)\\b"
+        }
+      ]
+    },
+    "failureTypes": {
+      "patterns": [
+        {
+          "name": "meta.declaration.failure.sos",
+          "match": "\\b(define)(\\s+)(failure)(\\s+)([A-Z][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.control.sos" },
+            "3": { "name": "keyword.control.sos" },
+            "5": { "name": "entity.name.type.failure.sos" }
+          }
+        },
+        {
+          "name": "meta.failure.contract.sos",
+          "begin": "\\bmay\\s+fail\\s+with\\b",
+          "beginCaptures": { "0": { "name": "keyword.control.sos" } },
+          "end": "$",
+          "patterns": [
+            { "name": "entity.name.type.failure.sos", "match": "\\b[A-Z][A-Za-z0-9_]*\\b" },
+            { "name": "punctuation.separator.comma.sos", "match": "," }
+          ]
         }
       ]
     },

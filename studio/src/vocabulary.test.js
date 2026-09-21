@@ -14,7 +14,7 @@ const catalog = () => normalizeCatalog({
       {id: 'std/json.decode', library: 'std/json', alias: 'json', name: 'decode', kind: 'native', patterns: ['decode VALUE', 'json.decode VALUE'], description: 'Decodes JSON text into a value.', params: [{name: 'text', type: 'text'}], result: 'any', effects: ['pure'], origin: 'standard library', enabled: false, import: 'import "std/json"'},
       {id: 'std/text.trim', library: 'std/text', alias: 'text', name: 'trim', kind: 'native', patterns: ['trim VALUE', 'trim title called clean', 'text.trim VALUE'], synonyms: ['strip'], description: 'Removes surrounding whitespace.', params: [{name: 'text', type: 'text'}], result: 'text', effects: ['pure'], origin: 'import', enabled: true},
       {id: 'std/text.upper', library: 'std/text', alias: 'text', name: 'upper', kind: 'native', patterns: ['upper VALUE', 'text.upper VALUE'], description: 'Uppercases text.', params: [{name: 'text', type: 'text'}], result: 'text', effects: ['pure'], origin: 'import', enabled: true},
-      {id: 'example.com/demo/media.clip', library: 'example.com/demo/media', alias: 'media', name: 'clip', kind: 'action', patterns: ['media.clip VALUE'], description: 'Trims a clip for preview.', params: [{name: 'video', type: 'any'}, {name: 'start', type: 'duration'}], result: 'any', effects: ['read', 'jev'], origin: 'local /w/media', enabled: false, import: 'import "example.com/demo/media" as media'},
+      {id: 'example.com/demo/media.clip', library: 'example.com/demo/media', alias: 'media', name: 'clip', kind: 'action', patterns: ['media.clip VALUE'], description: 'Trims a clip for preview.', params: [{name: 'video', type: 'any'}, {name: 'start', type: 'duration'}], result: 'any', possibleFailures: ['InvalidRange'], effects: ['read', 'jev'], origin: 'local /w/media', enabled: false, import: 'import "example.com/demo/media" as media'},
       'not-an-entry'
     ],
     libraries: [
@@ -135,7 +135,7 @@ test('importPreview states the agreed bare and prefixed forms', () => {
 test('entrySignature renders params and result', () => {
   const c = catalog()
   assert.equal(entrySignature(c.entries[2]), 'upper(text as text) → text')
-  assert.equal(entrySignature(c.entries[3]), 'clip(video as any, start as duration) → any')
+  assert.equal(entrySignature(c.entries[3]), 'clip(video as any, start as duration) → any · may fail with InvalidRange')
   assert.equal(entrySignature({name: 'noop'}), 'noop()')
 })
 

@@ -19,6 +19,7 @@ func (s *server) hover(params json.RawMessage) any {
 		return nil
 	}
 	line := tree.Lines[pos.Line]
+	catalog, _ := s.vocabularyFor(uri, vocabFilename(uri, s.workspaceRoot), text)
 	for _, token := range line.Tokens {
 		if pos.Character < token.Start || pos.Character >= token.End {
 			continue
@@ -35,6 +36,13 @@ func (s *server) hover(params json.RawMessage) any {
 				if failure := program.Failures[token.Text]; failure != nil {
 					role = "failure"
 					detail = failureSignature(failure)
+				}
+			}
+			for i := range catalog.Failures {
+				if catalog.Failures[i].Name == token.Text {
+					role = "failure"
+					detail = failureSignature(&catalog.Failures[i])
+					break
 				}
 			}
 			for _, t := range syntaxTokens(tree, s.sentHeads(uri, text)) {

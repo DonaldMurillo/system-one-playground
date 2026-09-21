@@ -1,7 +1,7 @@
 // Immediate offline lexical colors; semantic meaning comes from the shared SOS LSP.
 
 export const SENTENCE_STARTERS = [
-  'evaluate', 'criterion', 'package', 'import', 'export', 'argument', 'option', 'switch', 'to', 'call', 'return', 'while', 'repeat', 'set', 'emit', 'judge', 'score', 'command', 'describe', 'expect', 'remember', 'find', 'read', 'require',
+  'evaluate', 'criterion', 'package', 'import', 'export', 'define', 'failure', 'argument', 'option', 'switch', 'to', 'call', 'returning', 'may', 'finish', 'fail', 'recover', 'capture', 'return', 'while', 'repeat', 'set', 'emit', 'judge', 'score', 'command', 'describe', 'expect', 'remember', 'find', 'read', 'require',
   'keep', 'sort', 'group', 'create', 'make', 'assign', 'when', 'take',
   'classify', 'append', 'save', 'show', 'for', 'map', 'stop', 'print'
 ]
@@ -10,7 +10,7 @@ export const CONNECTORS = [
   'each', 'in', 'as', 'into', 'on', 'called', 'with', 'where', 'by', 'from',
   'under', 'named', 'matching', 'if', 'missing', 'numbered', 'otherwise',
   'and', 'or', 'not', 'of', 'count', 'first', 'last', 'items', 'default',
-  'choices', 'is', 'ascending', 'descending', 'existing', 'off', 'at', 'most', 'running', 'collecting', 'failures', 'rethrow'
+  'choices', 'is', 'ascending', 'descending', 'existing', 'off', 'at', 'most', 'running', 'collecting', 'failures', 'rethrow', 'pass', 'using'
 ]
 
 export const OPERATORS = ['and', 'contains', 'is', 'minus', 'not', 'or', 'plus', 'times']
