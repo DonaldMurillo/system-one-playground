@@ -43,7 +43,7 @@ Studio currently executes through the Go core in-process, with cancellation and 
 
 - `go test ./...` covers the public CLI, standalone/WASM builds, language flows, LSP protocol sessions, and Studio HTTP handlers.
 - `SOS_LIVE_TEST=1 go test ./tests/e2e -run TestLiveJevAndReplay -v` calls the real provider, then replays with the endpoint set to an unreachable address.
-- All three live primitives were exercised through `examples/sos/primitives.sos`.
+- All three live primitives were exercised through `examples/sos/primitives/main.sos`.
 - Native, `js/wasm`, and `wasip1/wasm` count programs were executed with matching output.
 - Browser verification used Playwright against the running bundled editor: run, live trace, and edit-triggered diagnostics. Native verification confirmed launch, script output, and OS Save dialog.
 - The desktop package is locally self-signed for development, not notarized for public distribution. macOS ARM64 is the desktop platform validated here; other desktop platforms require their native packaging/testing lanes.

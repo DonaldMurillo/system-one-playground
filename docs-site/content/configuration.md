@@ -15,7 +15,7 @@ nearest `sos.toml`. It does not merge every ancestor project. Relative paths in
 the script still resolve against the run working directory, not the config file.
 
 ```sh
-go run ./cmd/sos config examples/sos/count.sos
+go run ./cmd/sos config examples/sos/count/main.sos
 ```
 
 `config FILE` prints effective settings and their origins as JSON without

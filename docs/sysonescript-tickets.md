@@ -1,13 +1,13 @@
 # A file-based tickets CLI
 
-The [example](../examples/sos/tickets.sos) defines one application with three
+The [example](../examples/sos/tickets/main.sos) defines one application with three
 commands. Run these from the repository root, using fresh output paths:
 
 ```sh
-bin/sos run examples/sos/tickets.sos -- --help
-bin/sos run examples/sos/tickets.sos -- import examples/sos/team-tickets.json --output tickets.json
-bin/sos run examples/sos/tickets.sos -- triage tickets.json --criterion all --output open.json
-bin/sos run examples/sos/tickets.sos -- report open.json --by team --output ./ticket-reports
+bin/sos run examples/sos/tickets/main.sos -- --help
+bin/sos run examples/sos/tickets/main.sos -- import examples/sos/tickets/team-tickets.json --output tickets.json
+bin/sos run examples/sos/tickets/main.sos -- triage tickets.json --criterion all --output open.json
+bin/sos run examples/sos/tickets/main.sos -- report open.json --by team --output ./ticket-reports
 ```
 
 Import validates the ticket schema. Triage keeps open tickets; `all` requires
@@ -25,7 +25,7 @@ classification on every run. The `all` path is deterministic.
 Build once and invoke the same commands directly:
 
 ```sh
-bin/sos build examples/sos/tickets.sos --output ./bin/tickets
+bin/sos build examples/sos/tickets/main.sos --output ./bin/tickets
 bin/tickets --help
 bin/tickets triage tickets.json --criterion all --output selected.json
 ```

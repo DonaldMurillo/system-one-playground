@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.0
+
+- Adds typed external command and persistent stdio modules with capability policy, diagnostics, generated interfaces, and project controls.
+- Adds checksummed external artifacts to relocatable standalone application bundles.
+- Expands typed results and failures through runtime, build manifests, language tooling, and debugging.
+- Expands and reorganizes runnable examples into self-contained project folders.
+
 ## 0.3.0
 
 - Adds semantic interpretation batching, memoization, and canonicalization.

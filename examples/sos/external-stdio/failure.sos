@@ -1,0 +1,8 @@
+import "local/profile" as profile
+
+call profile.reject with "the sample requested rejection" called result
+  on failure Rejected using reason:
+    show "Rejected: {reason}"
+    recover with "handled"
+
+show result

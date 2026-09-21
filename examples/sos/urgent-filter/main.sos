@@ -1,5 +1,5 @@
 command tickets:
-  option source as file default "examples/sos/tickets.json"
+  option source as file default "tickets.json"
 
   read source as json called tickets
   keep tickets where status is "open"

@@ -1,0 +1,8 @@
+import "local/profile" as profile
+
+call profile.inspect with "Ada", 37 called first
+show first.name
+
+# A second call reuses the same persistent plugin process.
+call profile.inspect with "Lin", 29 called second
+show second.name

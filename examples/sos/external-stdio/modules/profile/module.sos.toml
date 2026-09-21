@@ -1,0 +1,91 @@
+schema = 1
+
+[module]
+path = "local/profile"
+version = "1.0.0"
+description = "Persistent JSON-RPC profile plugin example"
+
+[runtime]
+kind = "stdio"
+protocol = "sos-plugin/1"
+command = ["python3", "plugin.py"]
+working_directory = "${definition_dir}"
+max_in_flight = 1
+startup_timeout = "3s"
+shutdown_timeout = "1s"
+
+[runtime.requires]
+python = ">=3.9"
+
+[capabilities]
+network = false
+filesystem = "none"
+process = true
+secrets = ["SOS_EXAMPLE_PLUGIN_TOKEN"]
+
+[[type]]
+name = "Profile"
+
+[[type.field]]
+name = "name"
+type = "text"
+
+[[type.field]]
+name = "age"
+type = "integer"
+
+[[type.field]]
+name = "verified"
+type = "boolean"
+
+[[failure]]
+name = "Rejected"
+
+[[failure.field]]
+name = "reason"
+type = "text"
+
+[[action]]
+name = "inspect"
+description = "Returns a typed profile and demonstrates process reuse."
+effects = ["process", "secret"]
+timeout = "2s"
+failures = ["Rejected"]
+
+[[action.parameter]]
+name = "name"
+type = "text"
+
+[[action.parameter]]
+name = "age"
+type = "integer"
+
+[action.result]
+type = "Profile"
+
+[[action]]
+name = "reject"
+description = "Returns a declared failure without terminating the plugin."
+effects = ["process", "secret"]
+timeout = "2s"
+failures = ["Rejected"]
+
+[[action.parameter]]
+name = "reason"
+type = "text"
+
+[action.result]
+type = "text"
+
+[[action]]
+name = "wait"
+description = "Sleeps long enough for the host deadline to cancel it."
+effects = ["process"]
+timeout = "100ms"
+
+[[action.parameter]]
+name = "milliseconds"
+type = "integer"
+
+[action.result]
+type = "text"

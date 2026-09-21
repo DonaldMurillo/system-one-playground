@@ -13,7 +13,7 @@ for page in pages:
     body = (root / page["source"]).read_text()
     def rewrite(match):
         target = match.group(1)
-        if target == "../examples/sos/tickets.sos":
+        if target == "../examples/sos/tickets/main.sos":
             return "](/docs/tickets-source)"
         if target == "../examples/sos/repo-assistant/README.md":
             return "](/docs/repository-cli)"
@@ -28,7 +28,7 @@ if changed and "--check" in sys.argv:
     raise SystemExit("Stale public content: " + ", ".join(changed))
 print("Public references synchronized: " + str(len(pages)))
 
-source_page = "# Tickets CLI source\n\n```text\n" + (root / "examples/sos/tickets.sos").read_text() + "\n```\n"
+source_page = "# Tickets CLI source\n\n```text\n" + (root / "examples/sos/tickets/main.sos").read_text() + "\n```\n"
 source_path = site / "content/tickets-source.md"
 if "--check" in sys.argv:
     if not source_path.exists() or source_path.read_text() != source_page:

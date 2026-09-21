@@ -14,13 +14,13 @@ CLI or VS Code extension.
 Install the latest standalone CLI on macOS or Linux:
 
 ```sh
-curl -fsSL https://github.com/DonaldMurillo/system-one-playground/releases/download/vscode-v0.3.0/install.sh | sh
+curl -fsSL https://github.com/DonaldMurillo/system-one-playground/releases/download/vscode-v0.4.0/install.sh | sh
 ```
 
 On Windows PowerShell:
 
 ```powershell
-irm https://github.com/DonaldMurillo/system-one-playground/releases/download/vscode-v0.3.0/install.ps1 | iex
+irm https://github.com/DonaldMurillo/system-one-playground/releases/download/vscode-v0.4.0/install.ps1 | iex
 ```
 
 Both installers detect the platform, verify the release checksum, and install
@@ -99,9 +99,12 @@ VS Code users.
 
 | I want to… | Start here |
 | --- | --- |
+| Browse every runnable sample | [SysOneScript examples](examples/sos/README.md) |
 | Build a CLI in readable sentences | [Repository assistant walkthrough](examples/sos/repo-assistant/README.md) |
 | Connect SOS to a shell-free external tool | [External command module](examples/sos/external-command/README.md) |
-| Stress-test Jev with eight semantic decisions | [`semantic-gauntlet.sos`](examples/sos/semantic-gauntlet.sos) |
+| Build a persistent typed plugin | [External stdio module](examples/sos/external-stdio/README.md) |
+| Ship a checksummed standalone app | [Bundled external module](examples/sos/external-bundled/README.md) |
+| Stress-test Jev with eight semantic decisions | [`semantic-gauntlet/main.sos`](examples/sos/semantic-gauntlet/main.sos) |
 | Inspect code without API calls | `go run ./cmd/semlint -sites-only cmd/semlint/fixtures` |
 | Run the linter written in SOS | `sysone run examples/sos/semlint/scan.sos -- sites --root cmd/semlint/fixtures` |
 | Try the Go API demonstration | `go run ./cmd/playground 01` (can make paid requests) |
@@ -150,7 +153,7 @@ go build -o vscode/bin/sos ./cmd/sos
 pnpm --dir vscode check
 pnpm --dir vscode test
 pnpm --dir vscode package
-code --install-extension vscode/sysonescript-vscode-0.3.0.vsix
+code --install-extension vscode/sysonescript-vscode-0.4.0.vsix
 ```
 
 Development checkouts can set `sysonescript.server.command` to an absolute path

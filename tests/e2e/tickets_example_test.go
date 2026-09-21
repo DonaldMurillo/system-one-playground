@@ -12,11 +12,11 @@ import (
 // passing data through files. The all criterion intentionally needs no provider.
 func TestTicketsExampleFilePipeline(t *testing.T) {
 	dir := t.TempDir()
-	script, err := filepath.Abs("../../examples/sos/tickets.sos")
+	script, err := filepath.Abs("../../examples/sos/tickets/main.sos")
 	if err != nil {
 		t.Fatal(err)
 	}
-	source, err := filepath.Abs("../../examples/sos/team-tickets.json")
+	source, err := filepath.Abs("../../examples/sos/tickets/team-tickets.json")
 	if err != nil {
 		t.Fatal(err)
 	}

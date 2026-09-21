@@ -81,7 +81,7 @@ See [package authoring](/docs/packages),
 ## Try the examples
 
 ```sh
-bin/sos run examples/sos/vocabulary.sos
+bin/sos run examples/sos/vocabulary/main.sos
 bin/sos run examples/sos/vocabulary-project/main.sos
 ```
 
@@ -114,8 +114,8 @@ use `with first, second`, matching the existing action-call convention.
 ## CLI and editor API
 
 ```sh
-bin/sos vocabulary examples/sos/vocabulary.sos
-bin/sos vocabulary examples/sos/vocabulary.sos --query whitespace
+bin/sos vocabulary examples/sos/vocabulary/main.sos
+bin/sos vocabulary examples/sos/vocabulary/main.sos --query whitespace
 bin/sos vocabulary --library std/json --json
 ```
 

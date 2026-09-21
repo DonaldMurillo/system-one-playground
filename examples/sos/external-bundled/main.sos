@@ -1,0 +1,4 @@
+import "local/bundled-echo" as echo
+
+call echo.say with "hello from a checksummed bundle" called answer
+show answer

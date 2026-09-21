@@ -99,8 +99,8 @@ For multiple questions about the same input, [question batches](sysonescript-que
 With both interpretation and runtime set to `semantic`, run the included example:
 
 ```sh
-sysone explain examples/sos/jev-workflow.sos
-sysone run examples/sos/jev-workflow.sos
+sysone explain examples/sos/jev-workflow/main.sos
+sysone run examples/sos/jev-workflow/main.sos
 ```
 
 It declares `criterion urgent`, resolves `filter tickets where team is "payments"`, then applies `keep urgent tickets`. The declaration's question defines urgency; `accept probability at least 0.85` and `on uncertain discard` define the policy. Its frontmatter caps requests at eight.

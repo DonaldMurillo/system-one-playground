@@ -16,7 +16,7 @@ One repository for typed Jev judgments, semantic developer tools, a readable scr
 From a source checkout with Go 1.25 or newer:
 
 ```sh
-go run ./cmd/sos run examples/sos/collections.sos
+go run ./cmd/sos run examples/sos/collections/main.sos
 go run ./cmd/semlint -sites-only cmd/semlint/fixtures
 ```
 

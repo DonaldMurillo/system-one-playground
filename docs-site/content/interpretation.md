@@ -188,10 +188,10 @@ finishes or times out.
 From the repository root:
 
 ```sh
-sos explain examples/sos/team-report.sos --save /tmp/team-report.resolution.json
-sos run examples/sos/team-report.sos --resolution /tmp/team-report.resolution.json -- examples/sos/team-tickets.json --output /tmp/team-reports
-sos explain examples/sos/urgent-tickets.sos --save /tmp/urgent.resolution.json
-sos run examples/sos/urgent-tickets.sos --resolution /tmp/urgent.resolution.json -- examples/sos/team-tickets.json
+sos explain examples/sos/team-report/main.sos --save /tmp/team-report.resolution.json
+sos run examples/sos/team-report/main.sos --resolution /tmp/team-report.resolution.json -- examples/sos/team-report/team-tickets.json --output /tmp/team-reports
+sos explain examples/sos/urgent-tickets/main.sos --save /tmp/urgent.resolution.json
+sos run examples/sos/urgent-tickets/main.sos --resolution /tmp/urgent.resolution.json -- examples/sos/urgent-tickets/tickets.json
 ```
 
 The report example groups open tickets by team and saves explicitly named files.

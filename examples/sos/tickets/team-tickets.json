@@ -1,0 +1,6 @@
+[
+  {"id": 1, "team": "platform", "status": "open", "priority": 5, "message": "Production sign-in is unavailable for all customers."},
+  {"id": 2, "team": "billing", "status": "open", "priority": 3, "message": "Invoice CSV should include a customer reference column."},
+  {"id": 3, "team": "platform", "status": "closed", "priority": 4, "message": "Resolved the slow deployment job."},
+  {"id": 4, "team": "billing", "status": "open", "priority": 5, "message": "Customers are being charged twice for every purchase."}
+]

@@ -1,0 +1,9 @@
+version = 1
+
+[external]
+process = true
+secrets = ["SOS_EXAMPLE_PLUGIN_TOKEN"]
+
+[[module.external]]
+path = "local/profile"
+definition = "modules/profile/module.sos.toml"

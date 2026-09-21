@@ -1,5 +1,5 @@
 # Canonical script using a local package and the standard library.
-import "./packages/util"
+import "./util"
 import "std/json"
 
 make who "world"

@@ -1,0 +1,2 @@
+to greet with who as text:
+  return "Hello, {who}!"

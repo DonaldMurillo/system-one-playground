@@ -1,0 +1,5 @@
+import "local/profile" as profile
+
+# Expected to fail: the action's 100ms deadline beats this 2s wait.
+call profile.wait with 2000 called result
+show result

@@ -107,7 +107,7 @@ func TestLiveJevAndReplay(t *testing.T) {
 		t.Fatal(e)
 	}
 	recording := filepath.Join(t.TempDir(), "answers.json")
-	script := filepath.Join(root, "examples/sos/urgent-filter.sos")
+	script := filepath.Join(root, "examples/sos/urgent-filter/main.sos")
 	out, err, code := runCLI(t, root, "run", script, "--record", recording, "--max-calls", "2", "--timeout", "30s")
 	if code != 0 || !strings.Contains(out, "checkout") || strings.Contains(out, "purple") {
 		t.Fatalf("live classification: %d %q %s", code, out, err)
@@ -125,7 +125,7 @@ func TestTriageCLI(t *testing.T) {
 	if e := os.Mkdir(logs, 0755); e != nil {
 		t.Fatal(e)
 	}
-	source, e := os.ReadFile("../../examples/sos/triage.sos")
+	source, e := os.ReadFile("../../examples/sos/triage/main.sos")
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -154,7 +154,7 @@ func TestLiveJevWorkflowExample(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	script := filepath.Join(root, "examples/sos/jev-workflow.sos")
+	script := filepath.Join(root, "examples/sos/jev-workflow/main.sos")
 	saved := filepath.Join(t.TempDir(), "resolution.json")
 	out, stderr, code := runCLI(t, root, "explain", script, "--save", saved)
 	if code != 0 {

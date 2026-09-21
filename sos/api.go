@@ -7,7 +7,7 @@ import (
 	"io"
 )
 
-var Version = "0.3.0"
+var Version = "0.4.0"
 
 // ReleaseMarker is linked alongside Version so packaged cross-platform
 // runtimes can be verified without executing a foreign binary.

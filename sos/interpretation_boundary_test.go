@@ -3,12 +3,12 @@ package sos
 import (
 	"context"
 	"errors"
+	"github.com/DonaldMurillo/system-one-playground/sosconfig"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
-	"github.com/DonaldMurillo/system-one-playground/sosconfig"
 )
 
 func boundaryPolicy(t *testing.T, mode, runtime string, calls int) sosconfig.Effective {
@@ -83,7 +83,7 @@ func TestCanonicalSavedResolutionPreservesOriginalBytes(t *testing.T) {
 }
 
 func TestExistingCanonicalExamplesAnalyzeLocally(t *testing.T) {
-	paths, err := filepath.Glob("../examples/sos/*.sos")
+	paths, err := filepath.Glob("../examples/sos/*/main.sos")
 	if err != nil || len(paths) == 0 {
 		t.Fatalf("example inventory: %v", err)
 	}
@@ -93,7 +93,8 @@ func TestExistingCanonicalExamplesAnalyzeLocally(t *testing.T) {
 			t.Fatal(err)
 		}
 		// These examples intentionally use noncanonical sentence forms.
-		if filepath.Base(path) == "team-report.sos" || filepath.Base(path) == "urgent-tickets.sos" || filepath.Base(path) == "jev-workflow.sos" {
+		example := filepath.Base(filepath.Dir(path))
+		if example == "team-report" || example == "urgent-tickets" || example == "jev-workflow" || example == "semantic-gauntlet" || example == "vocabulary-project" {
 			continue
 		}
 		// Import-using examples exercise LoadProgram (see tests/e2e); the
@@ -101,7 +102,7 @@ func TestExistingCanonicalExamplesAnalyzeLocally(t *testing.T) {
 		if strings.Contains(string(src), "import \"") {
 			continue
 		}
-		t.Run(filepath.Base(path), func(t *testing.T) {
+		t.Run(example, func(t *testing.T) {
 			src, err := os.ReadFile(path)
 			if err != nil {
 				t.Fatal(err)

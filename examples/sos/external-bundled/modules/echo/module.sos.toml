@@ -1,0 +1,57 @@
+schema = 1
+
+[module]
+path = "local/bundled-echo"
+version = "1.0.0"
+description = "Checksummed command adapter bundled into a standalone SOS app"
+
+[runtime]
+kind = "command"
+
+[capabilities]
+network = false
+filesystem = "none"
+process = true
+
+[distribution]
+mode = "bundled"
+
+[[distribution.artifact]]
+target = "darwin-arm64"
+path = "../../artifacts/echo-plugin"
+sha256 = "e17c548b52c3a8fb5c875d7101136cda6dcc41f36addbf838bb21612ddd4e29f"
+
+[[distribution.artifact]]
+target = "darwin-x64"
+path = "../../artifacts/echo-plugin"
+sha256 = "e17c548b52c3a8fb5c875d7101136cda6dcc41f36addbf838bb21612ddd4e29f"
+
+[[distribution.artifact]]
+target = "linux-arm64"
+path = "../../artifacts/echo-plugin"
+sha256 = "e17c548b52c3a8fb5c875d7101136cda6dcc41f36addbf838bb21612ddd4e29f"
+
+[[distribution.artifact]]
+target = "linux-x64"
+path = "../../artifacts/echo-plugin"
+sha256 = "e17c548b52c3a8fb5c875d7101136cda6dcc41f36addbf838bb21612ddd4e29f"
+
+[[action]]
+name = "say"
+description = "Returns text through a development command or bundled artifact."
+effects = ["process"]
+timeout = "2s"
+
+[[action.parameter]]
+name = "message"
+type = "text"
+
+[action.result]
+type = "text"
+
+[action.command]
+program = "printf"
+arguments = ["%s", "${message}"]
+stdout = "text"
+stderr = "diagnostic"
+exit_codes = [0]
