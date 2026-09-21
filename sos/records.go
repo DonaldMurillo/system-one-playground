@@ -356,6 +356,9 @@ func parseActionDecl(text string) (ActionDecl, error) {
 			if err != nil {
 				return ActionDecl{}, fmt.Errorf("parameter %s: %w", param.Name, err)
 			}
+			if t.Element != nil && (t.Element.Name == "any" || t.Element.Element != nil) {
+				return ActionDecl{}, fmt.Errorf("parameter %s: list parameters require one concrete element type", param.Name)
+			}
 			param.Type = t
 		}
 		d.Params = append(d.Params, param)

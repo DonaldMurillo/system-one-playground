@@ -698,6 +698,24 @@ func buildModule(key string, files []*moduleFileDecls) (*Module, []Diagnostic) {
 		}
 	}
 	for _, name := range sortedActionNames(m) {
+		definitionScope, typeProblems := visibleDefinitions(m.Definitions, m.scope(name))
+		for _, problem := range typeProblems {
+			ds = append(ds, Diagnostic{m.Actions[name].Line, 1, problem})
+		}
+		if decl, err := parseActionDecl(m.Actions[name].Text); err != nil {
+			ds = append(ds, Diagnostic{m.Actions[name].Line, 1, err.Error()})
+		} else {
+			for _, param := range decl.Params {
+				if err := validateTypeRefs(param.Type, definitionScope, map[string]bool{}); err != nil && param.Type.Name != "any" {
+					ds = append(ds, Diagnostic{m.Actions[name].Line, 1, "parameter " + param.Name + ": " + err.Error()})
+				}
+			}
+			if decl.HasResult {
+				if err := validateTypeRefs(decl.Result, definitionScope, map[string]bool{}); err != nil {
+					ds = append(ds, Diagnostic{m.Actions[name].Line, 1, "return type: " + err.Error()})
+				}
+			}
+		}
 		moduleStatements := make([]*Statement, 0, len(m.Actions))
 		for _, actionName := range sortedActionNames(m) {
 			moduleStatements = append(moduleStatements, m.Actions[actionName])

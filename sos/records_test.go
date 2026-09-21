@@ -252,6 +252,39 @@ define Account:
 	}
 }
 
+func TestActionParametersRejectUnsupportedListShapes(t *testing.T) {
+	for _, source := range []string{
+		"to inspect with values as list of any:\n  finish\n",
+		"to inspect with values as list of list of integer:\n  finish\n",
+	} {
+		diagnostics := Check(source)
+		if len(diagnostics) == 0 || !strings.Contains(diagnostics[0].Message, "list parameters require one concrete element type") {
+			t.Fatalf("diagnostics = %+v", diagnostics)
+		}
+	}
+}
+
+func TestImportedActionSignaturesValidateNamedTypes(t *testing.T) {
+	dir := t.TempDir()
+	broken := filepath.Join(dir, "broken")
+	if err := os.MkdirAll(broken, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTestFile(filepath.Join(broken, "broken.sos"), `package broken
+export inspect
+to inspect with value as Missing returning Missing:
+  finish with value
+`); err != nil {
+		t.Fatal(err)
+	}
+	_, diagnostics := LoadProgram(filepath.Join(dir, "main.sos"), `import "./broken" as broken
+show "loaded"
+`)
+	if len(diagnostics) < 2 || !strings.Contains(diagnostics[0].Message+diagnostics[1].Message, `unknown type "Missing"`) {
+		t.Fatalf("diagnostics = %+v", diagnostics)
+	}
+}
+
 func TestNamedRecordNestedAndListTypes(t *testing.T) {
 	source := `define Address:
   city as text
