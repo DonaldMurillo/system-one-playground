@@ -103,6 +103,8 @@ func scanSemantic(source string) *semanticScan {
 		s.lines = s.lines[:len(s.lines)-1]
 		s.trailingNL = true
 	}
+	scanLines := append([]string(nil), s.lines...)
+	joinWrappedActionHeaders(scanLines)
 	start := 0
 	if len(s.lines) > 0 && strings.TrimSuffix(strings.TrimPrefix(s.lines[0], "\ufeff"), "\r") == "+++" {
 		// The header stays verbatim in lines for canonical assembly; the
@@ -120,17 +122,18 @@ func scanSemantic(source string) *semanticScan {
 		children *[]*semNode
 	}
 	stack := []frame{{-1, nil, &s.nodes}}
-	for i := start; i < len(s.lines); i++ {
-		work := strings.TrimSuffix(s.lines[i], "\r")
+	for i := start; i < len(scanLines); i++ {
+		work := strings.TrimSuffix(scanLines[i], "\r")
+		original := strings.TrimSuffix(s.lines[i], "\r")
 		text := strings.TrimSpace(stripComment(work))
 		if text == "" {
 			continue
 		}
-		if strings.Contains(work, "\t") {
+		if strings.Contains(original, "\t") {
 			s.diagnostics = append(s.diagnostics, Diagnostic{i + 1, 1, "use spaces, not tabs, for indentation"})
 			continue
 		}
-		indent := len(work) - len(strings.TrimLeft(work, " "))
+		indent := len(original) - len(strings.TrimLeft(original, " "))
 		if indent%2 != 0 {
 			s.diagnostics = append(s.diagnostics, Diagnostic{i + 1, 1, "indentation must use multiples of two spaces"})
 		}

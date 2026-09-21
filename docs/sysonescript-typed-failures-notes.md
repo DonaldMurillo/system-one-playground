@@ -30,6 +30,9 @@ clients consume its parsed metadata instead of maintaining duplicate registries.
 - Generated artifact and CLI checks are separate acceptance surfaces: run
   `go generate ./internal/sosbuild` before artifact tests, and keep
   `sos check --json` metadata covered at the CLI boundary.
+- Wrapped `returning` and `may fail with` action headers must be normalized by
+  both the parser and semantic preanalysis. Sharing that normalization keeps a
+  canonical declaration deterministic and prevents accidental Jev requests.
 
 ## Follow-up seams
 

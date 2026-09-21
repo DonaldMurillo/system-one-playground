@@ -183,6 +183,24 @@ if age bigger 18 show "adult"
 	}
 }
 
+func TestSemanticPreanalysisAcceptsWrappedTypedActionHeader(t *testing.T) {
+	source := `define failure Broken:
+  reason as text
+to fetch
+returning text
+may fail with Broken:
+  finish with "ok"
+`
+	out, err := Analyze(context.Background(), source, AnalyzeOptions{Config: semanticConfig("semantic", "semantic")})
+	requireSuccess(t, out, err)
+	if out.Canonical != source {
+		t.Fatalf("canonical source changed:\n%s", out.Canonical)
+	}
+	if out.Usage.TotalAdmitted != 0 || len(out.Decisions) != 0 {
+		t.Fatalf("wrapped canonical header must not use Jev: usage=%+v decisions=%+v", out.Usage, out.Decisions)
+	}
+}
+
 func TestSemanticDictionaryAliasesAndTypePruning(t *testing.T) {
 	t.Run("aliases", func(t *testing.T) {
 		source := "make score 10\nprovided that score at least 10 display \"ok\"\n"

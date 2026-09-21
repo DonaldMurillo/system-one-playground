@@ -96,6 +96,27 @@ func classifyLine(text string) string {
 	}
 	return ""
 }
+
+// joinWrappedActionHeaders normalizes formatter-produced action signatures
+// while preserving physical line indexes by blanking consumed continuations.
+func joinWrappedActionHeaders(lines []string) {
+	for i := 1; i < len(lines); i++ {
+		continuation := strings.TrimSpace(lines[i])
+		previousIndex := i - 1
+		for previousIndex >= 0 && strings.TrimSpace(lines[previousIndex]) == "" {
+			previousIndex--
+		}
+		previous := ""
+		if previousIndex >= 0 {
+			previous = strings.TrimSpace(lines[previousIndex])
+		}
+		if (strings.HasPrefix(continuation, "returning ") || strings.HasPrefix(continuation, "may fail with ")) && strings.HasPrefix(previous, "to ") && !strings.HasSuffix(previous, ":") {
+			lines[previousIndex] = previous + " " + continuation
+			lines[i] = ""
+		}
+	}
+}
+
 func stripComment(s string) string {
 	quoted, esc := false, false
 	for i, c := range s {
@@ -139,24 +160,7 @@ func Parse(source string) (*Program, []Diagnostic) {
 	}
 	stack := []frame{{-1, &p.Statements, nil}}
 	lines := strings.Split(strings.ReplaceAll(body, "\r\n", "\n"), "\n")
-	// A formatter may wrap the long action suffix before `returning` or
-	// `may fail with`. Join only an immediately-following continuation of a
-	// `to` header; all other physical lines retain ordinary indentation rules.
-	for i := 1; i < len(lines); i++ {
-		continuation := strings.TrimSpace(lines[i])
-		previousIndex := i - 1
-		for previousIndex >= 0 && strings.TrimSpace(lines[previousIndex]) == "" {
-			previousIndex--
-		}
-		previous := ""
-		if previousIndex >= 0 {
-			previous = strings.TrimSpace(lines[previousIndex])
-		}
-		if (strings.HasPrefix(continuation, "returning ") || strings.HasPrefix(continuation, "may fail with ")) && strings.HasPrefix(previous, "to ") && !strings.HasSuffix(previous, ":") {
-			lines[previousIndex] = previous + " " + continuation
-			lines[i] = ""
-		}
-	}
+	joinWrappedActionHeaders(lines)
 	for i, raw := range lines {
 		if strings.TrimSpace(raw) == "" || strings.HasPrefix(strings.TrimSpace(raw), "#") {
 			continue
