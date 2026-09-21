@@ -98,6 +98,9 @@ Tools:
 | `analyze` | `path`, `source` | Interpretation report |
 | `build` | `path`, `output` | Native executable compiled from saved files |
 | `run` | `path`, `source`; optional `args`, `commandPath`, `timeoutMs` | Output, trace, usage and runtime errors |
+| `external_modules` | none | Registered module paths, definition paths and whether Studio can open each definition |
+| `external_module_check` | `path` | Offline definition/interface validation result |
+| `external_module_doctor` | `path` | Explicit runtime/dependency handshake result |
 
 Tool responses include both JSON text content and `structuredContent`. Operational failures set `isError`; malformed arguments use JSON-RPC errors. Unknown arguments are rejected. Discovery annotations identify read-only tools and warn that execution/analysis can interact with external systems. Running user code can write project files and consume Jev budget. Secret writes still pass through the client's tool invocation, so clients should avoid retaining sensitive argument logs.
 

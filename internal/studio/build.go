@@ -2,7 +2,9 @@ package studio
 
 import (
 	"context"
+	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -96,6 +98,21 @@ func (s *Server) handleBuild(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, response)
 		return
 	}
+	if info, statErr := os.Stat(artifact); statErr == nil && info.IsDir() {
+		if _, existingErr := root.Stat(outputPath); existingErr == nil {
+			writeError(w, 409, "conflict", "output could not be created; recheck the project tree")
+			return
+		}
+		if err := copyBuildDirectory(root, outputPath, artifact); err != nil {
+			root.RemoveAll(outputPath)
+			writeError(w, 500, "build", "could not save compiled bundle")
+			return
+		}
+		response["ok"] = true
+		response["bundle"] = true
+		writeJSON(w, 200, response)
+		return
+	}
 	// O_EXCL checks again after compilation: another editor/agent may have
 	// created this path while Go was running. Never replace an existing file.
 	dst, err := root.OpenFile(outputPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0755)
@@ -118,4 +135,36 @@ func (s *Server) handleBuild(w http.ResponseWriter, r *http.Request) {
 	}
 	response["ok"] = true
 	writeJSON(w, 200, response)
+}
+
+func copyBuildDirectory(root *os.Root, destination, source string) error {
+	return fs.WalkDir(os.DirFS(source), ".", func(name string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		target := filepath.Join(destination, name)
+		if entry.IsDir() {
+			return root.MkdirAll(target, 0o755)
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return fmt.Errorf("build bundle contains symlink %s", name)
+		}
+		data, err := os.ReadFile(filepath.Join(source, name))
+		if err != nil {
+			return err
+		}
+		mode := os.FileMode(0o644)
+		if info, err := entry.Info(); err == nil {
+			mode = info.Mode().Perm()
+		}
+		file, err := root.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
+		if err != nil {
+			return err
+		}
+		if _, err = file.Write(data); err != nil {
+			file.Close()
+			return err
+		}
+		return file.Close()
+	})
 }

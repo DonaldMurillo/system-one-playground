@@ -10,6 +10,7 @@ package sosbuild
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,6 +20,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"text/template"
 
@@ -134,7 +136,9 @@ func Build(ctx context.Context, opts BuildOptions) error {
 	if err != nil {
 		return err
 	}
-	policyJSON, err := json.Marshal(policy)
+	packagedPolicy := policy
+	packagedPolicy.Origins = nil
+	policyJSON, err := json.Marshal(packagedPolicy)
 	if err != nil {
 		return err
 	}
@@ -142,6 +146,30 @@ func Build(ctx context.Context, opts BuildOptions) error {
 	if err != nil {
 		return err
 	}
+	graph := opts.Program.Modules.Graph()
+	bundled := false
+	for _, external := range graph.External {
+		bundled = bundled || external.DistributionMode == "bundled"
+	}
+	if bundled {
+		bundleDir := output
+		if _, statErr := os.Stat(filepath.Join(bundleDir, "manifest.json")); statErr == nil {
+			if err := os.RemoveAll(filepath.Join(bundleDir, "modules")); err != nil {
+				return fmt.Errorf("clean previous bundled modules: %w", err)
+			}
+		}
+		if err := os.MkdirAll(bundleDir, 0o755); err != nil {
+			return err
+		}
+		output = filepath.Join(bundleDir, filepath.Base(bundleDir))
+		if runtime.GOOS == "windows" && filepath.Ext(output) == "" {
+			output += ".exe"
+		}
+		if err := prepareExternalBundle(graph, bundleDir, filepath.Base(output)); err != nil {
+			return err
+		}
+	}
+	normalizeGraphForDistribution(graph, opts.Dir)
 	if err := os.MkdirAll(filepath.Dir(output), 0o755); err != nil {
 		return err
 	}
@@ -149,7 +177,7 @@ func Build(ctx context.Context, opts BuildOptions) error {
 	if err != nil {
 		return err
 	}
-	graphJSON, err := json.Marshal(opts.Program.Modules.Graph())
+	graphJSON, err := json.Marshal(graph)
 	if err != nil {
 		return err
 	}
@@ -207,7 +235,7 @@ func Build(ctx context.Context, opts BuildOptions) error {
 	if _, err := exec.LookPath(goBin); err != nil {
 		return errors.New("go toolchain required to build standalone artifacts")
 	}
-	cmd := exec.CommandContext(ctx, goBin, "build", "-o", output, ".")
+	cmd := exec.CommandContext(ctx, goBin, "build", "-trimpath", "-buildvcs=false", "-o", output, ".")
 	cmd.Dir = tmp
 	cmd.Env = buildEnv(target)
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -219,6 +247,183 @@ func Build(ctx context.Context, opts BuildOptions) error {
 		}
 	}
 	return nil
+}
+
+func normalizeGraphForDistribution(graph *sos.ModuleGraph, root string) {
+	root, _ = filepath.Abs(root)
+	keys := map[string]string{}
+	modules := map[string]*sos.ModuleSpec{}
+	for i := range graph.Modules {
+		modules[graph.Modules[i].Key] = &graph.Modules[i]
+	}
+	memo, visiting := map[string]string{}, map[string]bool{}
+	var semanticKey func(string) string
+	semanticKey = func(key string) string {
+		if value := memo[key]; value != "" {
+			return value
+		}
+		module := modules[key]
+		if module == nil {
+			return key
+		}
+		if visiting[key] {
+			return "cycle:" + module.Name
+		}
+		visiting[key] = true
+		type stableImport struct{ Alias, Target string }
+		type stableFile struct {
+			Name, Source string
+			Imports      map[string]stableImport
+		}
+		stable := struct {
+			Name  string
+			Files []stableFile
+		}{Name: module.Name}
+		for _, file := range module.Files {
+			item := stableFile{Name: file.Name, Source: file.Source}
+			if len(file.Imports) > 0 {
+				item.Imports = map[string]stableImport{}
+				for name, edge := range file.Imports {
+					item.Imports[name] = stableImport{Alias: edge.Alias, Target: semanticKey(edge.Key)}
+				}
+			}
+			stable.Files = append(stable.Files, item)
+		}
+		delete(visiting, key)
+		encoded, _ := json.Marshal(stable)
+		sum := sha256.Sum256(encoded)
+		memo[key] = fmt.Sprintf("module:%x", sum[:16])
+		return memo[key]
+	}
+	for i := range graph.Modules {
+		module := &graph.Modules[i]
+		relative, err := filepath.Rel(root, module.Key)
+		if err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			keys[module.Key] = "project:" + filepath.ToSlash(relative)
+		} else {
+			keys[module.Key] = semanticKey(module.Key)
+		}
+	}
+	rewriteEdge := func(edge sos.ModuleEdge) sos.ModuleEdge {
+		if key, ok := keys[edge.Key]; ok {
+			edge.Key = key
+		}
+		return edge
+	}
+	for name, edge := range graph.Entry {
+		graph.Entry[name] = rewriteEdge(edge)
+	}
+	for i := range graph.Modules {
+		module := &graph.Modules[i]
+		module.Key = keys[module.Key]
+		for j := range module.Files {
+			for name, edge := range module.Files[j].Imports {
+				module.Files[j].Imports[name] = rewriteEdge(edge)
+			}
+		}
+	}
+	for i := range graph.Libraries {
+		library := &graph.Libraries[i]
+		if key, ok := keys[library.Key]; ok {
+			library.Key = key
+		}
+		library.Origin = ""
+	}
+	sort.Slice(graph.Modules, func(i, j int) bool { return graph.Modules[i].Key < graph.Modules[j].Key })
+	sort.Slice(graph.Libraries, func(i, j int) bool { return graph.Libraries[i].Path < graph.Libraries[j].Path })
+}
+
+type bundleManifest struct {
+	Schema           int            `json:"schema"`
+	Application      string         `json:"application"`
+	Entrypoint       string         `json:"entrypoint"`
+	SOSVersion       string         `json:"sosVersion"`
+	PluginProtocol   string         `json:"pluginProtocol"`
+	DefinitionSchema int            `json:"definitionSchema"`
+	Target           string         `json:"target"`
+	Modules          []bundleModule `json:"modules"`
+}
+type bundleModule struct {
+	Path               string                       `json:"path"`
+	Version            string                       `json:"version"`
+	DefinitionDigest   string                       `json:"definitionDigest"`
+	Artifact           string                       `json:"artifact"`
+	SHA256             string                       `json:"sha256"`
+	Runtime            string                       `json:"runtime"`
+	Distribution       string                       `json:"distribution"`
+	Protocol           string                       `json:"protocol,omitempty"`
+	Capabilities       sos.ExternalCapabilitiesSpec `json:"capabilities"`
+	Effects            []string                     `json:"effects,omitempty"`
+	VersionRequirement string                       `json:"versionRequirement,omitempty"`
+	Arguments          []string                     `json:"arguments,omitempty"`
+}
+
+func prepareExternalBundle(graph *sos.ModuleGraph, dir, application string) error {
+	osName := runtime.GOOS
+	if osName == "windows" {
+		osName = "win32"
+	}
+	target := osName + "-" + runtime.GOARCH
+	if runtime.GOARCH == "amd64" {
+		target = osName + "-x64"
+	}
+	manifest := bundleManifest{Schema: 1, Application: application, Entrypoint: application, SOSVersion: sos.Version, PluginProtocol: "sos-plugin/1", DefinitionSchema: 1, Target: target, Modules: []bundleModule{}}
+	for i := range graph.External {
+		spec := &graph.External[i]
+		if spec.DistributionMode != "bundled" {
+			manifest.Modules = append(manifest.Modules, bundleModule{Path: strings.TrimPrefix(spec.Key, "external:"), Version: spec.Version, VersionRequirement: spec.VersionRequirement, Arguments: append([]string(nil), spec.DistributionArgs...), DefinitionDigest: spec.Digest, Runtime: spec.RuntimeKind, Distribution: spec.DistributionMode, Protocol: spec.Protocol, Capabilities: spec.Capabilities, Effects: append([]string(nil), spec.Effects...)})
+			continue
+		}
+		var selected *sos.ExternalArtifactSpec
+		for j := range spec.Artifacts {
+			if spec.Artifacts[j].Target == target {
+				selected = &spec.Artifacts[j]
+				break
+			}
+		}
+		if selected == nil {
+			return fmt.Errorf("external module %s has no bundled artifact for %s", spec.Key, target)
+		}
+		data, err := os.ReadFile(selected.Path)
+		if err != nil {
+			return fmt.Errorf("external module %s artifact: %w", spec.Key, err)
+		}
+		sum := fmt.Sprintf("%x", sha256.Sum256(data))
+		expected := strings.TrimPrefix(selected.SHA256, "sha256:")
+		if expected == "" || !strings.EqualFold(sum, expected) {
+			return fmt.Errorf("external module %s artifact checksum mismatch", spec.Key)
+		}
+		safe := strings.NewReplacer("/", "-", "\\", "-", ":", "-", ".", "-").Replace(strings.TrimPrefix(spec.Key, "external:"))
+		identity := sha256.Sum256([]byte(spec.Key))
+		safe += fmt.Sprintf("-%x", identity[:16])
+		moduleDir := filepath.Join(dir, "modules", safe)
+		if err := os.MkdirAll(moduleDir, 0755); err != nil {
+			return err
+		}
+		name := filepath.Base(selected.Path)
+		destination := filepath.Join(moduleDir, name)
+		mode := os.FileMode(0755)
+		if info, e := os.Stat(selected.Path); e == nil {
+			mode = info.Mode().Perm() | 0100
+		}
+		if err := os.WriteFile(destination, data, mode); err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(moduleDir, "module.sos.toml"), []byte(spec.Definition), 0644); err != nil {
+			return err
+		}
+		rel := filepath.ToSlash(filepath.Join("modules", safe, name))
+		spec.BundleProgram = rel
+		spec.BundleSHA256 = "sha256:" + sum
+		manifest.Modules = append(manifest.Modules, bundleModule{Path: strings.TrimPrefix(spec.Key, "external:"), Version: spec.Version, VersionRequirement: spec.VersionRequirement, Arguments: append([]string(nil), spec.DistributionArgs...), DefinitionDigest: spec.Digest, Artifact: rel, SHA256: "sha256:" + sum, Runtime: spec.RuntimeKind, Distribution: "bundled", Protocol: spec.Protocol, Capabilities: spec.Capabilities, Effects: append([]string(nil), spec.Effects...)})
+	}
+	sort.Slice(manifest.Modules, func(i, j int) bool { return manifest.Modules[i].Path < manifest.Modules[j].Path })
+	data, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	return os.WriteFile(filepath.Join(dir, "manifest.json"), data, 0644)
 }
 
 // buildEnv forces the target platform regardless of ambient GOOS/GOARCH.

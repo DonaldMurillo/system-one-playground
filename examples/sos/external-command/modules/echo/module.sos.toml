@@ -1,0 +1,33 @@
+schema = 1
+
+[module]
+path = "local/echo"
+version = "1.0.0"
+description = "Minimal shell-free command adapter"
+
+[runtime]
+kind = "command"
+
+[capabilities]
+network = false
+filesystem = "none"
+process = true
+
+[[action]]
+name = "say"
+description = "Returns the provided text through the system printf command."
+timeout = "2s"
+
+[[action.parameter]]
+name = "message"
+type = "text"
+
+[action.result]
+type = "text"
+
+[action.command]
+program = "printf"
+arguments = ["%s", "${message}"]
+stdout = "text"
+stderr = "diagnostic"
+exit_codes = [0]

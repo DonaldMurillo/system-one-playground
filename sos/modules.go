@@ -53,12 +53,26 @@ type Module struct {
 	definitionImports map[string]map[string]*Module
 	actionPaths       map[string]string
 	// Native holds compiled-in operations (standard packages).
-	Native map[string]NativeOp
+	Native   map[string]NativeOp
+	external *ExternalModuleDefinition
 	// Exports lists names importers may reference.
 	Exports map[string]bool
 	// Words maps every callable word (action names and declared synonyms)
 	// to its canonical exported name.
 	Words map[string]string
+}
+
+func (t *ModuleTable) closeExternalSession(key *externalSessionKey) {
+	if t == nil || key == nil {
+		return
+	}
+	seen := map[*ExternalModuleDefinition]bool{}
+	for _, module := range t.ByKey {
+		if module != nil && module.external != nil && !seen[module.external] {
+			seen[module.external] = true
+			module.external.closeSession(key)
+		}
+	}
 }
 
 // scope returns the definition-site import scope for one action.
@@ -149,7 +163,35 @@ type LibrarySpec struct {
 type ModuleGraph struct {
 	Entry     map[string]ModuleEdge `json:"entry,omitempty"`
 	Modules   []ModuleSpec          `json:"modules,omitempty"`
+	External  []ExternalModuleSpec  `json:"external,omitempty"`
 	Libraries []LibrarySpec         `json:"libraries,omitempty"`
+}
+
+type ExternalModuleSpec struct {
+	Key                string                   `json:"key"`
+	Definition         string                   `json:"definition"`
+	RuntimeKind        string                   `json:"runtimeKind"`
+	Protocol           string                   `json:"protocol,omitempty"`
+	BundleProgram      string                   `json:"bundleProgram,omitempty"`
+	BundleSHA256       string                   `json:"bundleSha256,omitempty"`
+	Version            string                   `json:"version,omitempty"`
+	Digest             string                   `json:"digest,omitempty"`
+	DistributionMode   string                   `json:"distributionMode,omitempty"`
+	DistributionArgs   []string                 `json:"distributionArguments,omitempty"`
+	VersionRequirement string                   `json:"versionRequirement,omitempty"`
+	Capabilities       ExternalCapabilitiesSpec `json:"capabilities,omitempty"`
+	Effects            []string                 `json:"effects,omitempty"`
+	UnsupportedActions []string                 `json:"unsupportedActions,omitempty"`
+	Artifacts          []ExternalArtifactSpec   `json:"-"`
+}
+
+type ExternalArtifactSpec struct{ Target, Path, SHA256 string }
+
+type ExternalCapabilitiesSpec struct {
+	Process    bool     `json:"process,omitempty"`
+	Network    bool     `json:"network,omitempty"`
+	Filesystem string   `json:"filesystem,omitempty"`
+	Secrets    []string `json:"secrets,omitempty"`
 }
 
 // Graph renders this table as an embeddable graph. Refs are recorded per
@@ -158,7 +200,7 @@ func (t *ModuleTable) Graph() *ModuleGraph {
 	if t == nil {
 		return &ModuleGraph{}
 	}
-	g := &ModuleGraph{Entry: t.entryRefs}
+	g := &ModuleGraph{Entry: copyModuleEdges(t.entryRefs)}
 	for _, lib := range t.libraries {
 		spec := LibrarySpec{Path: lib.path, Key: lib.key, Bare: lib.bare, Origin: lib.origin}
 		if !lib.bare {
@@ -168,18 +210,59 @@ func (t *ModuleTable) Graph() *ModuleGraph {
 	}
 	for _, key := range t.Order {
 		m := t.ByKey[key]
+		if m.external != nil {
+			spec := ExternalModuleSpec{}
+			effects := map[string]bool{}
+			for _, action := range m.external.Actions {
+				for _, effect := range action.Effects {
+					effects[effect] = true
+				}
+				if len(action.Targets) > 0 && !containsString(action.Targets, "native") && !containsString(action.Targets, currentExternalTarget()) {
+					spec.UnsupportedActions = append(spec.UnsupportedActions, action.Name)
+				}
+			}
+			effectNames := make([]string, 0, len(effects))
+			for effect := range effects {
+				effectNames = append(effectNames, effect)
+			}
+			sort.Strings(effectNames)
+			spec.Key, spec.Definition, spec.RuntimeKind, spec.Protocol = key, m.external.rawSource, m.external.Runtime.Kind, m.external.Runtime.Protocol
+			spec.Version, spec.Digest, spec.DistributionMode, spec.VersionRequirement, spec.Effects = m.external.Module.Version, m.external.digest, m.external.Distribution.Mode, m.external.Distribution.VersionRequirement, effectNames
+			spec.DistributionArgs = append([]string(nil), m.external.Distribution.Arguments...)
+			spec.Capabilities = ExternalCapabilitiesSpec{Process: m.external.Capabilities.Process, Network: m.external.Capabilities.Network, Filesystem: m.external.Capabilities.Filesystem, Secrets: append([]string(nil), m.external.Capabilities.Secrets...)}
+			for _, artifact := range m.external.Distribution.Artifacts {
+				artifactPath := artifact.Path
+				if !filepath.IsAbs(artifactPath) {
+					artifactPath = filepath.Join(filepath.Dir(m.external.definitionPath), artifactPath)
+				}
+				spec.Artifacts = append(spec.Artifacts, ExternalArtifactSpec{Target: artifact.Target, Path: artifactPath, SHA256: artifact.SHA256})
+			}
+			g.External = append(g.External, spec)
+			continue
+		}
 		spec := ModuleSpec{Key: key, Name: m.Name}
 		for i := range m.Files {
 			f := &m.Files[i]
 			fs := ModuleFileSpec{Name: f.Name, Source: f.Source}
 			if len(f.refs) > 0 {
-				fs.Imports = f.refs
+				fs.Imports = copyModuleEdges(f.refs)
 			}
 			spec.Files = append(spec.Files, fs)
 		}
 		g.Modules = append(g.Modules, spec)
 	}
 	return g
+}
+
+func copyModuleEdges(source map[string]ModuleEdge) map[string]ModuleEdge {
+	if len(source) == 0 {
+		return nil
+	}
+	out := make(map[string]ModuleEdge, len(source))
+	for key, edge := range source {
+		out[key] = edge
+	}
+	return out
 }
 
 // OperationInfo describes one exported operation for tooling.
@@ -190,6 +273,7 @@ type OperationInfo struct {
 	Params           []string    `json:"params,omitempty"`
 	Result           string      `json:"result,omitempty"`
 	PossibleFailures []string    `json:"possibleFailures,omitempty"`
+	Effects          []string    `json:"effects,omitempty"`
 	Failure          *FailureDef `json:"failure,omitempty"`
 }
 
@@ -360,6 +444,9 @@ func moduleOperations(m *Module) []OperationInfo {
 			for _, p := range op.Params {
 				info.Params = append(info.Params, p.Name)
 			}
+			info.Result = op.Result
+			info.PossibleFailures = append([]string(nil), op.PossibleFailures...)
+			info.Effects = append([]string(nil), op.Effects...)
 		} else if s := m.Actions[name]; s != nil {
 			info.Kind = "action"
 			if decl, err := parseActionDecl(s.Text); err == nil {
@@ -537,9 +624,12 @@ func LoadProgramFromGraph(filename string, source string, g *ModuleGraph) (*Prog
 	if g == nil {
 		g = &ModuleGraph{}
 	}
-	gr := &graphLoader{graph: g, specs: map[string]*ModuleSpec{}, built: map[string]*Module{}, building: map[string]bool{}}
+	gr := &graphLoader{graph: g, specs: map[string]*ModuleSpec{}, external: map[string]*ExternalModuleSpec{}, built: map[string]*Module{}, building: map[string]bool{}}
 	for i := range g.Modules {
 		gr.specs[g.Modules[i].Key] = &g.Modules[i]
+	}
+	for i := range g.External {
+		gr.external[g.External[i].Key] = &g.External[i]
 	}
 	bindings, refs, ok := bindImports(p.Statements,
 		func(ref string, line int) (*Module, bool) {
@@ -928,6 +1018,7 @@ type fsLoader struct {
 	tomlDir  string // absolute directory of the project sos.toml
 	ns       string // raw [module] path value
 	layers   []sosconfig.Layer
+	external map[string]string // logical path to absolute definition path
 	diags    []Diagnostic
 	total    int
 }
@@ -951,6 +1042,7 @@ func (l *fsLoader) display(path string) string {
 // keeps the loaded layers for library resolution. The module path is a
 // logical identity, not policy: it never touches budgets.
 func (l *fsLoader) findModuleBase() {
+	l.external = map[string]string{}
 	layers, err := sosconfig.Load(l.root)
 	if err != nil {
 		l.diag(1, "configuration: %v", err)
@@ -958,10 +1050,22 @@ func (l *fsLoader) findModuleBase() {
 	}
 	l.layers = layers
 	for _, layer := range layers {
+		layerDir := filepath.Dir(layer.Name)
+		for _, external := range layer.Config.Module.External {
+			if external.Path == "" || external.Definition == "" {
+				l.diag(1, "configuration: external modules require path and definition")
+				continue
+			}
+			definition := external.Definition
+			if !filepath.IsAbs(definition) {
+				definition = filepath.Join(layerDir, definition)
+			}
+			l.external[external.Path] = filepath.Clean(definition)
+		}
 		if filepath.Base(layer.Name) != "sos.toml" {
 			continue
 		}
-		l.tomlDir = filepath.Dir(layer.Name)
+		l.tomlDir = layerDir
 		if layer.Config.Module.Path != "" {
 			l.ns = layer.Config.Module.Path
 		}
@@ -1021,6 +1125,38 @@ func (l *fsLoader) resolve(ref, importerDir string, depth int, line int) (*Modul
 	if strings.Contains(ref, "://") {
 		l.diag(line, "network imports are not supported: %q", ref)
 		return nil, false
+	}
+	if definitionPath, ok := l.external[ref]; ok {
+		if _, standard := stdModule(ref); standard {
+			l.diag(line, "import %q conflicts with a registered external module and a standard module", ref)
+			return nil, false
+		}
+		if base, rel, local := l.relModuleRef(ref); local {
+			if files, fileErr := packageFiles(base, filepath.ToSlash(rel)); fileErr == nil && len(files) > 0 {
+				l.diag(line, "import %q conflicts with a registered external module and a local package", ref)
+				return nil, false
+			}
+		}
+		key := "external:" + ref
+		if cached := l.cache[key]; cached != nil {
+			return cached, true
+		}
+		definition, err := LoadExternalModuleDefinition(definitionPath)
+		if err != nil {
+			l.diag(line, "import %q: %v", ref, err)
+			return nil, false
+		}
+		if definition.Module.Path != ref {
+			l.diag(line, "import %q: definition declares module path %q", ref, definition.Module.Path)
+			return nil, false
+		}
+		module, err := definition.module()
+		if err != nil {
+			l.diag(line, "import %q: %v", ref, err)
+			return nil, false
+		}
+		l.cache[key], l.order = module, append(l.order, key)
+		return module, true
 	}
 	if mod, ok := stdModule(ref); ok {
 		return mod, true
@@ -1165,6 +1301,7 @@ func (l *fsLoader) resolve(ref, importerDir string, depth int, line int) (*Modul
 type graphLoader struct {
 	graph    *ModuleGraph
 	specs    map[string]*ModuleSpec
+	external map[string]*ExternalModuleSpec
 	built    map[string]*Module
 	building map[string]bool
 	order    []string
@@ -1185,6 +1322,24 @@ func (g *graphLoader) build(key string, line int) (*Module, bool) {
 	}
 	if mod, ok := stdModule(key); ok {
 		return mod, true
+	}
+	if spec := g.external[key]; spec != nil {
+		definition, err := decodeExternalModuleDefinition(key+"/module.sos.toml", []byte(spec.Definition))
+		if err != nil {
+			g.diag(line, "external module %q: %v", key, err)
+			return nil, false
+		}
+		definition.bundleProgram = spec.BundleProgram
+		definition.bundleSHA256 = spec.BundleSHA256
+		definition.embedded = true
+		module, err := definition.module()
+		if err != nil {
+			g.diag(line, "external module %q: %v", key, err)
+			return nil, false
+		}
+		g.built[key] = module
+		g.order = append(g.order, key)
+		return module, true
 	}
 	spec, ok := g.specs[key]
 	if !ok {

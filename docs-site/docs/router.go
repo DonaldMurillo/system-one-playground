@@ -16,6 +16,7 @@ func NewRouter() *docs.Router {
 	r.MustPage("/docs/projects", docs.PageConfig{Title: "Studio projects", Description: "SysOneScript 0.6: studio projects.", SourcePath: "content/projects.md", Order: 9, Offline: true})
 	r.MustPage("/docs/project-environment", docs.PageConfig{Title: "Environment settings", Description: "SysOneScript 0.6: environment settings.", SourcePath: "content/project-environment.md", Order: 10, Offline: true})
 	r.MustPage("/docs/agent-interface", docs.PageConfig{Title: "CLI and MCP", Description: "SysOneScript 0.6: cli and mcp.", SourcePath: "content/agent-interface.md", Order: 11, Offline: true})
+	r.MustPage("/docs/external-modules", docs.PageConfig{Title: "External modules", Description: "Typed command and persistent stdio plugin modules.", SourcePath: "content/external-modules.md", Order: 29, Offline: true})
 	r.MustPage("/docs/editor", docs.PageConfig{Title: "Colors, hints and diagnostics", Description: "SysOneScript 0.6: colors, hints and diagnostics.", SourcePath: "content/editor.md", Order: 12, Offline: true})
 	r.MustPage("/docs/tickets", docs.PageConfig{Title: "Tickets walkthrough", Description: "SysOneScript 0.6: tickets walkthrough.", SourcePath: "content/tickets.md", Order: 13, Offline: true})
 	r.MustPage("/docs/repository-cli", docs.PageConfig{Title: "Build a repository CLI", Description: "SysOneScript 0.6: build a repository cli.", SourcePath: "content/repository-cli.md", Order: 14, Offline: true})

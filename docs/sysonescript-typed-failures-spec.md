@@ -1,6 +1,8 @@
 # Typed failures and results
 
-Status: proposed after named records
+Status: core language behavior implemented in SysOneScript 0.3. Standard and
+external operation metadata, complete debugger/build manifests, and the other
+follow-up seams recorded in `sysonescript-typed-failures-notes.md` remain open.
 
 This proposal gives SysOneScript actions explicit, inspectable failure
 contracts while preserving readable default propagation. It evolves the

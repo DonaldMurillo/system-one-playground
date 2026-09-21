@@ -45,6 +45,11 @@
     "title": "CLI and MCP"
   },
   {
+    "source": "docs/sysonescript-external-modules-spec.md",
+    "slug": "external-modules",
+    "title": "External modules"
+  },
+  {
     "source": "docs/sysonescript-editor.md",
     "slug": "editor",
     "title": "Colors, hints and diagnostics"

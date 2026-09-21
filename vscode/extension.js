@@ -5,7 +5,7 @@ const crypto = require('node:crypto')
 const { spawn } = require('node:child_process')
 const vscode = require('vscode')
 const { LspClient } = require('./lsp-client')
-const { compareVersions, discoverEntrypoints, findProjectRoot, parseVersionLine, readHelpers, relativeScript, resolveProjectEntrypoint } = require('./project')
+const { compareVersions, discoverEntrypoints, findProjectRoot, parseVersionLine, readExternalModules, readHelpers, relativeScript, resolveProjectEntrypoint } = require('./project')
 const { decisionLensTitle, analyzedLineMatches } = require('./semantic')
 
 const LANGUAGE_ID = 'sos'
@@ -652,6 +652,30 @@ async function runHelper(helper, resource) {
   else runInTerminal(helper.args, cwd, helper.name, helper.command)
 }
 
+async function selectExternalModule(module, root) {
+  root = root || projectFor(vscode.window.activeTextEditor?.document.uri) || workspaceRoot()
+  if (!root) return {}
+  if (module) return { module, root }
+  const modules = readExternalModules(root)
+  const selected = await vscode.window.showQuickPick(modules.map(item => ({ label: item.path, description: path.relative(root, item.definition), module: item })), { placeHolder: 'Choose an external module' })
+  return { module: selected?.module, root }
+}
+
+async function moduleCheck(module, root) {
+  if (!requireTrustedWorkspace()) return
+  ;({ module, root } = await selectExternalModule(module, root))
+  if (module) runInTerminal(['module','check',path.relative(root,module.definition)],root,`check ${module.path}`)
+}
+async function moduleDoctor(module, root) {
+  if (!requireTrustedWorkspace()) return
+  ;({ module, root } = await selectExternalModule(module, root))
+  if (module) runInTerminal(['module','doctor',module.path],root,`doctor ${module.path}`)
+}
+async function moduleOpen(module, root) {
+  ;({ module } = await selectExternalModule(module, root))
+  if (module) await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(module.definition))
+}
+
 class SysOneScriptItem extends vscode.TreeItem {
   constructor(label, collapsibleState, kind, resource, command, icon, description) {
     super(label, collapsibleState)
@@ -703,10 +727,24 @@ class SysOneScriptTreeProvider {
       }
       if (extensionState.jevToken) items.push(new SysOneScriptItem('Clear Jev token', vscode.TreeItemCollapsibleState.None, 'jevStatus', root, { command: 'sysonescript.clearJevToken', title: 'Clear Jev Token' }, 'trash'))
 		const helpers = vscode.workspace.isTrusted ? readHelpers(root) : []
+		let modules = [], moduleDiscoveryError
+		try { modules = readExternalModules(root) } catch (error) { moduleDiscoveryError = error }
+		if (moduleDiscoveryError) items.push(new SysOneScriptItem('External modules unavailable', vscode.TreeItemCollapsibleState.None, 'projectStatus', root, undefined, 'error', moduleDiscoveryError.message))
+		if (modules.length) items.push(new SysOneScriptItem('External modules', vscode.TreeItemCollapsibleState.Expanded, 'externalModules', root, undefined, 'extensions'))
       if (helpers.length) items.push(new SysOneScriptItem('Helpers & generators', vscode.TreeItemCollapsibleState.Expanded, 'helpers', root, undefined, 'tools'))
       return items
     }
     if (element.kind === 'helpers') return readHelpers(root).map(helper => new SysOneScriptItem(helper.name, vscode.TreeItemCollapsibleState.None, 'helper', root, { command: 'sysonescript.runHelper', title: helper.description || helper.name, arguments: [helper, root] }, 'play-circle'))
+		if (element.kind === 'externalModules') return readExternalModules(root).map(module => new SysOneScriptItem(module.path, vscode.TreeItemCollapsibleState.Collapsed, 'externalModule', root, undefined, 'plug', path.relative(root,module.definition)))
+		if (element.kind === 'externalModule') {
+			const module = readExternalModules(root).find(item => item.path === element.label)
+			if (!module) return []
+			return [
+				new SysOneScriptItem('Open definition', vscode.TreeItemCollapsibleState.None, 'externalModuleAction', root, {command:'sysonescript.moduleOpen',title:'Open Module Definition',arguments:[module]}, 'go-to-file'),
+				new SysOneScriptItem('Check definition', vscode.TreeItemCollapsibleState.None, 'externalModuleAction', root, {command:'sysonescript.moduleCheck',title:'Check Module',arguments:[module,root]}, 'check'),
+				new SysOneScriptItem('Diagnose runtime', vscode.TreeItemCollapsibleState.None, 'externalModuleAction', root, {command:'sysonescript.moduleDoctor',title:'Diagnose Module',arguments:[module,root]}, 'pulse'),
+			]
+		}
     return []
   }
 }
@@ -1269,6 +1307,9 @@ function activate(context) {
   context.subscriptions.push(vscode.commands.registerCommand('sysonescript.checkCliVersions', () => refreshCliVersions(true)))
   context.subscriptions.push(vscode.commands.registerCommand('sysonescript.refresh', () => tree.refresh()))
   context.subscriptions.push(vscode.commands.registerCommand('sysonescript.runHelper', runHelper))
+  context.subscriptions.push(vscode.commands.registerCommand('sysonescript.moduleOpen', moduleOpen))
+  context.subscriptions.push(vscode.commands.registerCommand('sysonescript.moduleCheck', moduleCheck))
+  context.subscriptions.push(vscode.commands.registerCommand('sysonescript.moduleDoctor', moduleDoctor))
   context.subscriptions.push(vscode.commands.registerCommand('sos.analyze', analyzeActiveDocument))
   context.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(() => tree.refresh()))
   context.subscriptions.push(vscode.workspace.onDidCreateFiles(() => tree.refresh()))
@@ -1277,6 +1318,9 @@ function activate(context) {
 	const helperWatcher = vscode.workspace.createFileSystemWatcher('**/.vscode/sysonescript.json')
 	context.subscriptions.push(helperWatcher)
 	context.subscriptions.push(helperWatcher.onDidChange(() => tree.refresh()), helperWatcher.onDidCreate(() => tree.refresh()), helperWatcher.onDidDelete(() => tree.refresh()))
+	const moduleWatcher = vscode.workspace.createFileSystemWatcher('**/sos.toml')
+	context.subscriptions.push(moduleWatcher)
+	context.subscriptions.push(moduleWatcher.onDidChange(() => tree.refresh()), moduleWatcher.onDidCreate(() => tree.refresh()), moduleWatcher.onDidDelete(() => tree.refresh()))
 	context.subscriptions.push(vscode.workspace.onDidGrantWorkspaceTrust(() => tree.refresh()))
   context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(() => tree.refresh()))
   context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(event => {

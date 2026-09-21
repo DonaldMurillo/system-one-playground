@@ -266,7 +266,7 @@ func parseType(text string, allowAny bool) (TypeRef, error) {
 		return TypeRef{Name: "any", Optional: optional}, nil
 	}
 	switch text {
-	case "text", "timestamp", "number", "integer", "boolean", "duration":
+	case "text", "timestamp", "number", "integer", "boolean", "duration", "file", "folder":
 		return TypeRef{Name: text, Optional: optional}, nil
 	}
 	if !validTypeName(text) {
@@ -363,7 +363,7 @@ func parseActionDecl(text string) (ActionDecl, error) {
 	return d, nil
 }
 
-var actionHeaderRE = regexp.MustCompile(`^to ([A-Za-z_]\w*)(?: with (.*?))?(?: returning ((?:optional )?(?:list of )?(?:text|timestamp|number|integer|boolean|duration|[A-Z][A-Za-z0-9_]*)))?(?: may fail with (.+?))?:$`)
+var actionHeaderRE = regexp.MustCompile(`^to ([A-Za-z_]\w*)(?: with (.*?))?(?: returning ((?:optional )?(?:list of )?(?:text|file|folder|timestamp|number|integer|boolean|duration|[A-Z][A-Za-z0-9_]*)))?(?: may fail with (.+?))?:$`)
 
 func validBindingName(name string) bool {
 	return validName(name) && (name[0] == '_' || name[0] >= 'a' && name[0] <= 'z')
@@ -432,7 +432,7 @@ func validateTypeRefs(t TypeRef, defs map[string]*RecordDef, path map[string]boo
 
 func isScalarType(name string) bool {
 	switch name {
-	case "text", "timestamp", "number", "integer", "boolean", "duration":
+	case "text", "file", "folder", "timestamp", "number", "integer", "boolean", "duration":
 		return true
 	}
 	return false
@@ -461,6 +461,9 @@ func typeMatchesRef(value any, typ TypeRef, defs map[string]*RecordDef) bool {
 	case "text":
 		_, ok := value.(string)
 		return ok
+	case "file", "folder":
+		_, ok := value.(string)
+		return ok
 	case "timestamp":
 		switch v := value.(type) {
 		case time.Time:
@@ -476,7 +479,7 @@ func typeMatchesRef(value any, typ TypeRef, defs map[string]*RecordDef) bool {
 		return ok
 	case "integer":
 		n, ok := number(value)
-		return ok && !math.IsNaN(n) && !math.IsInf(n, 0) && n == math.Trunc(n)
+		return ok && !math.IsNaN(n) && !math.IsInf(n, 0) && n == math.Trunc(n) && n >= -(1<<53-1) && n <= 1<<53-1
 	case "boolean":
 		_, ok := value.(bool)
 		return ok

@@ -19,8 +19,23 @@ export function installProjects({api, editor, monaco, load, onPath, report, busy
    if(file.directory){const details=document.createElement('details');details.open=parts.length<1;const summary=document.createElement('summary');summary.textContent=name;details.append(summary);container.append(details);folders.set(file.path,details)}
    else {const button=document.createElement('button');button.textContent=name;button.title=file.path;button.dataset.path=file.path;button.setAttribute('aria-current',file.path===active?'page':'false');button.onclick=()=>open(file.path).catch(report);container.append(button)}
   }
+	await modules()
   return result
  }
+	async function modules(){
+	 const host=$('external-module-list');host.replaceChildren()
+	 let result
+	 try{result=await request({action:'externalModules'})}catch(e){$('external-modules').hidden=false;const message=document.createElement('p');message.className='external-module-error';message.setAttribute('role','alert');message.textContent=`Could not load module registrations: ${e.message||e}`;host.append(message);return}
+	 $('external-modules').hidden=!result.modules.length
+	 for(const module of result.modules){
+	  const card=document.createElement('div');card.className='external-module'
+	  const title=document.createElement('button');title.type='button';title.textContent=module.path;title.title=module.openable?module.definition:'Definition is outside the opened project';title.disabled=!module.openable;title.onclick=()=>open(module.definition).catch(report);card.append(title)
+	  if(!module.openable){const note=document.createElement('span');note.className='external-module-note';note.textContent='Global definition · open it from its configuration folder';card.append(note)}
+	  const check=document.createElement('button');check.type='button';check.textContent='Check';check.onclick=async()=>{try{const r=await request({action:'moduleCheck',path:module.path});status(`${module.path} · ${r.digest}`)}catch(e){report(e)}};card.append(check)
+	  const doctor=document.createElement('button');doctor.type='button';doctor.textContent='Diagnose runtime';doctor.onclick=async()=>{try{await request({action:'moduleDoctor',path:module.path});status(`${module.path} · ready`)}catch(e){report(e)}};card.append(doctor)
+	  host.append(card)
+	 }
+	}
  async function open(path){
   const seq=++sequence;remember()
   let buffer=buffers.get(path)
@@ -64,7 +79,7 @@ export function installProjects({api, editor, monaco, load, onPath, report, busy
   mode=next;projectOpen=false;active='';onPath('');loading=true
   load(next==='studio'?'':example.source,next==='studio'?'untitled.sos':example.name)
   monaco.editor.setModelLanguage(editor.getModel(),'sos');loading=false
-  $('file-tree').replaceChildren();status('');$('welcome-status').textContent=''
+  $('file-tree').replaceChildren();$('external-module-list').replaceChildren();status('');$('welcome-status').textContent=''
   renderMode()
   if(next==='studio')$('welcome-open').focus()
  }

@@ -822,6 +822,9 @@ func modulePossibleFailures(m *Module, action string, visiting map[string]bool) 
 	}
 	fn := m.Actions[action]
 	if fn == nil {
+		if op, ok := m.Native[action]; ok {
+			return append([]string(nil), op.PossibleFailures...)
+		}
 		return nil
 	}
 	visiting[visitKey] = true

@@ -55,6 +55,7 @@ Using the `sysone` entry point directly is also supported:
   stack frames, expression evaluation, conditional breakpoints, logpoints, and
   Jev trace output
 - secure Jev token setup through VS Code SecretStorage (`TYPESAFE_API_KEY`)
+- external-module project controls for opening, offline checking, and explicit diagnostic handshakes
 - additive `.sos` language icon, fallback file-icon theme, and extension icon
 - a matching monochrome S/1 Activity Bar glyph designed for VS Code chrome
 - terminal CLI version detection, out-of-sync warnings, and an explicit update action

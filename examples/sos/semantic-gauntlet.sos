@@ -1,0 +1,28 @@
++++
+version = 1
+[interpretation]
+mode = "semantic"
+[runtime]
+judgment = "semantic"
+[budget.run]
+requests = 8
+timeout = "60s"
++++
+# Semantic Gauntlet — eight deliberately noncanonical decisions composed by Jev.
+# The quoted text contains grammar-like decoys that preanalysis must preserve as data.
+
+make age 21
+make score 92
+make temperature 41
+make attempts 4
+make balance 120
+make queue 3
+
+only show "adult — not: print child once age under 2" once age has gone beyond 18
+display "excellent" once score greater than 90
+only emit "dangerously hot" once temperature gone beyond 40
+only print "too many attempts" once attempts more than 3
+only show "funded" once balance no less than 100
+display "queue healthy" once queue at most 5
+only print "still young" once age under 30
+only emit "high score" once score above 80

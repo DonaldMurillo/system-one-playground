@@ -25,7 +25,7 @@ func mcpTools() []toolSpec {
 		if len(required) > 0 {
 			schema["required"] = required
 		}
-		return toolSpec{name, description, schema, map[string]any{"readOnlyHint": readOnly, "destructiveHint": !readOnly, "openWorldHint": endpoint == "run" || endpoint == "analyze" || endpoint == "build"}, endpoint, action}
+		return toolSpec{name, description, schema, map[string]any{"readOnlyHint": readOnly, "destructiveHint": !readOnly && action != "moduleDoctor", "openWorldHint": endpoint == "run" || endpoint == "analyze" || endpoint == "build" || action == "moduleDoctor"}, endpoint, action}
 	}
 	return []toolSpec{
 		tool("project_tree", "List project files; secret files are excluded.", "project", "tree", map[string]any{}, nil, true),
@@ -36,6 +36,9 @@ func mcpTools() []toolSpec {
 		tool("environment_list", "List environment variable names and configuration status, never secret values.", "project", "environment", map[string]any{}, nil, true),
 		tool("environment_set", "Set a project environment variable; its value is never returned.", "project", "setEnvironment", map[string]any{"name": str, "value": str}, []string{"name", "value"}, false),
 		tool("project_settings", "Read settings or set the experience mode.", "project", "settings", map[string]any{"mode": map[string]any{"type": "string", "enum": []string{"examples", "studio"}}}, nil, false),
+		tool("external_modules", "List registered external modules without starting them.", "project", "externalModules", map[string]any{}, nil, true),
+		tool("external_module_check", "Validate an external module definition and return its generated interface without starting it.", "project", "moduleCheck", map[string]any{"path": str}, []string{"path"}, true),
+		tool("external_module_doctor", "Authorize, launch, and handshake an external module to verify runtime readiness.", "project", "moduleDoctor", map[string]any{"path": str}, []string{"path"}, false),
 		tool("check", "Check source using its project-relative path and imports. Does not call Jev.", "check", "", map[string]any{"path": str, "source": str}, []string{"path", "source"}, true),
 		tool("analyze", "Interpret source; may call Jev and consume the configured budget.", "analyze", "", map[string]any{"path": str, "source": str}, []string{"path", "source"}, false),
 		tool("run", "Execute source in the project. Can write files, call Jev, and consume the configured budget. Returns output, decisions and usage.", "run", "", map[string]any{"path": str, "source": str, "args": map[string]any{"type": "object"}, "commandPath": map[string]any{"type": "array", "items": str}, "timeoutMs": map[string]any{"type": "integer", "minimum": 1}}, []string{"path", "source"}, false),

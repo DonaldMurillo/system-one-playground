@@ -41,6 +41,15 @@ Settings stores project environment values in a local `.env` with restrictive pe
 
 Output shows emitted program text and run failures. Diagnostics reports checker findings. Interpretation explains sentence resolution. Trace reports runtime judgment results and available usage. Vocabulary explains enabled words and imports.
 
+The project explorer also lists registered external modules separately from
+files. **Open** navigates to a TOML definition inside the opened project;
+global definitions remain checkable/diagnosable and show their external status
+instead of exposing files outside the project root. **Check** validates and shows
+its digest without starting anything, and **Diagnose runtime** explicitly
+checks authorization and dependencies. For stdio plugins it also starts,
+initializes, and shuts down the runtime; command adapters are checked without
+invoking an action. This distinction keeps normal project browsing offline.
+
 A successful run and a recognized sentence answer different questions. Inspect the judgment result and selected records to understand what happened. CLI/MCP services operate on disk or explicitly supplied source; they do not remotely control another window's unsaved buffers.
 
 ## Desktop icon and local build

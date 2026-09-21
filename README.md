@@ -100,6 +100,8 @@ VS Code users.
 | I want to… | Start here |
 | --- | --- |
 | Build a CLI in readable sentences | [Repository assistant walkthrough](examples/sos/repo-assistant/README.md) |
+| Connect SOS to a shell-free external tool | [External command module](examples/sos/external-command/README.md) |
+| Stress-test Jev with eight semantic decisions | [`semantic-gauntlet.sos`](examples/sos/semantic-gauntlet.sos) |
 | Inspect code without API calls | `go run ./cmd/semlint -sites-only cmd/semlint/fixtures` |
 | Run the linter written in SOS | `sysone run examples/sos/semlint/scan.sos -- sites --root cmd/semlint/fixtures` |
 | Try the Go API demonstration | `go run ./cmd/playground 01` (can make paid requests) |

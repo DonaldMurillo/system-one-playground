@@ -10,9 +10,6 @@ import (
 // supports the filesystem explicitly preopened by its runner. Neither ships a
 // credential-bearing model proxy or an HTTP host adapter.
 func ValidateTarget(p *sos.Program, target Target) error {
-	if target == TargetNative || target == "" {
-		return nil
-	}
 	capability := "wasm"
 	if target == TargetWasmWasi {
 		capability = "wasip1"
@@ -20,6 +17,20 @@ func ValidateTarget(p *sos.Program, target Target) error {
 	if p.Modules != nil {
 		imports := map[string]bool{}
 		graph := p.Modules.Graph()
+		if len(graph.External) > 0 && target != TargetNative && target != "" {
+			return fmt.Errorf("external process module %s is unavailable on %s", graph.External[0].Key, target)
+		}
+		if target == TargetNative || target == "" {
+			for _, external := range graph.External {
+				if len(external.UnsupportedActions) > 0 {
+					return fmt.Errorf("external module %s actions %v are unavailable on the native host", external.Key, external.UnsupportedActions)
+				}
+				if external.RuntimeKind == "stdio" && external.DistributionMode != "bundled" {
+					return fmt.Errorf("external stdio module %s requires a bundled production artifact", external.Key)
+				}
+			}
+			return nil
+		}
 		for _, edge := range graph.Entry {
 			imports[edge.Key] = true
 		}

@@ -418,6 +418,9 @@ func moduleEntries(lib vocabLib, enabled bool) []VocabularyEntry {
 		words := append([]string{name}, e.Synonyms...)
 		if op, ok := mod.Native[name]; ok {
 			e.Kind = "native"
+			e.Result = op.Result
+			e.Description = op.Description
+			e.Effects = append([]string(nil), op.Effects...)
 			for _, p := range op.Params {
 				e.Params = append(e.Params, VocabularyParam{Name: p.Name, Type: p.Type})
 			}

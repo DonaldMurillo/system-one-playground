@@ -1,6 +1,7 @@
 package sosconfig
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -101,6 +102,32 @@ func TestLanguageRejectedInFrontmatter(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "put [language] in the project sos.toml") {
 		t.Errorf("error must direct to the project sos.toml: %v", err)
+	}
+}
+
+func TestExternalCapabilitiesRejectedInFrontmatter(t *testing.T) {
+	_, _, err := Extract("+++\nversion = 1\n[external]\nprocess = true\nsecrets = [\"TOKEN\"]\n+++\nbody\n")
+	if err == nil || !strings.Contains(err.Error(), "external capability settings are not allowed in frontmatter") {
+		t.Fatalf("frontmatter external capabilities must be clearly rejected, got %v", err)
+	}
+}
+
+func TestExternalCapabilitiesIntersectAcrossPolicyLayers(t *testing.T) {
+	deny, allow := false, true
+	globalSecrets := []string{"SHARED", "GLOBAL_ONLY"}
+	projectSecrets := []string{"SHARED", "PROJECT_ONLY"}
+	global := Config{Version: 1}
+	global.External.Process, global.External.Network = &deny, &allow
+	global.External.Filesystem, global.External.Secrets = "workspace-read", &globalSecrets
+	project := Config{Version: 1}
+	project.External.Process, project.External.Network = &allow, &allow
+	project.External.Filesystem, project.External.Secrets = "explicit", &projectSecrets
+	effective, err := Resolve(Layer{"global", global}, Layer{"project", project})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if effective.ExternalProcess || !effective.ExternalNetwork || effective.ExternalFilesystem != "workspace-read" || !slices.Equal(effective.ExternalSecrets, []string{"SHARED"}) {
+		t.Fatalf("external policy did not intersect: %+v", effective)
 	}
 }
 

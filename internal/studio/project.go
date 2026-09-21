@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/DonaldMurillo/system-one-playground/sos"
+	"github.com/DonaldMurillo/system-one-playground/sosconfig"
 	"io"
 	"io/fs"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -217,7 +219,16 @@ func (s *Server) handleProject(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 400, "path", "choose an absolute project directory")
 			return
 		}
-		if err := s.SetDir(req.Path); err != nil {
+		projectDir := req.Path
+		if layers, loadErr := sosconfig.Load(req.Path); loadErr == nil {
+			for i := len(layers) - 1; i >= 0; i-- {
+				if filepath.Base(layers[i].Name) == "sos.toml" {
+					projectDir = filepath.Dir(layers[i].Name)
+					break
+				}
+			}
+		}
+		if err := s.SetDir(projectDir); err != nil {
 			writeError(w, 400, "project", err.Error())
 			return
 		}
@@ -241,6 +252,60 @@ func (s *Server) handleProject(w http.ResponseWriter, r *http.Request) {
 	defer root.Close()
 	fail := func(err error) { writeError(w, 400, "project", err.Error()) }
 	switch req.Action {
+	case "externalModules", "moduleCheck", "moduleDoctor":
+		layers, e := sosconfig.Load(s.Dir())
+		if e != nil {
+			fail(e)
+			return
+		}
+		registered := map[string]string{}
+		for _, layer := range layers {
+			base := filepath.Dir(layer.Name)
+			for _, registration := range layer.Config.Module.External {
+				definition := registration.Definition
+				if !filepath.IsAbs(definition) {
+					definition = filepath.Join(base, definition)
+				}
+				registered[registration.Path] = definition
+			}
+		}
+		paths := make([]string, 0, len(registered))
+		for modulePath := range registered {
+			paths = append(paths, modulePath)
+		}
+		sort.Strings(paths)
+		modules := make([]map[string]any, 0, len(paths))
+		for _, modulePath := range paths {
+			definition, _ := filepath.Rel(s.Dir(), registered[modulePath])
+			openable := definition != ".." && !strings.HasPrefix(definition, ".."+string(filepath.Separator))
+			modules = append(modules, map[string]any{"path": modulePath, "definition": filepath.ToSlash(definition), "openable": openable})
+		}
+		if req.Action == "externalModules" {
+			writeJSON(w, 200, map[string]any{"modules": modules})
+			return
+		}
+		if req.Path == "" {
+			fail(fmt.Errorf("module path is required"))
+			return
+		}
+		definition, e := sos.ResolveExternalModuleDefinition(s.Dir(), req.Path)
+		if e != nil {
+			fail(e)
+			return
+		}
+		if e = definition.ValidateInterface(); e != nil {
+			fail(e)
+			return
+		}
+		if req.Action == "moduleDoctor" {
+			ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+			defer cancel()
+			if e = sos.DoctorExternalModule(ctx, s.Dir(), req.Path); e != nil {
+				fail(e)
+				return
+			}
+		}
+		writeJSON(w, 200, map[string]any{"path": req.Path, "digest": definition.Digest(), "interface": definition.GenerateInterface(), "ready": req.Action == "moduleDoctor"})
 	case "tree":
 		files := []map[string]any{}
 		count := 0

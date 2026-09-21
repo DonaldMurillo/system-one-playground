@@ -34,6 +34,8 @@ commands:
   fmt FILE [--write]                  print formatted FILE, or rewrite it
   build FILE --output PATH [--target native|wasm-browser|wasm-wasi]
                                       build a standalone executable
+  module check|generate DEFINITION    inspect an external module definition
+  module describe|doctor MODULE       inspect or preflight a registered module
   vocabulary [FILE] [--json] [--query TEXT] [--library PATH]
                                       offline dictionary of callable vocabulary
   debug                                 run a Debug Adapter Protocol server
@@ -61,6 +63,8 @@ script and executes it on the SysOneScript interpreter: a native executable, a
 js/wasm module (wasm-browser, with wasm_exec.js and index.html beside the
 output), or a wasip1/wasm module (wasm-wasi). Building requires a Go
 toolchain; running the artifact does not. No credentials are embedded.
+Native builds that include bundled external modules create an output directory
+containing the executable, manifest.json, and checksummed module artifacts.
 `
 
 // RunCLI executes the CLI with the given arguments and writers and returns
@@ -88,6 +92,8 @@ func RunCLI(args []string, stdout, stderr io.Writer) int {
 		return cmdFmt(rest, stdout, stderr)
 	case "build":
 		return cmdBuild(rest, stdout, stderr)
+	case "module":
+		return cmdModule(rest, stdout, stderr)
 	case "lsp":
 		return cmdLSP(rest, stdout, stderr)
 	case "debug":
@@ -111,6 +117,56 @@ func RunCLI(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stderr, cliUsage)
 		return 2
 	}
+}
+
+func cmdModule(args []string, stdout, stderr io.Writer) int {
+	if len(args) != 2 || (args[0] != "check" && args[0] != "generate" && args[0] != "describe" && args[0] != "doctor") {
+		fmt.Fprintln(stderr, "usage: sos module check|generate DEFINITION | sos module describe|doctor MODULE_PATH")
+		return 2
+	}
+	if args[0] == "doctor" {
+		dir, err := os.Getwd()
+		if err == nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			err = sos.DoctorExternalModule(ctx, dir, args[1])
+		}
+		if err != nil {
+			fmt.Fprintf(stderr, "sos: module doctor: %v\n", err)
+			return 1
+		}
+		fmt.Fprintf(stdout, "%s: ready\n", args[1])
+		return 0
+	}
+	var definition *sos.ExternalModuleDefinition
+	var err error
+	if args[0] == "describe" {
+		dir, cwdErr := os.Getwd()
+		if cwdErr != nil {
+			err = cwdErr
+		} else {
+			definition, err = sos.ResolveExternalModuleDefinition(dir, args[1])
+		}
+	} else {
+		definition, err = sos.LoadExternalModuleDefinition(args[1])
+	}
+	if err != nil {
+		fmt.Fprintf(stderr, "sos: module %s: %v\n", args[0], err)
+		return 1
+	}
+	if args[0] == "check" {
+		if err := definition.ValidateInterface(); err != nil {
+			fmt.Fprintf(stderr, "sos: module check: %v\n", err)
+			return 1
+		}
+		fmt.Fprintf(stdout, "%s %s: %d action(s) · %s\n", definition.Module.Path, definition.Module.Version, len(definition.Actions), definition.Digest())
+		return 0
+	}
+	fmt.Fprint(stdout, definition.GenerateInterface())
+	if args[0] == "generate" {
+		fmt.Fprintf(stdout, "# definition digest: %s\n", definition.Digest())
+	}
+	return 0
 }
 
 type runOptions struct {

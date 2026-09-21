@@ -48,13 +48,27 @@ type Config struct {
 		} `toml:"run"`
 	} `toml:"budget"`
 	Module struct {
-		Path string `toml:"path"`
+		Path     string           `toml:"path"`
+		External []ExternalModule `toml:"external"`
 	} `toml:"module"`
 	Language struct {
 		// Libraries is nil when absent (inherit) and an explicit empty
 		// list when language.libraries = [] (disable inherited libraries).
 		Libraries *[]Library `toml:"libraries"`
 	} `toml:"language"`
+	External struct {
+		Process    *bool     `toml:"process"`
+		Network    *bool     `toml:"network"`
+		Filesystem string    `toml:"filesystem"`
+		Secrets    *[]string `toml:"secrets"`
+	} `toml:"external"`
+}
+
+// ExternalModule registers an offline module definition with a logical import
+// path. Definition is resolved relative to the project sos.toml.
+type ExternalModule struct {
+	Path       string `toml:"path" json:"path"`
+	Definition string `toml:"definition" json:"definition"`
 }
 
 // Library is one configured vocabulary import: a module path with an optional
@@ -77,13 +91,17 @@ type Layer struct {
 // Libraries is the resolved vocabulary import list: the last layer defining a
 // list replaces earlier ones, and an explicit empty list disables inheritance.
 type Effective struct {
-	Editor         string            `json:"editor"`
-	Interpretation string            `json:"interpretation"`
-	Runtime        string            `json:"runtime"`
-	Requests       int               `json:"requests"`
-	Timeout        time.Duration     `json:"timeout_ns"`
-	Libraries      []Library         `json:"libraries,omitempty"`
-	Origins        map[string]string `json:"origins"`
+	Editor             string            `json:"editor"`
+	Interpretation     string            `json:"interpretation"`
+	Runtime            string            `json:"runtime"`
+	Requests           int               `json:"requests"`
+	Timeout            time.Duration     `json:"timeout_ns"`
+	Libraries          []Library         `json:"libraries,omitempty"`
+	ExternalProcess    bool              `json:"externalProcess"`
+	ExternalNetwork    bool              `json:"externalNetwork"`
+	ExternalFilesystem string            `json:"externalFilesystem"`
+	ExternalSecrets    []string          `json:"externalSecrets,omitempty"`
+	Origins            map[string]string `json:"origins"`
 }
 
 // Parse validates a TOML document. file prohibits editor preferences even when
@@ -122,6 +140,9 @@ func Parse(data []byte, file bool) (Config, error) {
 		}
 		if _, ok := raw["language"]; ok {
 			return cfg, located(data, "language", "language settings are not allowed in frontmatter; put [language] in the project sos.toml")
+		}
+		if _, ok := raw["external"]; ok {
+			return cfg, located(data, "external", "external capability settings are not allowed in frontmatter; put [external] in the project sos.toml")
 		}
 	}
 	for section, key := range map[string]string{"editor": "assistance", "interpretation": "mode", "runtime": "judgment"} {
@@ -170,6 +191,18 @@ func validate(c Config) error {
 	}
 	if c.Module.Path != "" && !validModulePath(c.Module.Path) {
 		return &fieldError{"module.path", "module.path must be a logical module identity such as example.com/tools"}
+	}
+	for i, external := range c.Module.External {
+		field := fmt.Sprintf("module.external[%d]", i)
+		if !validModulePath(external.Path) {
+			return &fieldError{field + ".path", field + ".path must be a logical module identity"}
+		}
+		if external.Definition == "" {
+			return &fieldError{field + ".definition", field + ".definition must not be empty"}
+		}
+	}
+	if c.External.Filesystem != "" && !slices.Contains([]string{"none", "workspace-read", "workspace", "explicit"}, c.External.Filesystem) {
+		return &fieldError{"external.filesystem", "external.filesystem must be none, workspace-read, workspace, or explicit"}
 	}
 	if c.Language.Libraries != nil {
 		if len(*c.Language.Libraries) > 64 {
@@ -270,11 +303,13 @@ func Extract(source string) (string, *Config, error) {
 // replace wholesale: the last layer defining a list wins, and an explicit
 // empty list disables inherited libraries.
 func Resolve(layers ...Layer) (Effective, error) {
-	e := Effective{Editor: "on-demand", Interpretation: "canonical", Runtime: "explicit", Requests: 100, Origins: map[string]string{}}
+	e := Effective{Editor: "on-demand", Interpretation: "canonical", Runtime: "explicit", Requests: 100, ExternalFilesystem: "none", Origins: map[string]string{}}
 	for _, key := range []string{"editor", "interpretation", "runtime", "requests", "timeout", "libraries"} {
 		e.Origins[key] = "default"
 	}
 	hasRequests, hasTimeout, denied := false, false, false
+	hasExternalProcess, hasExternalNetwork, hasExternalFilesystem, hasExternalSecrets := false, false, false, false
+	filesystemRank := map[string]int{"none": 0, "workspace-read": 1, "workspace": 2, "explicit": 3}
 	for _, layer := range layers {
 		c := layer.Config
 		if err := validate(c); err != nil {
@@ -309,6 +344,41 @@ func Resolve(layers ...Layer) (Effective, error) {
 		if c.Language.Libraries != nil {
 			e.Libraries = append([]Library(nil), *c.Language.Libraries...)
 			e.Origins["libraries"] = layer.Name
+		}
+		if c.External.Process != nil {
+			if !hasExternalProcess {
+				e.ExternalProcess = *c.External.Process
+			} else {
+				e.ExternalProcess = e.ExternalProcess && *c.External.Process
+			}
+			hasExternalProcess = true
+		}
+		if c.External.Network != nil {
+			if !hasExternalNetwork {
+				e.ExternalNetwork = *c.External.Network
+			} else {
+				e.ExternalNetwork = e.ExternalNetwork && *c.External.Network
+			}
+			hasExternalNetwork = true
+		}
+		if c.External.Filesystem != "" {
+			if !hasExternalFilesystem || filesystemRank[c.External.Filesystem] < filesystemRank[e.ExternalFilesystem] {
+				e.ExternalFilesystem = c.External.Filesystem
+			}
+			hasExternalFilesystem = true
+		}
+		if c.External.Secrets != nil {
+			if !hasExternalSecrets {
+				e.ExternalSecrets = append([]string(nil), (*c.External.Secrets)...)
+			} else {
+				allowed := map[string]bool{}
+				for _, name := range *c.External.Secrets {
+					allowed[name] = true
+				}
+				e.ExternalSecrets = slices.DeleteFunc(e.ExternalSecrets, func(name string) bool { return !allowed[name] })
+			}
+			slices.Sort(e.ExternalSecrets)
+			hasExternalSecrets = true
 		}
 	}
 	return e, nil

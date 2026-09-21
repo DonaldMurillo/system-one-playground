@@ -1,0 +1,4 @@
+import "local/echo" as echo
+
+call echo.say with "hello from an external command" called answer
+show answer

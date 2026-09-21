@@ -44,6 +44,16 @@ judgment = "explicit"
 [budget.run]
 requests = 20
 timeout = "15s"
+
+[external]
+process = true
+network = false
+filesystem = "workspace-read"
+secrets = ["WEATHER_API_KEY"]
+
+[[module.external]]
+path = "example.com/acme/weather"
+definition = "modules/weather/module.sos.toml"
 ```
 
 Allowed editor modes are `off`, `on-demand`, and `automatic`. Paid analysis is
@@ -59,6 +69,15 @@ keys, duplicate keys, negative requests, missing/unsupported versions, and
 nonpositive or invalid timeouts fail. Config documents and frontmatter are
 limited to 64 KiB. Secrets remain in the existing environment setup and must not
 be put in source frontmatter.
+
+External processes are denied by default. Project configuration must explicitly
+grant each requested process, network, filesystem, and secret capability.
+Filesystem grants are `none`, `workspace-read`, `workspace`, or `explicit`.
+Only `PATH` and the names listed in both the module definition and project
+policy enter the child environment; secret values never appear in diagnostics,
+traces, debugger frames, generated interfaces, or manifests. Module definitions
+resolve relative to the `sos.toml` that registers them. See the
+[external module contract](sysonescript-external-modules-spec.md).
 
 ## File overrides
 
@@ -78,7 +97,9 @@ The delimiter is a line containing exactly three plus signs. A header is optiona
 and belongs at the beginning of the file, with an optional UTF-8 BOM. A missing
 closing delimiter fails. Source diagnostics retain body line numbers, and the
 formatter preserves the header text. Frontmatter cannot set editor preferences,
-including an empty editor table. Configuration never invokes Jev.
+language/module registrations, or external capability grants, including empty
+tables. Those trust decisions belong in project configuration. Configuration
+never invokes Jev.
 
 Unknown keys and invalid values carry positions into the editor diagnostics,
 including dotted keys and inline tables. UTF-8 BOMs are also accepted on scripts

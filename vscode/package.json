@@ -55,6 +55,9 @@
     "onCommand:sysonescript.checkCliVersions",
     "onCommand:sysonescript.refresh",
     "onCommand:sysonescript.runHelper"
+	,"onCommand:sysonescript.moduleOpen"
+	,"onCommand:sysonescript.moduleCheck"
+	,"onCommand:sysonescript.moduleDoctor"
   ],
   "main": "./extension.js",
   "files": [
@@ -309,6 +312,21 @@
         "title": "SysOneScript: Run Helper",
         "category": "SysOneScript"
       },
+	  {
+		"command": "sysonescript.moduleOpen",
+		"title": "SysOneScript: Open Module Definition",
+		"category": "SysOneScript"
+	  },
+	  {
+		"command": "sysonescript.moduleCheck",
+		"title": "SysOneScript: Check External Module",
+		"category": "SysOneScript"
+	  },
+	  {
+		"command": "sysonescript.moduleDoctor",
+		"title": "SysOneScript: Diagnose External Module",
+		"category": "SysOneScript"
+	  },
       {
         "command": "sysonescript.openWelcome",
         "title": "SysOneScript: Open Welcome",
@@ -460,6 +478,15 @@
         },
         {
           "command": "sysonescript.checkCliVersions"
+        },
+        {
+          "command": "sysonescript.moduleOpen"
+        },
+        {
+          "command": "sysonescript.moduleCheck"
+        },
+        {
+          "command": "sysonescript.moduleDoctor"
         }
       ]
     },

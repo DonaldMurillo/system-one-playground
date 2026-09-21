@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/DonaldMurillo/system-one-playground/sos"
+	"github.com/DonaldMurillo/system-one-playground/sosconfig"
 )
 
 //go:embed all:webdist
@@ -73,8 +74,12 @@ func New(opts Options) (*Server, error) {
 	if _, err := rand.Read(raw); err != nil {
 		return nil, err
 	}
+	dir, err := projectRoot(opts.Dir)
+	if err != nil {
+		return nil, err
+	}
 	s := &Server{
-		dir:                 opts.Dir,
+		dir:                 dir,
 		token:               hex.EncodeToString(raw),
 		interpretationCache: sos.NewInterpretationCache(1024, 24*time.Hour),
 	}
@@ -94,6 +99,30 @@ func New(opts Options) (*Server, error) {
 	mux.HandleFunc("/", s.handleAssets)
 	s.mux = mux
 	return s, nil
+}
+
+func projectRoot(dir string) (string, error) {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		return "", err
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("working folder must be a directory")
+	}
+	layers, loadErr := sosconfig.Load(abs)
+	if loadErr != nil {
+		return "", loadErr
+	}
+	for i := len(layers) - 1; i >= 0; i-- {
+		if filepath.Base(layers[i].Name) == "sos.toml" {
+			return filepath.Dir(layers[i].Name), nil
+		}
+	}
+	return abs, nil
 }
 
 // Token exposes the session token to the local launcher.
@@ -566,16 +595,9 @@ func (s *Server) SetDir(dir string) error {
 	if s.cancel != nil || s.analysisCancel != nil {
 		return fmt.Errorf("stop the active run before changing folders")
 	}
-	abs, e := filepath.Abs(dir)
+	abs, e := projectRoot(dir)
 	if e != nil {
 		return e
-	}
-	info, e := os.Stat(abs)
-	if e != nil {
-		return e
-	}
-	if !info.IsDir() {
-		return fmt.Errorf("working folder must be a directory")
 	}
 	s.analysisCache = nil
 	s.dir = abs

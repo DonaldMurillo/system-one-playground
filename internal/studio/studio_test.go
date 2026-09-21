@@ -5,6 +5,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -18,6 +20,79 @@ func newTestServer(t *testing.T) (*Server, *httptest.Server) {
 	ts := httptest.NewServer(s)
 	t.Cleanup(ts.Close)
 	return s, ts
+}
+
+func TestProjectExternalModuleSurfaceIsOffline(t *testing.T) {
+	s, ts := newTestServer(t)
+	dir := s.Dir()
+	if err := os.MkdirAll(filepath.Join(dir, "modules", "echo"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	config := "version=1\n[[module.external]]\npath=\"local/echo\"\ndefinition=\"modules/echo/module.sos.toml\"\n"
+	definition := "schema=1\n[module]\npath=\"local/echo\"\nversion=\"1.0.0\"\n[runtime]\nkind=\"command\"\n[capabilities]\nprocess=true\n[[action]]\nname=\"say\"\n[action.command]\nprogram=\"printf\"\narguments=[]\n"
+	if err := os.WriteFile(filepath.Join(dir, "sos.toml"), []byte(config), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "modules", "echo", "module.sos.toml"), []byte(definition), 0644); err != nil {
+		t.Fatal(err)
+	}
+	res, data := post(t, ts, s.Token(), "/api/project", `{"action":"externalModules"}`)
+	if res.StatusCode != 200 || len(data["modules"].([]any)) != 1 {
+		t.Fatalf("modules: %d %#v", res.StatusCode, data)
+	}
+	res, data = post(t, ts, s.Token(), "/api/project", `{"action":"moduleCheck","path":"local/echo"}`)
+	if res.StatusCode != 200 || !strings.Contains(data["interface"].(string), "to say") {
+		t.Fatalf("check: %d %#v", res.StatusCode, data)
+	}
+}
+
+func TestProjectExternalModulesUseNearestParentConfiguration(t *testing.T) {
+	s, ts := newTestServer(t)
+	root := s.Dir()
+	nested := filepath.Join(root, "nested")
+	if err := os.MkdirAll(filepath.Join(root, "modules", "echo"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "sos.toml"), []byte("version=1\n[[module.external]]\npath=\"local/echo\"\ndefinition=\"modules/echo/module.sos.toml\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetDir(nested); err != nil {
+		t.Fatal(err)
+	}
+	res, data := post(t, ts, s.Token(), "/api/project", `{"action":"externalModules"}`)
+	if res.StatusCode != 200 || len(data["modules"].([]any)) != 1 {
+		t.Fatalf("inherited modules: %d %#v", res.StatusCode, data)
+	}
+}
+
+func TestCopyBuildDirectoryPublishesBundleTree(t *testing.T) {
+	project := t.TempDir()
+	source := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(source, "modules", "demo"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "app"), []byte("binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "manifest.json"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.OpenRoot(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	if err := copyBuildDirectory(root, "dist/app", source); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"dist/app/app", "dist/app/manifest.json"} {
+		if _, err := os.Stat(filepath.Join(project, name)); err != nil {
+			t.Fatalf("bundle member %s: %v", name, err)
+		}
+	}
 }
 
 func post(t *testing.T, ts *httptest.Server, token, path, body string) (*http.Response, map[string]any) {
@@ -336,5 +411,23 @@ func TestSessionMetadata(t *testing.T) {
 	}
 	if kw, _ := data["keywords"].([]any); len(kw) == 0 {
 		t.Fatalf("session keywords empty: %v", data)
+	}
+}
+
+func TestNewNormalizesNestedFolderToProjectRoot(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "sos.toml"), []byte("version = 1\n[module]\npath = \"example/project\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	nested := filepath.Join(root, "nested", "deeper")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	server, err := New(Options{Dir: nested})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if server.Dir() != root {
+		t.Fatalf("server root = %q, want %q", server.Dir(), root)
 	}
 }

@@ -1,6 +1,7 @@
 # Named record definitions
 
-Status: proposed for SysOneScript 0.3
+Status: implemented in SysOneScript 0.3; retained as the detailed design and
+compatibility contract.
 
 This proposal adds named, structurally validated records without introducing
 classes or object-oriented dispatch. `field of value` is the idiomatic data

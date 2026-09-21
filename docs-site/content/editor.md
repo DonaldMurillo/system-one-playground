@@ -92,6 +92,13 @@ or the environment. **Clear Jev Token** appears in the panel for a VS
 Code-managed token and removes only the extension's stored secret. The view
 title bar contains Refresh only; Run and Jev are not duplicated there.
 
+Registered external modules appear in a separate project-control group. Each
+module offers **Open definition**, an offline **Check definition**, and an
+explicit **Diagnose runtime** action. The same actions are in the Command Palette.
+Opening, editing, completion, and ordinary project refreshes never launch a
+plugin. External calls appear as opaque debugger frames and write only redacted
+module/action status to traces and the run Output channel.
+
 Project helpers and generators are configured in `.vscode/sysonescript.json`:
 
 ```json

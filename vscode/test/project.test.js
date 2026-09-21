@@ -4,10 +4,13 @@ const os = require('node:os')
 const path = require('node:path')
 const test = require('node:test')
 
-const { compareVersions, discoverEntrypoints, findProjectRoot, parseVersionLine, readHelpers, relativeScript, resolveProjectEntrypoint, walkScripts } = require('../project')
+const { compareVersions, discoverEntrypoints, findProjectRoot, parseVersionLine, readExternalModules, readHelpers, relativeScript, resolveProjectEntrypoint, walkScripts } = require('../project')
 
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sysonescript-project-'))
+	const configHome = path.join(root, '.test-config')
+	fs.mkdirSync(configHome)
+	process.env.SOS_CONFIG_HOME = configHome
   fs.mkdirSync(path.join(root, 'src'), { recursive: true })
   fs.mkdirSync(path.join(root, '.vscode'))
   fs.writeFileSync(path.join(root, 'sos.toml'), 'version = 1\n')
@@ -42,6 +45,59 @@ test('reads project helper actions without accepting malformed entries', () => {
   assert.deepEqual(readHelpers(root), [{ name: 'Build', command: 'build', args: ['src/main.sos', '--output', 'bin/app'], cwd: '', description: '' }])
   fs.writeFileSync(path.join(root, '.vscode', 'sysonescript.json'), '{not json')
   assert.deepEqual(readHelpers(root), [])
+})
+
+test('discovers external module definitions without launching them', () => {
+  const root = fixture()
+  fs.writeFileSync(path.join(root, 'sos.toml'), 'version=1\n[[module.external]]\npath="local/weather"\ndefinition="modules/weather/module.sos.toml"\n')
+  assert.deepEqual(readExternalModules(root), [{ path:'local/weather', definition:path.join(root,'modules/weather/module.sos.toml') }])
+})
+
+test('external module discovery accepts TOML literal strings and hashes inside values', () => {
+  const root = fixture()
+  fs.writeFileSync(path.join(root, 'sos.toml'), `version=1
+[[module.external]]
+path='local/hash#module' # retained inside the value
+definition='modules/hash#module/module.sos.toml'
+`)
+  assert.deepEqual(readExternalModules(root), [{
+    path: 'local/hash#module',
+    definition: path.join(root, 'modules', 'hash#module', 'module.sos.toml'),
+  }])
+})
+
+test('external module discovery accepts inline TOML registration arrays', () => {
+  const root = fixture()
+  fs.writeFileSync(path.join(root, 'sos.toml'), `version=1
+[module]
+external = [
+  { path = "local/inline", definition = "modules/inline/module.sos.toml" }
+]
+`)
+  assert.deepEqual(readExternalModules(root), [{
+    path: 'local/inline',
+    definition: path.join(root, 'modules', 'inline', 'module.sos.toml'),
+  }])
+})
+
+test('external module discovery includes global registrations with project overrides', () => {
+  const root = fixture()
+  fs.writeFileSync(path.join(process.env.SOS_CONFIG_HOME, 'config.toml'), `version=1
+[[module.external]]
+path="global/tool"
+definition="modules/tool/module.sos.toml"
+`)
+  const modules = readExternalModules(root)
+  assert.deepEqual(modules, [{
+    path: 'global/tool',
+    definition: path.join(process.env.SOS_CONFIG_HOME, 'modules', 'tool', 'module.sos.toml'),
+  }])
+})
+
+test('external module discovery reports incomplete registrations', () => {
+  const root = fixture()
+  fs.writeFileSync(path.join(root, 'sos.toml'), '[[ module.external ]]\npath = "broken/module"\n')
+  assert.throws(() => readExternalModules(root), /Invalid external module registration/)
 })
 
 test('maps SysOneScript operators to keyword styling across themes', () => {
@@ -90,7 +146,7 @@ test('contributes native onboarding and exposes its actions in the command palet
     'sysonescript.getStarted.cli',
   ])
   const palette = new Set(manifest.contributes.menus.commandPalette.map(item => item.command))
-  for (const command of ['sysonescript.runProject', 'sysonescript.checkProject', 'sysonescript.buildProject', 'sysonescript.debugProject', 'sysonescript.setJevToken', 'sysonescript.openWelcome', 'sysonescript.getCli', 'sysonescript.updateCli', 'sysonescript.checkCliVersions']) {
+  for (const command of ['sysonescript.runProject', 'sysonescript.checkProject', 'sysonescript.buildProject', 'sysonescript.debugProject', 'sysonescript.setJevToken', 'sysonescript.openWelcome', 'sysonescript.getCli', 'sysonescript.updateCli', 'sysonescript.checkCliVersions', 'sysonescript.moduleOpen', 'sysonescript.moduleCheck', 'sysonescript.moduleDoctor']) {
     assert.ok(palette.has(command), `${command} should be in the Command Palette`)
   }
 })

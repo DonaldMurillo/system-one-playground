@@ -1,0 +1,8 @@
+version = 1
+
+[external]
+process = true
+
+[[module.external]]
+path = "local/echo"
+definition = "modules/echo/module.sos.toml"

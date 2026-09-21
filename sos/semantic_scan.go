@@ -159,7 +159,7 @@ func scanSemantic(source string) *semanticScan {
 }
 
 var (
-	semanticSchemaFieldRe = regexp.MustCompile(`^\w+ as (?:optional )?(?:(?:list of )*(?:text|timestamp|number|integer|boolean|duration|[A-Z][A-Za-z0-9_]*))$`)
+	semanticSchemaFieldRe = regexp.MustCompile(`^\w+ as (?:optional )?(?:(?:list of )*(?:text|file|folder|timestamp|number|integer|boolean|duration|[A-Z][A-Za-z0-9_]*))$`)
 	semanticMakeFieldRe   = regexp.MustCompile(`^\w+ from .+$`)
 	semanticChoiceRe      = regexp.MustCompile(`^(?:"[^"\n]+"|[0-9]+): ".*"$`)
 )

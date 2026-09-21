@@ -65,6 +65,9 @@ func Run(ctx context.Context, p *Program, opts Options) (result *Result, err err
 	if p == nil {
 		return nil, fmt.Errorf("missing program")
 	}
+	if opts.externalSession == nil {
+		opts.externalSession = newExternalSessionKey()
+	}
 	// Validate declarations and inputs before admitting any provider requests.
 	// The import graph from LoadProgram survives re-parsing: canonical
 	// assembly preserves import statements, and modules carry their own
@@ -132,6 +135,9 @@ func Run(ctx context.Context, p *Program, opts Options) (result *Result, err err
 	timeout, configErr := configureRun(p, &opts)
 	if configErr != nil {
 		return nil, configErr
+	}
+	if modules != nil {
+		defer modules.closeExternalSession(opts.externalSession)
 	}
 	if timeout > 0 {
 		var cancel context.CancelFunc
@@ -522,6 +528,9 @@ func (r *runtime) callHasResult(s *Statement) bool {
 		if strings.Contains(m[1], ".") {
 			alias, action, _ := strings.Cut(m[1], ".")
 			if mod := r.imports[alias]; mod != nil {
+				if op, ok := mod.Native[action]; ok {
+					return op.Result != "" && op.Result != "none"
+				}
 				if fn := mod.Actions[action]; fn != nil {
 					decl, _ := parseActionDecl(fn.Text)
 					return decl.HasResult
@@ -538,7 +547,13 @@ func (r *runtime) callHasResult(s *Statement) bool {
 	if s.Kind == "sent" {
 		m := matchSent(s.Text)
 		mod, action, ok := r.vocabLookup(m[1])
-		if !ok || mod.Actions[action] == nil {
+		if !ok {
+			return false
+		}
+		if op, native := mod.Native[action]; native {
+			return op.Result != "" && op.Result != "none"
+		}
+		if mod.Actions[action] == nil {
 			return false
 		}
 		decl, _ := parseActionDecl(mod.Actions[action].Text)
@@ -552,12 +567,16 @@ func (r *runtime) callResultType(s *Statement) (TypeRef, bool) {
 		return TypeRef{}, false
 	}
 	var declaration *Statement
+	var nativeResult string
 	if s.Kind == "call" {
 		m := match("call", s.Text)
 		if strings.Contains(m[1], ".") {
 			alias, action, _ := strings.Cut(m[1], ".")
 			if module := r.imports[alias]; module != nil {
 				declaration = module.Actions[action]
+				if op, ok := module.Native[action]; ok {
+					nativeResult = op.Result
+				}
 			}
 		} else {
 			declaration = r.functions[m[1]]
@@ -566,7 +585,14 @@ func (r *runtime) callResultType(s *Statement) (TypeRef, bool) {
 		m := matchSent(s.Text)
 		if mod, action, ok := r.vocabLookup(m[1]); ok {
 			declaration = mod.Actions[action]
+			if op, native := mod.Native[action]; native {
+				nativeResult = op.Result
+			}
 		}
+	}
+	if nativeResult != "" && nativeResult != "none" {
+		typ, err := parseType(nativeResult, true)
+		return typ, err == nil
 	}
 	if declaration == nil {
 		return TypeRef{}, false
@@ -1451,6 +1477,9 @@ func (r *runtime) vocabLookup(name string) (*Module, string, bool) {
 // caller state afterwards.
 func (r *runtime) callModule(s *Statement, mod *Module, action, display string, vals []string, called string) error {
 	if op, ok := mod.Native[action]; ok {
+		if mod.external != nil && len(op.Targets) > 0 && !containsString(op.Targets, "native") && !containsString(op.Targets, currentExternalTarget()) {
+			return fmt.Errorf("%s is unavailable on %s", display, currentExternalTarget())
+		}
 		args := make([]any, 0, len(vals))
 		for _, v := range vals {
 			x, e := r.eval(v, nil)
@@ -1459,11 +1488,28 @@ func (r *runtime) callModule(s *Statement, mod *Module, action, display string, 
 			}
 			args = append(args, x)
 		}
-		if e := op.check(args); e != nil {
+		if mod.external != nil {
+			if len(args) != len(op.Params) {
+				return fmt.Errorf("%s expects %d argument(s), got %d", op.Name, len(op.Params), len(args))
+			}
+			for i, parameter := range op.Params {
+				typ, parseErr := parseType(parameter.Type, true)
+				if parseErr != nil || !typeMatchesRef(args[i], typ, mod.Definitions) {
+					return fmt.Errorf("%s argument %s must be %s", op.Name, parameter.Name, parameter.Type)
+				}
+			}
+		} else if e := op.check(args); e != nil {
 			return e
 		}
 		var out any
 		var e error
+		started := time.Now()
+		if mod.external != nil && r.opts.Debugger != nil {
+			frame := DebugFrame{Name: display, Path: mod.external.definitionPath, Line: 1, Column: 1, Kind: "external", Text: "external module call", Depth: r.depth + 1}
+			if debugErr := r.opts.Debugger.BeforeStatement(r.ctx, frame, append(append([]DebugFrame(nil), r.debugStack...), frame), map[string]any{}); debugErr != nil {
+				return debugErr
+			}
+		}
 		if op.ContextFn != nil {
 			if r.parallelDepth > 0 {
 				for _, effect := range stdDocs[mod.Key+"."+op.Name].effects {
@@ -1477,7 +1523,19 @@ func (r *runtime) callModule(s *Statement, mod *Module, action, display string, 
 			out, e = op.Fn(args)
 		}
 		if e != nil {
+			r.externalTrace(mod, action, started, e)
 			return fmt.Errorf("%s: %w", display, e)
+		}
+		r.externalTrace(mod, action, started, nil)
+		if op.Result != "" && op.Result != "none" && op.Result != "any" {
+			matches := typeMatches(out, op.Result)
+			if mod.external != nil {
+				typ, parseErr := parseType(op.Result, true)
+				matches = parseErr == nil && typeMatchesRef(out, typ, mod.Definitions)
+			}
+			if !matches {
+				return fmt.Errorf("%s returned %s; expected %s", display, valueTypeName(out), op.Result)
+			}
 		}
 		if called != "" {
 			r.env[called] = out
@@ -1580,6 +1638,22 @@ func (r *runtime) callModule(s *Statement, mod *Module, action, display string, 
 	return nil
 }
 
+func (r *runtime) externalTrace(mod *Module, action string, started time.Time, err error) {
+	if mod == nil || mod.external == nil {
+		return
+	}
+	trace := Trace{Line: 0, Question: mod.Name + "." + action, Model: "external", Decision: "invoke", Milliseconds: time.Since(started).Milliseconds()}
+	if err != nil {
+		trace.Reason = "failed"
+	} else {
+		trace.Reason = "completed"
+	}
+	r.result.Traces = append(r.result.Traces, trace)
+	if r.opts.OnTrace != nil {
+		r.opts.OnTrace(trace)
+	}
+}
+
 func (r *runtime) capture(s *Statement, m []string) error {
 	const hiddenResult = "__captured_value"
 	previous, hadPrevious := r.env[hiddenResult]
@@ -1669,8 +1743,10 @@ func readData(path, format string) (any, error) {
 		return string(data), nil
 	case "json":
 		var v any
-		e = json.Unmarshal(data, &v)
-		return v, e
+		if e = decodeExternalJSON(data, &v); e != nil {
+			return nil, e
+		}
+		return normalizeExternalAny(v)
 	case "lines of json":
 		out := []any{}
 		for i, line := range strings.Split(string(data), "\n") {
@@ -1678,7 +1754,11 @@ func readData(path, format string) (any, error) {
 				continue
 			}
 			var v any
-			if e = json.Unmarshal([]byte(line), &v); e != nil {
+			if e = decodeExternalJSON([]byte(line), &v); e != nil {
+				return nil, fmt.Errorf("%s:%d: %w", path, i+1, e)
+			}
+			v, e = normalizeExternalAny(v)
+			if e != nil {
 				return nil, fmt.Errorf("%s:%d: %w", path, i+1, e)
 			}
 			out = append(out, v)

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/DonaldMurillo/system-one-playground/typesafe"
 )
@@ -122,15 +123,41 @@ func fatalParallel(err error) bool {
 	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.As(err, &b) || errors.As(err, &l) || errors.As(err, &exit) || errors.As(err, &replay) || errors.As(err, &valueLimit)
 }
 
-// cloneValue copies the language's JSON value domain, including containers.
+// cloneValue copies the language value domain while preserving typed temporal
+// values that a JSON round-trip would silently coerce.
 func cloneValue(value any) (any, error) {
-	data, err := json.Marshal(value)
-	if err != nil {
-		return nil, err
+	switch current := value.(type) {
+	case nil, string, bool, float64, int64, time.Duration, time.Time:
+		return current, nil
+	case []any:
+		out := make([]any, len(current))
+		for i, item := range current {
+			copy, err := cloneValue(item)
+			if err != nil {
+				return nil, err
+			}
+			out[i] = copy
+		}
+		return out, nil
+	case map[string]any:
+		out := make(map[string]any, len(current))
+		for key, item := range current {
+			copy, err := cloneValue(item)
+			if err != nil {
+				return nil, err
+			}
+			out[key] = copy
+		}
+		return out, nil
+	default:
+		data, err := json.Marshal(value)
+		if err != nil {
+			return nil, err
+		}
+		var out any
+		err = json.Unmarshal(data, &out)
+		return out, err
 	}
-	var out any
-	err = json.Unmarshal(data, &out)
-	return out, err
 }
 
 // parallelMap forks lexical bindings, not shared mutable runtimes. Children

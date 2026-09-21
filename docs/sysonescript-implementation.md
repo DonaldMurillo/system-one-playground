@@ -115,3 +115,11 @@ Jev remains the underlying provider and explicit judgment keyword. Credentials
 remain `TYPESAFE_API_KEY`; provider models and the TypeSafe Go client retain their
 names. No legacy product aliases are installed. Configure existing workflows
 with the names above when upgrading.
+
+## 2026-09-21 - External process modules stay offline until invocation
+- Scope: external-modules
+- Trigger: Adding stdio/command plugins without weakening project trust or reproducible builds.
+- Approach: Parse and type-check TOML offline; intersect capability layers; key persistent clients per run; bundle exact target artifacts with an authoritative checksummed manifest.
+- Evidence: `go test ./...`, `go vet ./...`, `pnpm --pm-on-fail=ignore --dir studio run build`, and `pnpm --pm-on-fail=ignore --dir vscode run test`.
+- Next time: Preserve the offline discovery boundary and add adversarial lifecycle tests before expanding the protocol.
+- Status: active

@@ -40,6 +40,11 @@ func configureRun(p *Program, opts *Options) (time.Duration, error) {
 		base.Editor.Assistance = opts.Config.Editor
 		base.Interpretation.Mode = opts.Config.Interpretation
 		base.Runtime.Judgment = opts.Config.Runtime
+		base.External.Process = &opts.Config.ExternalProcess
+		base.External.Network = &opts.Config.ExternalNetwork
+		base.External.Filesystem = opts.Config.ExternalFilesystem
+		secrets := append([]string(nil), opts.Config.ExternalSecrets...)
+		base.External.Secrets = &secrets
 		base.Budget.Run.Requests = &opts.Config.Requests
 		if opts.Config.Timeout != 0 {
 			base.Budget.Run.Timeout = opts.Config.Timeout.String()

@@ -20,12 +20,16 @@ type NativeParam struct {
 // Synonyms are alternate words for the same operation
 // (upper/uppercase); the name always works too.
 type NativeOp struct {
-	ContextFn func(context.Context, Options, []any) (any, error)
-	Targets   []string
-	Name      string
-	Params    []NativeParam
-	Synonyms  []string
-	Fn        func(args []any) (any, error)
+	ContextFn        func(context.Context, Options, []any) (any, error)
+	Targets          []string
+	Effects          []string
+	Description      string
+	Name             string
+	Params           []NativeParam
+	Synonyms         []string
+	Result           string
+	PossibleFailures []string
+	Fn               func(args []any) (any, error)
 }
 
 // check validates argument values against the typed signature.

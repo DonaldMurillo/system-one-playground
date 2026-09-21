@@ -16,6 +16,7 @@ The public site lives in [docs-site](../docs-site/README.md). Its explicit conte
 - [Environment settings](sysonescript-project-environment.md)
 - [CLI and MCP](sysonescript-agent-interface.md)
 - [Editor services](sysonescript-editor.md), including the VS Code extension
+- [External stdio and command modules](sysonescript-external-modules-spec.md)
 - [Repository CLI walkthrough](../examples/sos/repo-assistant/README.md)
 
 ## Other repository components
@@ -30,7 +31,6 @@ The public site lives in [docs-site](../docs-site/README.md). Its explicit conte
 [Public release readiness](public-release-readiness.md) tracks launch requirements. [Agent notes](agent-notes.md) record implementation lessons. Design proposals and roadmaps describe historical or future work; they are not the shipped language contract.
 
 - [Named record definitions](sysonescript-defined-records-spec.md)
-- [External stdio and command modules proposal](sysonescript-external-modules-spec.md)
 - [Typed failures and results proposal](sysonescript-typed-failures-spec.md)
 - [Streams and long-running operations proposal](sysonescript-streams-spec.md)
 - [Add Jev to your application](enable-jev.md)

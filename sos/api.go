@@ -100,7 +100,8 @@ type Options struct {
 	// Config supplies a resolved policy (for packaged programs). Nil discovers host config.
 	Config *sosconfig.Effective
 	// Budget optionally shares request accounting across consumers.
-	Budget *RequestBudget
+	Budget          *RequestBudget
+	externalSession *externalSessionKey
 	// Resolution reuses an inspectable saved interpretation. Locked forbids new resolution calls.
 	Resolution *Analysis
 	Locked     bool
