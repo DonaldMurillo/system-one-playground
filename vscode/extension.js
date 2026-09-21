@@ -335,6 +335,33 @@ async function explainFile(resource) {
   runInTerminal(['explain', relativeScript(root, file)], root, `explain ${relativeScript(root, file)}`)
 }
 
+function captureRunner(args, cwd) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(runnerCommand(), args, {cwd, env:serverEnvironment(), windowsHide:true})
+    let stdout = '', stderr = ''
+    child.stdout.on('data', chunk => { stdout += chunk })
+    child.stderr.on('data', chunk => { stderr += chunk })
+    child.on('error', reject)
+    child.on('close', code => code === 0 ? resolve(stdout) : reject(new Error(stderr.trim() || `sos exited with code ${code}`)))
+  })
+}
+
+async function canonicalizeActiveDocument() {
+  const editor = vscode.window.activeTextEditor
+  const document = editor?.document
+  if (!editor || !document || !isSysOneScript(document)) return
+  if (!await document.save()) return
+  const root = projectFor(document.uri.fsPath)
+  try {
+    const canonical = await captureRunner(['canonicalize', relativeScript(root, document.uri.fsPath)], root)
+    const full = new vscode.Range(document.positionAt(0), document.positionAt(document.getText().length))
+    await editor.edit(builder => builder.replace(full, canonical), {undoStopBefore:true, undoStopAfter:true})
+    vscode.window.showInformationMessage('SysOneScript source is now canonical and deterministic.')
+  } catch (error) {
+    vscode.window.showErrorMessage(`Canonicalization failed: ${error.message}`)
+  }
+}
+
 async function stopProcesses() {
   for (const child of extensionState.processes) child.kill()
   extensionState.processes.clear()
@@ -979,6 +1006,7 @@ function activate(context) {
   context.subscriptions.push(vscode.commands.registerCommand('sysonescript.checkProject', checkProject))
   context.subscriptions.push(vscode.commands.registerCommand('sysonescript.buildProject', buildProject))
   context.subscriptions.push(vscode.commands.registerCommand('sysonescript.explainFile', explainFile))
+  context.subscriptions.push(vscode.commands.registerCommand('sysonescript.canonicalizeFile', canonicalizeActiveDocument))
   context.subscriptions.push(vscode.commands.registerCommand('sysonescript.debugFile', debugFile))
   context.subscriptions.push(vscode.commands.registerCommand('sysonescript.debugProject', debugProject))
   context.subscriptions.push(vscode.commands.registerCommand('sysonescript.stop', stopProcesses))

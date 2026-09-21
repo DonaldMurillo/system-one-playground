@@ -78,6 +78,18 @@ sos run report.sos --resolution report.resolution.json
 sos build report.sos --output report --resolution report.resolution.json
 ```
 
+Turn a reviewed source file into deterministic canonical syntax with the same
+validated lowering used by execution:
+
+```sh
+sos canonicalize report.sos          # preview on stdout
+sos canonicalize report.sos --write  # atomic in-place rewrite
+```
+
+Studio exposes **Make all canonical** after successful analysis, and the VS
+Code extension exposes **SysOneScript: Make File Canonical**. Both editor paths
+apply one undoable whole-document edit.
+
 `explain` does not execute script effects. Its JSON includes canonical source,
 source-line mapping, interpretation decisions, dictionary `matches`, diagnostics,
 and request usage. Each match identifies the phrase, concept, and executable

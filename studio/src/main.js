@@ -477,6 +477,20 @@ function renderInterpretation(result, version) {
     none.textContent = 'No interpretation decisions.'
     host.appendChild(none)
   }
+  if (decisions.length && a.canonical && a.canonical !== result.originalSource) {
+    const all = document.createElement('button')
+    all.className = 'interp-apply'
+    all.textContent = 'Make all canonical'
+    all.addEventListener('click', () => {
+      const model = editor.getModel()
+      if (!model || model.getVersionId() !== version) { renderInterpretationError(new Error('document changed since analysis — analyze again')); return }
+      editor.pushUndoStop()
+      editor.executeEdits('sysonescript.canonicalize', [{range:model.getFullModelRange(),text:a.canonical,forceMoveMarkers:true}])
+      editor.pushUndoStop()
+      editor.focus()
+    })
+    host.appendChild(all)
+  }
   const originalLines = (result.originalSource || '').split(/\r?\n/)
   for (const d of decisions) host.appendChild(interpEntry(d, version, originalLines[d.line - 1]))
   for (const d of a.diagnostics || []) host.appendChild(interpDiagnostic(d))

@@ -35,6 +35,7 @@
     "onCommand:sysonescript.checkProject",
     "onCommand:sysonescript.buildProject",
     "onCommand:sysonescript.explainFile",
+    "onCommand:sysonescript.canonicalizeFile",
     "onCommand:sysonescript.stop",
     "onCommand:sysonescript.setJevToken",
     "onCommand:sysonescript.clearJevToken",
@@ -220,6 +221,11 @@
         "category": "SysOneScript"
       },
       {
+        "command": "sysonescript.canonicalizeFile",
+        "title": "SysOneScript: Make File Canonical",
+        "category": "SysOneScript"
+      },
+      {
         "command": "sysonescript.debugProject",
         "title": "SysOneScript: Debug Project",
         "category": "SysOneScript"
@@ -293,6 +299,11 @@
     "menus": {
       "editor/title": [
         {
+          "command": "sysonescript.canonicalizeFile",
+          "when": "editorLangId == sos",
+          "group": "navigation@8"
+        },
+        {
           "command": "sysonescript.analyze",
           "when": "editorLangId == sos",
           "group": "navigation@9"
@@ -309,6 +320,11 @@
         }
       ],
       "editor/context": [
+        {
+          "command": "sysonescript.canonicalizeFile",
+          "when": "resourceLangId == sos",
+          "group": "navigation@0"
+        },
         {
           "command": "sysonescript.runFile",
           "when": "resourceLangId == sos",
@@ -350,6 +366,10 @@
         }
       ],
       "commandPalette": [
+        {
+          "command": "sysonescript.canonicalizeFile",
+          "when": "editorLangId == sos"
+        },
         {
           "command": "sysonescript.analyze",
           "when": "editorLangId == sos"

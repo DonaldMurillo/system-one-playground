@@ -210,3 +210,97 @@ func cmdExplain(args []string, stdout, stderr io.Writer) int {
 	}
 	return 0
 }
+
+func cmdCanonicalize(args []string, stdout, stderr io.Writer) int {
+	const usage = "usage: sos canonicalize FILE [--write] [--model M] [--max-calls N]\n"
+	if len(args) == 0 {
+		fmt.Fprint(stderr, usage)
+		return 2
+	}
+	path := args[0]
+	flags := flag.NewFlagSet("canonicalize", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	write := flags.Bool("write", false, "rewrite FILE atomically")
+	model := flags.String("model", "", "interpretation model")
+	maxCalls := flags.Int("max-calls", -1, "further request ceiling")
+	if err := flags.Parse(args[1:]); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprint(stderr, usage)
+		return 2
+	}
+	source, err := os.ReadFile(path)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	dir, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if err = sos.LoadEnv(filepath.Join(dir, ".env")); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	policy, err := sos.EffectiveConfig(string(source), dir)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if *maxCalls >= 0 && *maxCalls < policy.Requests {
+		policy.Requests = *maxCalls
+	}
+	program, loadDs := sos.ResolveModules(path, string(source))
+	for _, d := range loadDs {
+		if !strings.HasPrefix(d.Message, "unknown construction:") {
+			fmt.Fprintf(stderr, "%s:%d:%d: %s\n", path, d.Line, d.Column, d.Message)
+			return 1
+		}
+	}
+	a, err := sos.Analyze(context.Background(), string(source), sos.AnalyzeOptions{Config: policy, Model: *model, Bucket: sos.BudgetInterpretation, Modules: program.Modules})
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	canonical, err := sos.Canonicalize(string(source), a)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if !*write {
+		fmt.Fprint(stdout, canonical)
+		return 0
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".sos-canonical-*")
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if err = tmp.Chmod(info.Mode().Perm()); err == nil {
+		_, err = tmp.WriteString(canonical)
+	}
+	if err == nil {
+		err = tmp.Sync()
+	}
+	if closeErr := tmp.Close(); err == nil {
+		err = closeErr
+	}
+	if err == nil {
+		err = os.Rename(tmpName, path)
+	}
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "canonicalized %s\n", path)
+	return 0
+}

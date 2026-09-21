@@ -62,6 +62,8 @@ Using the `sysone` entry point directly is also supported:
 - a native Getting Started walkthrough, reopenable from the project panel or
   **SysOneScript: Open Welcome** in the Command Palette
 - `SysOneScript: Analyze Document` and `SysOneScript: Restart Language Server`
+- `SysOneScript: Make File Canonical`, which resolves semantic syntax through
+  the bundled CLI and applies the deterministic result as one undoable edit
 
 The panel is a project-control dashboard: it shows the active project and the
 automatically resolved entrypoint (configured entry, active `.sos` file, then

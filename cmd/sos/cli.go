@@ -27,6 +27,7 @@ const cliUsage = `usage: sos COMMAND [arguments]
 commands:
   run FILE [flags] [-- SCRIPT_ARGS]   load .env, check, and run FILE
   explain FILE [--save PATH] [--locked PATH]  inspect semantic interpretation
+  canonicalize FILE [--write]         resolve and print canonical source
   config FILE                         show effective configuration as JSON
   check FILE                          report diagnostics for FILE
   fmt FILE [--write]                  print formatted FILE, or rewrite it
@@ -72,6 +73,8 @@ func RunCLI(args []string, stdout, stderr io.Writer) int {
 		return cmdRun(rest, stdout, stderr)
 	case "explain":
 		return cmdExplain(rest, stdout, stderr)
+	case "canonicalize":
+		return cmdCanonicalize(rest, stdout, stderr)
 	case "config":
 		return cmdConfig(rest, stdout, stderr)
 	case "check":
