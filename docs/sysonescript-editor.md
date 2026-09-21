@@ -285,3 +285,8 @@ tested commit. Repository release immutability is enabled; CI creates a draft,
 uploads every asset, rechecks the tag, publishes atomically, and verifies the
 resulting release attestation. Marketplace retries skip only platform versions
 that are already published.
+
+An active, no-bypass repository ruleset prevents updates or deletion of
+`vscode-v*` tags while still allowing new release tags to be created. CI verifies
+that protection before publication and polls boundedly for GitHub's asynchronously
+generated immutable-release attestation.

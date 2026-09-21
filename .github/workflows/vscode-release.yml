@@ -208,6 +208,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           version="${GITHUB_REF_NAME#vscode-v}"
+          ruleset_id="$(gh api "repos/${GITHUB_REPOSITORY}/rulesets" --jq '.[] | select(.name == "Immutable SysOneScript release tags" and .target == "tag" and .enforcement == "active") | .id')"
+          test -n "$ruleset_id"
+          gh api "repos/${GITHUB_REPOSITORY}/rulesets/${ruleset_id}" --jq '
+            (.conditions.ref_name.include | index("refs/tags/vscode-v*") != null) and
+            ([.rules[].type] | index("update") != null) and
+            ([.rules[].type] | index("deletion") != null) and
+            (.bypass_actors | length == 0)' | grep -qx true
           verify_tag() {
             git fetch --force origin "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
             test "$(git rev-parse "${GITHUB_REF_NAME}^{commit}")" = "$GITHUB_SHA"
@@ -228,7 +235,16 @@ jobs:
           else
             echo "GitHub Release $GITHUB_REF_NAME is already published; immutable assets are unchanged."
           fi
-          gh release verify "$GITHUB_REF_NAME"
+          verified=false
+          for attempt in $(seq 1 12); do
+            if gh release verify "$GITHUB_REF_NAME"; then
+              verified=true
+              break
+            fi
+            echo "Release attestation is not available yet (attempt ${attempt}/12)."
+            sleep 10
+          done
+          test "$verified" = true
 
       - name: Publish platform extensions when configured
         env:
