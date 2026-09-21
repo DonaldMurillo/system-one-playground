@@ -231,7 +231,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           version="${GITHUB_REF_NAME#vscode-v}"
-          test "$(gh api "repos/${GITHUB_REPOSITORY}/immutable-releases" --jq .enabled)" = true
           mapfile -t ruleset_ids < <(gh api --paginate "repos/${GITHUB_REPOSITORY}/rulesets?per_page=100" --jq '.[] | select(.name == "Immutable SysOneScript release tags" and .target == "tag" and .enforcement == "active") | .id')
           test "${#ruleset_ids[@]}" -eq 1
           ruleset_id="${ruleset_ids[0]}"
@@ -240,7 +239,6 @@ jobs:
             test "$(git rev-parse "${GITHUB_REF_NAME}^{commit}")" = "$GITHUB_SHA"
           }
           verify_release_guard() {
-            test "$(gh api "repos/${GITHUB_REPOSITORY}/immutable-releases" --jq .enabled)" = true
             gh api "repos/${GITHUB_REPOSITORY}/rulesets/${ruleset_id}" --jq '
               (.target == "tag" and .enforcement == "active") and
               (.conditions.ref_name.include | index("refs/tags/vscode-v*") != null) and
@@ -255,14 +253,13 @@ jobs:
             gh release create "$GITHUB_REF_NAME" \
               --draft \
               --verify-tag \
-              --target "$GITHUB_SHA" \
               --title "SysOneScript v${version}" \
               --generate-notes
           fi
           if [ "$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft)" = "true" ]; then
             gh release upload "$GITHUB_REF_NAME" release/*.vsix release/*.tar.gz release/*.zip release/checksums.txt release/install.sh release/install.ps1 --clobber
             verify_release_guard
-            gh release edit "$GITHUB_REF_NAME" --draft=false --verify-tag --target "$GITHUB_SHA" --title "SysOneScript v${version}"
+            gh release edit "$GITHUB_REF_NAME" --draft=false --verify-tag --title "SysOneScript v${version}"
           else
             echo "GitHub Release $GITHUB_REF_NAME is already published; immutable assets are unchanged."
           fi

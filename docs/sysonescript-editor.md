@@ -295,5 +295,7 @@ that are already published.
 
 An active, no-bypass repository ruleset prevents updates or deletion of
 `vscode-v*` tags while still allowing new release tags to be created. CI verifies
-that protection before publication and polls boundedly for GitHub's asynchronously
-generated immutable-release attestation.
+that publicly readable protection and the exact tag commit before publication,
+then polls boundedly for GitHub's asynchronously generated immutable-release
+attestation. The workflow does not query the repository-admin-only immutable
+release setting because GitHub does not expose that endpoint to `GITHUB_TOKEN`.
