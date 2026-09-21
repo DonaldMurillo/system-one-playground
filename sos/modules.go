@@ -955,11 +955,13 @@ func (l *fsLoader) findModuleBase() {
 	}
 	l.layers = layers
 	for _, layer := range layers {
-		if layer.Config.Module.Path == "" || filepath.Base(layer.Name) != "sos.toml" {
+		if filepath.Base(layer.Name) != "sos.toml" {
 			continue
 		}
-		l.ns = layer.Config.Module.Path
 		l.tomlDir = filepath.Dir(layer.Name)
+		if layer.Config.Module.Path != "" {
+			l.ns = layer.Config.Module.Path
+		}
 	}
 	l.boundary = l.root
 	if l.tomlDir != "" {

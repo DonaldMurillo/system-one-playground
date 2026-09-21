@@ -121,7 +121,9 @@ bin/sos vocabulary --library std/json --json
 
 Without a filename, the command inspects the current working folder. JSON mode
 returns a `sos/vocabulary@1` envelope with `catalog.entries`,
-`catalog.libraries`, and `diagnostics`. A dictionary query can return useful
+`catalog.libraries`, `catalog.definitions`, `catalog.failures`, and
+`diagnostics`. Definitions and failures include the local declarations and
+exported types visible through the file's resolved imports, sorted by name. A dictionary query can return useful
 metadata alongside diagnostics; use `sos check FILE` to enforce validity.
 
 Go tools can call `sos.Vocabulary(filename, source)` directly. Language-server

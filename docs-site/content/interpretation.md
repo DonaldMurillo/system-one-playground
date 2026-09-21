@@ -17,16 +17,25 @@ request interpretation of sentence variants.
 | `load "tickets.json" as json called tickets` | Read the specified file and representation. |
 | `write tickets as json to "report.json"` | Save to the specified destination. |
 | `group them by team called teams` | Resolve a visible collection reference. |
+| `if age bigger 18 show "adult"` | `when age > 18:` followed by `show "adult"`. |
+| `provided that score at least 10 display "ok"` | `when score >= 10:` followed by `show "ok"`. |
 
 Unambiguous variants lower locally and report deterministic decisions. Competing
 meanings or collection references use a constrained Jev Choice with an explicit
-reject option and a minimum confidence of 0.8. That score is not a guarantee of
+reject option and a minimum confidence of 0.8. Unfamiliar sentence shapes also
+require Jev to accept or reject the host's bounded composition, even if typing
+leaves one candidate. That score is not a guarantee of
 correctness; inspect the selected canonical form. An ordinary variable actually
 named `them` retains its ordinary binding. Reference tracking is conservative
 around scopes; unsupported references fail rather than invent bindings.
 
 The resolver never invents a file format, destination, or naming convention.
-Arbitrary prose and open-ended generation of code are outside this registry.
+For dictionary-backed forms, it retrieves concepts from the compiled project
+lexicon, maps those concepts only to registered language definitions, and
+removes type-incompatible meanings before considering Jev. If one candidate
+remains, lowering is local and consumes zero requests. Jev receives a bounded
+Choice only when more than one valid meaning remains. Arbitrary prose and
+open-ended generation of code remain outside this pipeline.
 
 In semantic mode, declare a reusable criterion:
 
@@ -69,8 +78,45 @@ sos run report.sos --resolution report.resolution.json
 sos build report.sos --output report --resolution report.resolution.json
 ```
 
+Turn a reviewed source file into deterministic canonical syntax with the same
+validated lowering used by execution:
+
+```sh
+sos canonicalize report.sos          # preview on stdout
+sos canonicalize report.sos --diff   # review a unified patch
+sos canonicalize report.sos --line 8 # canonicalize one interpreted sentence
+sos canonicalize report.sos --write  # atomic in-place rewrite
+```
+
+Studio exposes **Make all canonical** after successful analysis, and the VS
+Code extension exposes **SysOneScript: Make File Canonical**. Both editor paths
+apply one undoable whole-document edit.
+
+VS Code reloads the exact analysis produced by Run into its code lenses, so it
+shows confidence, attributed tokens, estimated cost, batching, and memoization
+without issuing a second analysis request. The CLI prints the same per-decision
+summary and can persist the run analysis with
+`sos run --save-resolution analysis.json FILE`.
+
 `explain` does not execute script effects. Its JSON includes canonical source,
-source-line mapping, interpretation decisions, diagnostics, and request usage.
+source-line mapping, interpretation decisions, dictionary `matches`, diagnostics,
+and request usage. Each match identifies the phrase, concept, and executable
+language definition used by the lowering.
+Studio and VS Code refresh semantic code lenses after Analyze or Run. A Jev-resolved line
+shows its confidence, provider-reported input tokens, and the corresponding
+published-rate estimate; deterministic resolutions explicitly show that they
+used no Jev request. Per-line cost remains an estimate rather than account
+billing, and unreported provider usage is labeled unavailable instead of zero.
+Adjacent scope-neutral dictionary compositions are sent as up to 128 questions
+in one provider request. Scope-changing or dependent statements form ordering
+barriers. Batched lenses label the request tokens and estimate as shared across
+the participating lines rather than presenting the batch total as per-line cost.
+The editor process memoizes successful structural choices at confidence 0.95 or
+higher in a bounded 1024-entry, 24-hour LRU. Keys include the model, semantic
+versions, confidence policy, masked sentence, candidates, and visible type
+context; literal contents are excluded. Rejects, failures, and lower-confidence
+answers are never cached. Cache hits spend no request and are labeled
+`memoized`; canonicalizing remains the durable, deterministic workflow.
 Saving is explicit and only succeeds after analysis succeeds. Saving a resolution
 writes that JSON file; it does not run the program. A resolution can contain
 source text and judgment questions, so handle it like the source itself.
@@ -168,7 +214,7 @@ commands and unused actions do not consume interpretation requests. Source lines
 are preserved by blanking excluded constructions. Command declarations remain
 local and canonical. `check`, `explain`, and `build` cover the whole application.
 
-Saved analysis and registry formats are now version 3; regenerate older saved
+Saved analysis format is now version 5 and the registry is version 4; regenerate older saved
 interpretations. Selected-source and whole-source hashes distinguish their
 coverage. A selected result cannot stand in for a whole build or a different
 command. Packaged applications validate the embedded whole result offline, then

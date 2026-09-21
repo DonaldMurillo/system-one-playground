@@ -17,4 +17,10 @@ func TestDebuggerRedactsSecretsAcrossEvaluateLogpointsAndContainers(t *testing.T
 	if got := debugDisplay("trace", redacted); strings.Contains(got, "top-secret") {
 		t.Fatalf("container exposed secret: %q", got)
 	}
+	if debugCanExpand("api_token", map[string]any{"value": "top-secret"}) {
+		t.Fatal("secret container could be expanded through a variables reference")
+	}
+	if !debugCanExpand("response", map[string]any{"status": "ok"}) {
+		t.Fatal("ordinary container should remain expandable")
+	}
 }

@@ -185,6 +185,7 @@ cannot choose an arbitrary filesystem root.
 - `pnpm --dir vscode check`
 - `pnpm --dir vscode test`
 - `pnpm --dir vscode package`
+- `pnpm --dir vscode package:smoke`
 
 Rebuild `bin/sos-studio` after bundling the frontend. Rebuild the Wails application
 from `desktop/` with `go tool wails build` to update the installed build artifact.
@@ -253,3 +254,19 @@ Changing examples or opening a file resets results and input values for the
 previous document. Diagnostics and vocabulary refresh for the new source;
 Output, Trace and Interpretation wait for a new Run or Analyze. Late results
 from a previous document are discarded from the UI.
+
+### Extension lifecycle and release boundary
+
+VS Code serializes language-server restarts and rejects provider results from an
+older server generation, even when the document text did not change. Extension
+shutdown marks the state disposed before stopping the server, run processes, and
+debug sessions so late analysis callbacks cannot repopulate editor state.
+
+Debug stop requests also cover a launch that is still starting. A user-stopped
+session is reported as stopped rather than successful. Secret-named container
+evaluations are redacted and receive no expandable variables reference.
+
+The packaged-extension smoke test selects the VSIX matching the current manifest
+version and verifies the runtime plus every required JavaScript module. Release
+verification regenerates the semantic lexicon, embedded compiler sources, and
+public documentation before accepting a tag.

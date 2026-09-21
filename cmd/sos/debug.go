@@ -542,7 +542,7 @@ func (s *dapServer) evaluate(request dapRequest) error {
 	}
 	s.session.mu.Lock()
 	result := debugValue(args.Expression, value)
-	if isDebugContainer(value) {
+	if debugCanExpand(args.Expression, value) {
 		result["variablesReference"] = s.nextVariableRefLocked(value)
 	}
 	s.session.mu.Unlock()
@@ -708,6 +708,10 @@ func isDebugContainer(value any) bool {
 	default:
 		return false
 	}
+}
+
+func debugCanExpand(name string, value any) bool {
+	return isDebugContainer(value) && !secretValue(name, value)
 }
 
 func debugValue(name string, value any) map[string]any {

@@ -26,6 +26,10 @@ jobs:
         with:
           node-version: 22
 
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
       - run: pnpm --dir vscode install --frozen-lockfile
 
       - name: Check extension
@@ -45,6 +49,12 @@ jobs:
 
       - name: Verify runtime and release documentation versions
         run: node vscode/test/release-contract.js
+
+      - name: Verify generated language and documentation artifacts
+        run: |
+          go generate ./sos ./internal/sosbuild
+          git diff --exit-code -- sos/semantic_lexicon_generated.go internal/sosbuild/sources.zip
+          python3 docs-site/scripts/sync_content.py --check
 
   build:
     needs: verify
@@ -101,7 +111,7 @@ jobs:
       - run: pnpm --dir vscode install --frozen-lockfile
 
       - name: Build source bundle
-        run: go generate ./internal/sosbuild
+        run: go generate ./sos ./internal/sosbuild
 
       - name: Build language server and CLIs
         env:

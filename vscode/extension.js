@@ -275,7 +275,7 @@ function setPanelRun(action, value) {
 function runPanelProcess(action, args, cwd, label, commandOverride, onClose) {
 	const state = extensionState
   const command = commandOverride || runnerCommand()
-  const output = extensionState.runOutput
+  const output = state.runOutput
   output.clear()
   output.appendLine(`SysOneScript · ${label}`)
   output.appendLine(`$ ${path.basename(command)} ${args.join(' ')}`)
@@ -332,6 +332,7 @@ async function runFile(resource) {
 }
 
 async function runWithAnalysisCapture(file, root, label) {
+  const state = extensionState
   const document = vscode.workspace.textDocuments.find(item => item.uri.fsPath === file) || await vscode.workspace.openTextDocument(file)
   const source = document?.getText()
   const version = document?.version
@@ -339,7 +340,7 @@ async function runWithAnalysisCapture(file, root, label) {
   try {
     const resolution = path.join(tempDir, 'resolution.json')
     const args = ['run', '--save-resolution', resolution]
-    const reviewed = extensionState.semanticAnalyses.get(document.uri.toString())
+    const reviewed = state.semanticAnalyses.get(document.uri.toString())
     const usedReviewed = reviewed?.wholeSource && reviewed.version === version
     if (usedReviewed) {
       const inputResolution = path.join(tempDir, 'reviewed.json')
@@ -352,11 +353,13 @@ async function runWithAnalysisCapture(file, root, label) {
         if (code === 0 && document && document.version === version && document.getText() === source) {
           const analysis = JSON.parse(fs.readFileSync(resolution, 'utf8'))
           const wholeSource = analysis.source_hash === crypto.createHash('sha256').update(source, 'utf8').digest('hex')
-          extensionState.semanticAnalyses.set(document.uri.toString(), {version, analysis, wholeSource})
-          extensionState.semanticLensEmitter?.fire()
+          if (!state.disposed && extensionState === state) {
+            state.semanticAnalyses.set(document.uri.toString(), {version, analysis, wholeSource})
+            state.semanticLensEmitter?.fire()
+          }
         }
       } catch (error) {
-        extensionState.output.appendLine(`Could not load post-run analysis: ${error.message}`)
+        if (!state.disposed) state.output.appendLine(`Could not load post-run analysis: ${error.message}`)
       } finally {
         fs.rmSync(tempDir, {recursive:true, force:true})
       }
@@ -437,9 +440,13 @@ async function canonicalizeActiveDocument() {
 
 async function stopProcesses() {
 	const state = extensionState
+	state.debugEpoch++
 	for (const child of state.processes) child.kill()
 	state.processes.clear()
-	for (const session of state.debugSessions) await vscode.debug.stopDebugging(session)
+	for (const session of state.debugSessions) {
+		state.stoppedDebugSessions.add(session.id)
+		await vscode.debug.stopDebugging(session)
+	}
   for (const state of extensionState.panelRuns.values()) {
     if (state.status === 'running') {
       state.status = 'stopped'
@@ -475,6 +482,7 @@ async function debugFile(resource) {
     // The debug adapter will report a more useful source error if the file
     // disappears between the editor action and launch.
   }
+  const debugEpoch = extensionState.debugEpoch
   await vscode.debug.startDebugging(vscode.workspace.getWorkspaceFolder(vscode.Uri.file(root)), {
     type: 'sysonescript',
     request: 'launch',
@@ -483,6 +491,7 @@ async function debugFile(resource) {
     cwd: root,
     args,
     stopOnEntry: false,
+    __sysoneEpoch: debugEpoch,
   })
 }
 
@@ -500,8 +509,10 @@ async function debugProject(resource) {
   if (!selected) return
 	if (!await saveWorkspace()) return vscode.window.showWarningMessage('Debug canceled because the workspace could not be saved.')
   setPanelRun('debug', { status: 'running', label: `Debug ${relativeScript(selected.root, selected.file)} · running` })
+  const debugEpoch = extensionState.debugEpoch
   const started = await vscode.debug.startDebugging(vscode.workspace.getWorkspaceFolder(vscode.Uri.file(selected.root)), {
     type: 'sysonescript', request: 'launch', name: `Debug ${path.basename(selected.file)}`, program: selected.file, cwd: selected.root, args: [], stopOnEntry: false,
+    __sysoneEpoch: debugEpoch,
   })
   if (!started) setPanelRun('debug', { status: 'failed', label: 'Debug failed to start' })
 }
@@ -733,18 +744,29 @@ function publishDiagnostics(params) {
   extensionState.diagnostics.set(uri(params.uri), diagnostics)
 }
 
-async function startServer() {
-  if (extensionState?.tokenReady) await extensionState.tokenReady
-  extensionState.serverGeneration++
-  const previous = extensionState?.client
+function startServer() {
+  const state = extensionState
+  if (!state || state.disposed) return Promise.resolve()
+  const start = state.serverStart.catch(() => {}).then(() => startServerNow(state))
+  state.serverStart = start
+  return start
+}
+
+async function startServerNow(state) {
+  if (state.tokenReady) await state.tokenReady
+  if (state.disposed || extensionState !== state) return
+  const generation = ++state.serverGeneration
+  const previous = state.client
+  state.client = null
   if (previous) await previous.stop()
+  if (state.disposed || extensionState !== state || generation !== state.serverGeneration) return
   clearDiagnostics()
 
-  const output = extensionState.output
+  const output = state.output
   const configuredArgs = configuration().get('server.args', ['lsp'])
   const configuredCommand = configuration().get('server.command', '')
   const client = new LspClient({
-    command: configuredCommand || bundledServerCommand(extensionState.extensionPath),
+    command: configuredCommand || bundledServerCommand(state.extensionPath),
     args: Array.isArray(configuredArgs) ? configuredArgs : ['lsp'],
     cwd: serverCwd(),
     env: serverEnvironment(),
@@ -767,11 +789,11 @@ async function startServer() {
     },
   })
   const ready = client.start(initializeParams())
-  extensionState.client = client
-  extensionState.ready = ready
-  extensionState.opened = new Set()
-  extensionState.semanticAnalyses.clear()
-  extensionState.semanticLensEmitter?.fire()
+  state.client = client
+  state.ready = ready
+  state.opened = new Set()
+  state.semanticAnalyses.clear()
+  state.semanticLensEmitter?.fire()
 
   ready.then(() => {
     for (const document of vscode.workspace.textDocuments) syncDocument(document)
@@ -815,9 +837,13 @@ async function request(method, params) {
 }
 
 async function requestForDocument(document, method, params, token) {
+	const state = extensionState
+	if (!state || state.disposed) return undefined
 	const version = document.version
+	const generation = state.serverGeneration
+	const client = state.client
 	const result = await request(method, params)
-	if (token?.isCancellationRequested || document.version !== version) return undefined
+	if (token?.isCancellationRequested || document.version !== version || extensionState !== state || state.disposed || state.serverGeneration !== generation || state.client !== client) return undefined
 	return result
 }
 
@@ -1108,7 +1134,7 @@ function activate(context) {
   const runOutput = vscode.window.createOutputChannel('SysOneScript Run')
   const diagnostics = vscode.languages.createDiagnosticCollection('sysonescript')
   const tree = new SysOneScriptTreeProvider()
-  extensionState = {
+  const state = {
     output,
     runOutput,
     diagnostics,
@@ -1126,11 +1152,19 @@ function activate(context) {
     versionWarningShown: false,
     secrets: context.secrets,
     jevToken: undefined,
-    tokenReady: context.secrets.get(JEV_SECRET_KEY).then(token => { extensionState.jevToken = token || undefined }),
+    tokenReady: undefined,
     semanticAnalyses: new Map(),
     semanticLensEmitter: undefined,
     serverGeneration: 0,
+    serverStart: Promise.resolve(),
+    disposed: false,
+    debugEpoch: 0,
+    stoppedDebugSessions: new Set(),
   }
+  extensionState = state
+  state.tokenReady = context.secrets.get(JEV_SECRET_KEY).then(token => {
+    if (!state.disposed) state.jevToken = token || undefined
+  })
   context.subscriptions.push(output, runOutput, diagnostics)
 
   extensionState.treeView = vscode.window.createTreeView('sysonescript.project', { treeDataProvider: tree, showCollapseAll: true })
@@ -1138,13 +1172,22 @@ function activate(context) {
   context.subscriptions.push(vscode.debug.registerDebugConfigurationProvider('sysonescript', new SysOneScriptDebugConfigurationProvider()))
 	context.subscriptions.push(vscode.debug.registerDebugAdapterDescriptorFactory('sysonescript', new SysOneScriptDebugAdapterFactory()))
 	context.subscriptions.push(vscode.debug.onDidStartDebugSession(session => {
-		if (session.type === 'sysonescript') extensionState?.debugSessions.add(session)
+		if (session.type !== 'sysonescript') return
+		const state = extensionState
+		if (!state) return
+		state.debugSessions.add(session)
+		if ((session.configuration.__sysoneEpoch ?? -1) < state.debugEpoch) {
+			state.stoppedDebugSessions.add(session.id)
+			vscode.debug.stopDebugging(session)
+		}
 	}))
 	context.subscriptions.push(vscode.debug.onDidTerminateDebugSession(session => {
 		if (session.type === 'sysonescript') {
-			extensionState?.debugSessions.delete(session)
+      const state = extensionState
+			state?.debugSessions.delete(session)
       output.appendLine('SysOneScript debugger session ended.')
-      setPanelRun('debug', { status: 'success', label: 'Debug session ended' })
+      const stopped = state?.stoppedDebugSessions.delete(session.id)
+      setPanelRun('debug', { status: stopped ? 'stopped' : 'success', label: stopped ? 'Debug session stopped' : 'Debug session ended' })
     }
   }))
 
@@ -1196,7 +1239,11 @@ function activate(context) {
 
 async function deactivate() {
 	const state = extensionState
-	if (state?.client) await state.client.stop()
+	if (!state) return
+	state.disposed = true
+	state.serverGeneration++
+	await state.serverStart.catch(() => {})
+	if (state.client) await state.client.stop()
 	for (const child of state?.processes || []) child.kill()
 	for (const session of state?.debugSessions || []) await vscode.debug.stopDebugging(session)
 	extensionState = undefined
