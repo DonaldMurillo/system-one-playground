@@ -63,9 +63,7 @@ func TestSymlinkedEntrypointResolvesImportsFromRealProject(t *testing.T) {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 	_, diagnostics := LoadProgram(link, "import \"./shared.sos\" as shared\ncall shared.greet\n")
-	for _, diagnostic := range diagnostics {
-		if strings.Contains(diagnostic.Message, "cannot read") || strings.Contains(diagnostic.Message, "escapes the project boundary") {
-			t.Fatalf("symlinked entrypoint did not use real project: %+v", diagnostics)
-		}
+	if len(diagnostics) != 0 {
+		t.Fatalf("symlinked entrypoint did not use real project: %+v", diagnostics)
 	}
 }

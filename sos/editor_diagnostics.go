@@ -15,6 +15,9 @@ type EditorDiagnostic struct {
 // EditorDiagnostics preserves canonical errors, but marks registered semantic
 // forms as pending interpretation when the effective language policy permits them.
 func EditorDiagnostics(filename, source string, diagnostics []Diagnostic) []EditorDiagnostic {
+	if canonical, resolveErr := filepath.EvalSymlinks(filename); resolveErr == nil {
+		filename = canonical
+	}
 	cfg, err := EffectiveConfig(source, filepath.Dir(filename))
 	meanings := EditorMeanings(source)
 	pending := map[int]bool{}

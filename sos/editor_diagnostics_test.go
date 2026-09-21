@@ -1,6 +1,7 @@
 package sos
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -31,6 +32,28 @@ func TestEditorSemanticDiagnosticsStayLocalAndPreserveErrors(t *testing.T) {
 	for _, d := range EditorDiagnostics(filename, invalid, Check(invalid)) {
 		if d.Line == 8 && d.Severity != "error" {
 			t.Fatal(d)
+		}
+	}
+}
+
+func TestEditorDiagnosticsUsesRealProjectForSymlinkedFile(t *testing.T) {
+	project := t.TempDir()
+	launcher := t.TempDir()
+	if err := os.WriteFile(filepath.Join(project, "sos.toml"), []byte("version = 1\n[editor]\nassistance = \"off\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	realFile := filepath.Join(project, "main.sos")
+	if err := os.WriteFile(realFile, []byte("placeholder\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(launcher, "main.sos")
+	if err := os.Symlink(realFile, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	source := "only show \"adult\" once age has gone beyond 18\n"
+	for _, diagnostic := range EditorDiagnostics(link, source, Check(source)) {
+		if diagnostic.Severity == "information" {
+			t.Fatalf("symlink ignored target project's disabled editor assistance: %+v", diagnostic)
 		}
 	}
 }

@@ -31,7 +31,14 @@ if (process.env.SYSONESCRIPT_EXPECTED_TARGET) {
 const temp = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'sysonescript-vsix-'))
 try {
   execFileSync('unzip', ['-q', vsixPath, binaries[0], '-d', temp])
-  execFileSync('go', ['version', '-m', path.join(temp, binaries[0])], { stdio: 'pipe' })
+  const runtime = path.join(temp, binaries[0])
+  const metadata = execFileSync('go', ['version', '-m', runtime], { encoding: 'utf8' })
+  const expected = (process.env.SYSONESCRIPT_EXPECTED_TARGET || `${process.platform}-${process.arch}`).replace('win32-', 'windows-').replace('-x64', '-amd64')
+  const [expectedOS, expectedArch] = expected.split('-')
+  assert.match(metadata, new RegExp(`build\\tGOOS=${expectedOS}(?:\\r?\\n|$)`))
+  assert.match(metadata, new RegExp(`build\\tGOARCH=${expectedArch}(?:\\r?\\n|$)`))
+  assert.ok(fs.readFileSync(runtime).includes(Buffer.from(`SysOneScriptVersion=${manifest.version}`)), 'runtime binary is missing the release version marker')
+  if (expectedOS !== 'windows') assert.notEqual(fs.statSync(runtime).mode & 0o111, 0, 'packaged Unix runtime is not executable')
 } finally {
   fs.rmSync(temp, { recursive: true, force: true })
 }

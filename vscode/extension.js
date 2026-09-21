@@ -284,20 +284,24 @@ function runPanelProcess(action, args, cwd, label, commandOverride, onClose) {
   setPanelRun(action, { status: 'running', label: `${label} · running` })
   const child = spawn(command, args, { cwd, env: serverEnvironment(), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
 	state.processes.add(child)
+  state.actionProcesses.set(action, child)
   child.stdout.on('data', chunk => output.append(chunk.toString()))
   child.stderr.on('data', chunk => output.append(chunk.toString()))
   child.on('error', error => {
     output.appendLine(`SysOneScript could not start: ${error.message}`)
-    setPanelRun(action, { status: 'failed', label: `${label} · failed` })
+    if (state.actionProcesses.get(action) === child) setPanelRun(action, { status: 'failed', label: `${label} · failed` })
   })
   child.on('close', code => {
 		state.processes.delete(child)
     const stopped = state.stoppedProcesses.delete(child)
     output.appendLine('')
     output.appendLine(`[${label} ${stopped ? 'stopped' : code === 0 ? 'completed' : `exited with code ${code ?? 'unknown'}`}]`)
-    setPanelRun(action, stopped
-      ? { status: 'stopped', label: `${label} · stopped` }
-      : { status: code === 0 ? 'success' : 'failed', label: `${label} · ${code === 0 ? 'done' : `exit ${code ?? 'unknown'}`}` })
+    if (state.actionProcesses.get(action) === child) {
+      state.actionProcesses.delete(action)
+      setPanelRun(action, stopped
+        ? { status: 'stopped', label: `${label} · stopped` }
+        : { status: code === 0 ? 'success' : 'failed', label: `${label} · ${code === 0 ? 'done' : `exit ${code ?? 'unknown'}`}` })
+    }
     onClose?.(code)
   })
   return child
@@ -489,7 +493,7 @@ async function debugFile(resource) {
     // disappears between the editor action and launch.
   }
   const debugEpoch = extensionState.debugEpoch
-  await vscode.debug.startDebugging(vscode.workspace.getWorkspaceFolder(vscode.Uri.file(root)), {
+  await startDebugSession(vscode.workspace.getWorkspaceFolder(vscode.Uri.file(root)), {
     type: 'sysonescript',
     request: 'launch',
     name: `Debug ${path.basename(file)}`,
@@ -515,12 +519,25 @@ async function debugProject(resource) {
   if (!selected) return
 	if (!await saveWorkspace()) return vscode.window.showWarningMessage('Debug canceled because the workspace could not be saved.')
   setPanelRun('debug', { status: 'running', label: `Debug ${relativeScript(selected.root, selected.file)} · running` })
-  const debugEpoch = extensionState.debugEpoch
-  const started = await vscode.debug.startDebugging(vscode.workspace.getWorkspaceFolder(vscode.Uri.file(selected.root)), {
+  const state = extensionState
+  const debugEpoch = state.debugEpoch
+  const started = await startDebugSession(vscode.workspace.getWorkspaceFolder(vscode.Uri.file(selected.root)), {
     type: 'sysonescript', request: 'launch', name: `Debug ${path.basename(selected.file)}`, program: selected.file, cwd: selected.root, args: [], stopOnEntry: false,
     __sysoneEpoch: debugEpoch,
   })
-  if (!started) setPanelRun('debug', { status: 'failed', label: 'Debug failed to start' })
+  if (!started && extensionState === state && state.debugEpoch === debugEpoch) setPanelRun('debug', { status: 'failed', label: 'Debug failed to start' })
+}
+
+async function startDebugSession(folder, configuration) {
+  const state = extensionState
+  if (!state || state.disposed) return false
+  const launch = vscode.debug.startDebugging(folder, configuration)
+  state.debugLaunches.add(launch)
+  try {
+    return await launch
+  } finally {
+    state.debugLaunches.delete(launch)
+  }
 }
 
 async function setJevToken() {
@@ -805,6 +822,8 @@ async function startServerNow(state) {
     for (const document of vscode.workspace.textDocuments) syncDocument(document)
   }).catch(error => {
     if (extensionState?.client !== client) return
+    state.client = null
+    state.ready = null
     output.appendLine(`Unable to start SysOneScript language server: ${error.message}`)
     vscode.window.showErrorMessage(`SysOneScript language server could not start: ${error.message}`)
   })
@@ -1167,7 +1186,9 @@ function activate(context) {
     opened: new Set(),
 		processes: new Set(),
 		stoppedProcesses: new WeakSet(),
+		actionProcesses: new Map(),
 		debugSessions: new Set(),
+		debugLaunches: new Set(),
     panelRuns: new Map(),
     treeView: null,
     extensionPath: context.extensionPath,
@@ -1201,7 +1222,7 @@ function activate(context) {
 		const state = extensionState
 		if (!state) return
 		state.debugSessions.add(session)
-		if ((session.configuration.__sysoneEpoch ?? -1) < state.debugEpoch) {
+		if (state.disposed || (session.configuration.__sysoneEpoch ?? -1) < state.debugEpoch) {
 			state.stoppedDebugSessions.add(session.id)
 			vscode.debug.stopDebugging(session)
 		}
@@ -1267,8 +1288,10 @@ async function deactivate() {
 	if (!state) return
 	state.disposed = true
 	state.serverGeneration++
+	state.debugEpoch++
 	if (state.client) await state.client.stop()
 	for (const child of state?.processes || []) child.kill()
+	await Promise.allSettled([...state.debugLaunches])
 	for (const session of state?.debugSessions || []) await vscode.debug.stopDebugging(session)
 	extensionState = undefined
 }

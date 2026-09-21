@@ -97,6 +97,10 @@ func RunCLI(args []string, stdout, stderr io.Writer) int {
 		}
 		return runDebugServer(os.Stdin, stdout, stderr)
 	case "version":
+		if sos.ReleaseMarker != "SysOneScriptVersion="+sos.Version {
+			fmt.Fprintln(stderr, "sos: runtime version metadata is inconsistent")
+			return 1
+		}
 		fmt.Fprintf(stdout, "sos %s\n", sos.Version)
 		return 0
 	case "help", "-h", "--help":

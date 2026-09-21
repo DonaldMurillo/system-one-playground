@@ -270,3 +270,9 @@ The packaged-extension smoke test selects the VSIX matching the current manifest
 version and verifies the runtime plus every required JavaScript module. Release
 verification regenerates the semantic lexicon, embedded compiler sources, and
 public documentation before accepting a tag.
+
+Release VSIX files are timestamp-normalized and packaged twice; byte differences
+fail the release. The smoke check validates the target GOOS/GOARCH, Unix execute
+permission, and a linker-injected runtime version marker. Symlinked entry files
+use their target project's configuration consistently for modules, diagnostics,
+and explicit semantic analysis.

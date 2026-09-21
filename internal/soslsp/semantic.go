@@ -297,6 +297,9 @@ func (s *server) sosAnalyze(id json.RawMessage, params json.RawMessage) {
 }
 
 func semanticProjectDir(filename string) string {
+	if canonical, err := filepath.EvalSymlinks(filename); err == nil {
+		filename = canonical
+	}
 	dir := filepath.Dir(filename)
 	for current := dir; ; current = filepath.Dir(current) {
 		if _, err := os.Stat(filepath.Join(current, "sos.toml")); err == nil {
