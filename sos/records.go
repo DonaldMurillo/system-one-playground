@@ -189,10 +189,13 @@ func parseRecordDefinition(statement *Statement) (*RecordDef, []Diagnostic) {
 
 func visibleDefinitions(local map[string]*RecordDef, modules map[string]*Module) (map[string]*RecordDef, []string) {
 	result := map[string]*RecordDef{}
+	localNames := map[string]bool{}
 	for name, definition := range local {
 		result[name] = definition
+		localNames[name] = true
 	}
 	seenImported := map[string]string{}
+	localCollisions := map[string][]string{}
 	aliases := make([]string, 0, len(modules))
 	for alias := range modules {
 		aliases = append(aliases, alias)
@@ -202,6 +205,10 @@ func visibleDefinitions(local map[string]*RecordDef, modules map[string]*Module)
 		module := modules[alias]
 		for name, definition := range module.Definitions {
 			if !module.Exports[name] {
+				continue
+			}
+			if localNames[name] {
+				localCollisions[name] = append(localCollisions[name], alias)
 				continue
 			}
 			if existing, ok := result[name]; ok && existing != definition {
@@ -220,6 +227,14 @@ func visibleDefinitions(local map[string]*RecordDef, modules map[string]*Module)
 		}
 	}
 	var collisions []string
+	localCollisionNames := make([]string, 0, len(localCollisions))
+	for name := range localCollisions {
+		localCollisionNames = append(localCollisionNames, name)
+	}
+	sort.Strings(localCollisionNames)
+	for _, name := range localCollisionNames {
+		collisions = append(collisions, fmt.Sprintf("type name %s is declared locally and exported by import(s) %s", name, strings.Join(localCollisions[name], ", ")))
+	}
 	importedNames := make([]string, 0, len(seenImported))
 	for name := range seenImported {
 		importedNames = append(importedNames, name)

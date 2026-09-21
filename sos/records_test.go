@@ -229,6 +229,29 @@ to forward with values as list of integer returning integer:
 	}
 }
 
+func TestNamedRecordCheckerRejectsLocalImportedTypeCollision(t *testing.T) {
+	dir := t.TempDir()
+	people := filepath.Join(dir, "people")
+	if err := os.MkdirAll(people, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTestFile(filepath.Join(people, "people.sos"), `package people
+export Account
+define Account:
+  id as text
+`); err != nil {
+		t.Fatal(err)
+	}
+	source := `import "./people" as people
+define Account:
+  name as text
+`
+	_, diagnostics := LoadProgram(filepath.Join(dir, "main.sos"), source)
+	if len(diagnostics) == 0 || !strings.Contains(diagnostics[0].Message, "type name Account is declared locally and exported by import(s) people") {
+		t.Fatalf("diagnostics = %+v", diagnostics)
+	}
+}
+
 func TestNamedRecordNestedAndListTypes(t *testing.T) {
 	source := `define Address:
   city as text
