@@ -3,8 +3,9 @@ package soslsp
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/DonaldMurillo/system-one-playground/sos"
 	"strings"
+
+	"github.com/DonaldMurillo/system-one-playground/sos"
 )
 
 // hover combines a precise lexical selection with its containing sentence.
@@ -36,6 +37,13 @@ func (s *server) hover(params json.RawMessage) any {
 				if failure := program.Failures[token.Text]; failure != nil {
 					role = "failure"
 					detail = failureSignature(failure)
+				}
+			}
+			for i := range catalog.Definitions {
+				if catalog.Definitions[i].Name == token.Text {
+					role = "type"
+					detail = recordSignature(&catalog.Definitions[i])
+					break
 				}
 			}
 			for i := range catalog.Failures {

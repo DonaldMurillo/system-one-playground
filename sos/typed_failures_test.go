@@ -376,6 +376,32 @@ otherwise:
 	}
 }
 
+func TestTypedFailureCaptureRejectsUnknownResultFields(t *testing.T) {
+	for _, source := range []string{
+		`define failure Missing:
+to fetch returning text may fail with Missing:
+  fail Missing with "missing"
+capture fetch called outcome
+when succeeded of outcome:
+  show mystery of outcome
+`,
+		`define failure Missing:
+to fetch returning text may fail with Missing:
+  fail Missing with "missing"
+capture fetch called outcome
+when succeeded of outcome:
+  show "ok"
+otherwise:
+  show mystery of outcome
+`,
+	} {
+		diagnostics := Check(source)
+		if len(diagnostics) == 0 || !strings.Contains(diagnostics[0].Message, "Result has no field mystery") {
+			t.Fatalf("diagnostics = %+v", diagnostics)
+		}
+	}
+}
+
 func TestTypedFailureContractsAreClosed(t *testing.T) {
 	source := `define failure InvalidCity:
   city as text

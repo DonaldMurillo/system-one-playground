@@ -684,15 +684,7 @@ func buildModule(key string, files []*moduleFileDecls) (*Module, []Diagnostic) {
 				m.Actions[name] = s
 				m.fileImports[name] = f.aliases
 				m.fileVocabs[name] = f.vocab
-				actionPath := f.name
-				if !filepath.IsAbs(actionPath) {
-					if info, err := os.Stat(key); err == nil && info.IsDir() {
-						actionPath = filepath.Join(key, actionPath)
-					} else if filepath.Ext(key) == ".sos" {
-						actionPath = key
-					}
-				}
-				m.actionPaths[name] = actionPath
+				m.actionPaths[name] = filepath.Join(m.Name, f.name)
 			case "schema":
 				name := match("schema", s.Text)[1]
 				if m.Schemas[name] != nil {

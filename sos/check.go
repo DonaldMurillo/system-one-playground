@@ -51,7 +51,7 @@ func analyze(p *Program) []Diagnostic {
 		}
 	}
 	add := func(s *Statement, msg string) { ds = append(ds, Diagnostic{s.Line, 1, msg}) }
-	checkActionArgs := func(s *Statement, action string, args []string) {
+	checkActionArgs := func(s *Statement, action string, args []string, checkArity bool) {
 		fn := actions[action]
 		targetDefs := visibleDefs
 		if fn == nil && strings.Contains(action, ".") {
@@ -74,7 +74,7 @@ func analyze(p *Program) []Diagnostic {
 		if err != nil {
 			return
 		}
-		if len(args) != len(decl.Params) {
+		if checkArity && len(args) != len(decl.Params) {
 			add(s, fmt.Sprintf("%s expects %d argument(s)", action, len(decl.Params)))
 		}
 		for i, arg := range args {
@@ -260,7 +260,7 @@ func analyze(p *Program) []Diagnostic {
 				for _, v := range args {
 					checkExpr(s, v, false)
 				}
-				checkActionArgs(s, m[1], args)
+				checkActionArgs(s, m[1], args, false)
 				if m[4] != "" {
 					names[m[4]] = true
 				}
@@ -295,7 +295,7 @@ func analyze(p *Program) []Diagnostic {
 				for _, v := range args {
 					checkExpr(s, v, false)
 				}
-				checkActionArgs(s, m[1], args)
+				checkActionArgs(s, m[1], args, true)
 				if m[3] != "" {
 					names[m[3]] = true
 					delete(types, m[3])
@@ -1144,11 +1144,17 @@ func knownFieldProblem(field, receiver string, types map[string]TypeRef, defs ma
 		if field == "failure" {
 			return "Result.failure is unavailable in a successful branch"
 		}
+		if field != "succeeded" && field != "value" {
+			return fmt.Sprintf("Result has no field %s", field)
+		}
 		return ""
 	}
 	if typ.Name == "ResultFailure" {
 		if field == "value" {
 			return "Result.value is unavailable in a failed branch"
+		}
+		if field != "succeeded" && field != "failure" {
+			return fmt.Sprintf("Result has no field %s", field)
 		}
 		return ""
 	}
@@ -1177,11 +1183,21 @@ func dottedFieldProblem(expression string, types map[string]TypeRef, defs map[st
 			typ = TypeRef{}
 			continue
 		}
-		if typ.Name == "ResultSuccess" && field == "failure" {
-			return "Result.failure is unavailable in a successful branch"
+		if typ.Name == "ResultSuccess" {
+			if field == "failure" {
+				return "Result.failure is unavailable in a successful branch"
+			}
+			if field != "succeeded" && field != "value" {
+				return fmt.Sprintf("Result has no field %s", field)
+			}
 		}
-		if typ.Name == "ResultFailure" && field == "value" {
-			return "Result.value is unavailable in a failed branch"
+		if typ.Name == "ResultFailure" {
+			if field == "value" {
+				return "Result.value is unavailable in a failed branch"
+			}
+			if field != "succeeded" && field != "failure" {
+				return fmt.Sprintf("Result has no field %s", field)
+			}
 		}
 		def := defs[typ.Name]
 		if def == nil {

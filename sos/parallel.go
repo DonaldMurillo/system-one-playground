@@ -211,6 +211,7 @@ func (r *runtime) parallelMap(s *Statement, m []string) error {
 				child.env["number"] = float64(index + 1)
 				child.functions = copyStatements(r.functions)
 				child.schemas = copyStatements(r.schemas)
+				child.types = copyTypes(r.types)
 				child.debugStack = append([]DebugFrame(nil), r.debugStack...)
 				child.result = &Result{Traces: []Trace{}}
 				child.recording = nil

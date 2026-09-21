@@ -307,21 +307,35 @@ func (s *server) completion(params json.RawMessage) any {
 			})
 		}
 	}
+	catalog, _ := s.vocabularyFor(uri, vocabFilename(uri, s.workspaceRoot), text)
+	seenTypes := map[string]bool{}
+	for _, item := range items {
+		if label, is := item["label"].(string); is {
+			seenTypes[label] = true
+		}
+	}
+	for i := range catalog.Definitions {
+		definition := &catalog.Definitions[i]
+		if seenTypes[definition.Name] || prefix != "" && !strings.HasPrefix(strings.ToLower(definition.Name), prefix) {
+			continue
+		}
+		items = append(items, map[string]any{
+			"label": definition.Name, "kind": 7, "detail": recordSignature(definition),
+			"textEdit": wordEdit(definition.Name),
+		})
+		seenTypes[definition.Name] = true
+	}
 	// The vocabulary catalog includes exported failure types from resolved
 	// imports. They are types, not callable word targets, so complete them
 	// directly in failure positions (including every slot after a comma).
 	if semanticContext {
-		catalog, _ := s.vocabularyFor(uri, vocabFilename(uri, s.workspaceRoot), text)
-		seen := map[string]bool{}
-		for _, item := range items {
-			seen[strings.ToLower(item["label"].(string))] = true
-		}
 		for i := range catalog.Failures {
 			definition := &catalog.Failures[i]
-			if seen[strings.ToLower(definition.Name)] || prefix != "" && !strings.HasPrefix(strings.ToLower(definition.Name), prefix) {
+			if seenTypes[definition.Name] || prefix != "" && !strings.HasPrefix(strings.ToLower(definition.Name), prefix) {
 				continue
 			}
 			items = append(items, map[string]any{"label": definition.Name, "kind": 7, "detail": failureSignature(definition), "textEdit": wordEdit(definition.Name)})
+			seenTypes[definition.Name] = true
 		}
 	}
 	// Vocabulary words from the shared catalog: exactly the forms enabled by

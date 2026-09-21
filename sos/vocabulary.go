@@ -157,7 +157,7 @@ func buildFileVocab(bindings []importBinding, localActions map[string]bool, diag
 				if prev.module.Key == b.module.Key && prev.action == canon {
 					continue // same library reachable twice; one meaning
 				}
-				diag(b.line, "vocabulary word %q from %s collides with the same word from %s; import one with an as alias (for example as = %q) to require its prefix", w, b.ref, prev.module.Name, b.module.Name)
+				diag(b.line, "vocabulary word %q from %s collides with the same word from %s; import one with an as alias (for example import %q as %s) to require its prefix", w, b.ref, prev.module.Name, b.ref, b.module.Name)
 				continue
 			}
 			if reservedWords[w] {
@@ -288,9 +288,10 @@ func ParseWithVocabulary(source string, modules *ModuleTable) (*Program, []Diagn
 // VocabularyCatalog is the offline searchable vocabulary surface for one
 // source file: its enabled word forms plus discoverable library entries.
 type VocabularyCatalog struct {
-	Entries   []VocabularyEntry   `json:"entries"`
-	Libraries []VocabularyLibrary `json:"libraries"`
-	Failures  []FailureDef        `json:"failures,omitempty"`
+	Entries     []VocabularyEntry   `json:"entries"`
+	Libraries   []VocabularyLibrary `json:"libraries"`
+	Definitions []RecordDef         `json:"definitions,omitempty"`
+	Failures    []FailureDef        `json:"failures,omitempty"`
 }
 
 // VocabularyParam is one typed parameter of a vocabulary entry.
@@ -338,23 +339,22 @@ func Vocabulary(filename, source string) (*VocabularyCatalog, []Diagnostic) {
 	p, ds, loader := resolveModulesLoaded(filename, source)
 	catalog := &VocabularyCatalog{Entries: []VocabularyEntry{}, Libraries: []VocabularyLibrary{}}
 	if p != nil {
-		for _, name := range sortedFailureNames(p.Failures) {
-			catalog.Failures = append(catalog.Failures, *p.Failures[name])
-		}
+		modules := map[string]*Module(nil)
 		if p.Modules != nil {
-			seen := map[string]bool{}
-			for _, definition := range catalog.Failures {
-				seen[definition.Name] = true
-			}
-			for _, module := range p.Modules.Aliases {
-				for name, definition := range module.Failures {
-					if module.Exports[name] && !seen[name] {
-						catalog.Failures = append(catalog.Failures, *definition)
-						seen[name] = true
-					}
-				}
-			}
-			sort.Slice(catalog.Failures, func(i, j int) bool { return catalog.Failures[i].Name < catalog.Failures[j].Name })
+			modules = p.Modules.Aliases
+		}
+		definitions, _ := visibleDefinitions(p.Definitions, modules)
+		definitionNames := make([]string, 0, len(definitions))
+		for name := range definitions {
+			definitionNames = append(definitionNames, name)
+		}
+		sort.Strings(definitionNames)
+		for _, name := range definitionNames {
+			catalog.Definitions = append(catalog.Definitions, *definitions[name])
+		}
+		failures, _ := visibleFailureDefinitionsWithProblems(p)
+		for _, name := range sortedFailureNames(failures) {
+			catalog.Failures = append(catalog.Failures, *failures[name])
 		}
 	}
 	enabledKeys := map[string]bool{}

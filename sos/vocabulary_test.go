@@ -277,10 +277,10 @@ func TestSentArityMismatchIsCheckError(t *testing.T) {
 		"media/media.sos": "package media\nexport join\n\nto join with first, second:\n  return first\n",
 	})
 	_, ds := LoadProgram(filepath.Join(dir, "main.sos"), "import \"example.com/acme/media\"\njoin \"only\" called v\nshow v\n")
-	// Single argument against a two-parameter action: the line cannot
-	// reclassify, so it stays an unknown construction.
-	if len(ds) != 1 || !strings.Contains(ds[0].Message, "unknown construction") {
-		t.Fatalf("arity-mismatched sentence call must stay unknown, got %+v", ds)
+	// The vocabulary word resolves independently of arity, so users get one
+	// actionable signature diagnostic rather than an unknown construction.
+	if len(ds) != 1 || !strings.Contains(ds[0].Message, "join expects 2 argument(s)") {
+		t.Fatalf("arity-mismatched sentence call must report one signature error, got %+v", ds)
 	}
 }
 

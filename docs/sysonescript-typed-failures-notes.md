@@ -33,6 +33,13 @@ clients consume its parsed metadata instead of maintaining duplicate registries.
 - Wrapped `returning` and `may fail with` action headers must be normalized by
   both the parser and semantic preanalysis. Sharing that normalization keeps a
   canonical declaration deterministic and prevents accidental Jev requests.
+- Parallel runtimes must clone the checker/runtime type map as well as the
+  value environment; sharing that mutable map creates races between workers.
+- Module failure frames use logical package-relative source identities. Never
+  embed a build host's absolute checkout path in a standalone artifact.
+- Vocabulary and LSP catalogs expose imported record and failure definitions
+  from the same resolved scope used by the checker, including deterministic
+  collision diagnostics.
 
 ## Follow-up seams
 

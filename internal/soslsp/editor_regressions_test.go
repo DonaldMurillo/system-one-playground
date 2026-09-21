@@ -2,13 +2,14 @@ package soslsp
 
 import (
 	"encoding/json"
-	"github.com/DonaldMurillo/system-one-playground/internal/sossyntax"
-	"github.com/DonaldMurillo/system-one-playground/sos"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/DonaldMurillo/system-one-playground/internal/sossyntax"
+	"github.com/DonaldMurillo/system-one-playground/sos"
 )
 
 func TestCompletionQualifiedImportEditsStayExecutable(t *testing.T) {
@@ -137,6 +138,54 @@ func TestFailureCompletionAfterCommaIncludesImportedFailures(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("imported failure completion missing after comma: %+v", items)
+	}
+}
+
+func TestImportedRecordTypesCompleteAndHover(t *testing.T) {
+	root := t.TempDir()
+	writeModule(t, root, "example.com/demo", map[string]string{
+		"people/types.sos": "package people\nexport User\ndefine User:\n  name as text\n  age as optional number\n",
+	})
+	if err := os.WriteFile(filepath.Join(root, "sos.toml"), []byte("version = 1\n[module]\npath = \"example.com/demo\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	source := "import \"example.com/demo/people\"\nmake user as Us\nmake other as User\n"
+	mainPath := filepath.Join(root, "main.sos")
+	if err := os.WriteFile(mainPath, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	uri := "file://" + mainPath
+	catalog, diagnostics := sos.Vocabulary(mainPath, source)
+	if len(catalog.Definitions) == 0 {
+		t.Fatalf("fixture did not resolve imported records: definitions=%+v diagnostics=%+v", catalog.Definitions, diagnostics)
+	}
+	messages, err := runLSP(t,
+		lspRequest(1, "initialize", map[string]any{"rootUri": "file://" + root}),
+		openDoc(uri, source),
+		lspRequest(2, "textDocument/completion", map[string]any{"textDocument": map[string]any{"uri": uri}, "position": map[string]int{"line": 1, "character": 15}}),
+		lspRequest(3, "textDocument/hover", map[string]any{"textDocument": map[string]any{"uri": uri}, "position": map[string]int{"line": 2, "character": 16}}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := lspResult(t, messages, 2)["result"].([]any)
+	found := false
+	for _, raw := range items {
+		item := raw.(map[string]any)
+		if item["label"] == "User" {
+			found = true
+			if !strings.Contains(item["detail"].(string), "age as optional number") {
+				t.Fatalf("imported record completion lacks fields: %+v", item)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("imported record completion missing: %+v", items)
+	}
+	hover := lspResult(t, messages, 3)["result"].(map[string]any)
+	contents := hover["contents"].(map[string]any)["value"].(string)
+	if !strings.Contains(contents, "Selected · type") || !strings.Contains(contents, "age as optional number") {
+		t.Fatalf("imported record hover = %q", contents)
 	}
 }
 

@@ -155,7 +155,7 @@ func filterVocabCatalog(c *sos.VocabularyCatalog, query, library string) *sos.Vo
 	if libs == nil {
 		libs = []sos.VocabularyLibrary{}
 	}
-	return &sos.VocabularyCatalog{Entries: entries, Libraries: libs, Failures: append([]sos.FailureDef(nil), c.Failures...)}
+	return &sos.VocabularyCatalog{Entries: entries, Libraries: libs, Definitions: append([]sos.RecordDef(nil), c.Definitions...), Failures: append([]sos.FailureDef(nil), c.Failures...)}
 }
 
 func filterEntries(entries []sos.VocabularyEntry, keep func(sos.VocabularyEntry) bool) []sos.VocabularyEntry {
