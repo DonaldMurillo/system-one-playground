@@ -26,7 +26,10 @@ for (const [name, xml] of [
   ['identity outside metadata', '<PackageManifest><Identity Id="one" /></PackageManifest>'],
   ['multiple roots', '<PackageManifest><Metadata><Identity Id="one" /></Metadata></PackageManifest><PackageManifest />'],
   ['CDATA outside root', '<![CDATA[bad]]><PackageManifest><Metadata><Identity Id="one" /></Metadata></PackageManifest>'],
-  ['malformed parent attribute', '<PackageManifest bogus><Metadata><Identity Id="one" /></Metadata></PackageManifest>']
+  ['malformed parent attribute', '<PackageManifest bogus><Metadata><Identity Id="one" /></Metadata></PackageManifest>'],
+  ['invalid comment', '<PackageManifest><Metadata><Identity Id="one" /></Metadata></PackageManifest><!-- bad--comment -->'],
+  ['undefined entity', '<PackageManifest><Metadata>&bogus;<Identity Id="one" /></Metadata></PackageManifest>'],
+  ['unescaped attribute content', '<PackageManifest><Metadata><Identity Id="one&two" /></Metadata></PackageManifest>']
 ]) {
   test(`rejects ${name}`, () => assert.throws(() => parseIdentity(xml)))
 }

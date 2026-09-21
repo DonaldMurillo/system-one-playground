@@ -133,7 +133,7 @@ func openExecutable(path string) (*executable, error) {
 			return nil, fmt.Errorf("release marker must have exactly one defined external PE data symbol")
 		}
 		section := f.Sections[matches[0].SectionNumber-1]
-		if section.Characteristics&0x40000000 == 0 || section.Characteristics&0x80000000 == 0 || section.Characteristics&0x00000040 == 0 || section.Characteristics&0x02000020 != 0 {
+		if section.Characteristics&0x40000000 == 0 || section.Characteristics&0x80000000 == 0 || section.Characteristics&0x00000040 == 0 || section.Characteristics&0x22000020 != 0 {
 			return nil, fmt.Errorf("PE release marker symbol is not in a readable loadable section")
 		}
 		sectionAddr, ok := checkedAdd(imageBase, uint64(section.VirtualAddress))
@@ -154,7 +154,7 @@ func openExecutable(path string) (*executable, error) {
 				if !ok {
 					continue
 				}
-				if section.Characteristics&0x40000000 != 0 && section.Characteristics&0x02000020 == 0 && contains(start, uint64(section.Size), address, size) {
+				if section.Characteristics&0x40000000 != 0 && section.Characteristics&0x22000020 == 0 && contains(start, uint64(section.Size), address, size) {
 					return readAddress(section, start, uint64(section.Size), address, size)
 				}
 			}

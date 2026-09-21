@@ -297,7 +297,7 @@ jobs:
             package_path="$(realpath "$vsix")"
             published=false
             for attempt in 1 2 3 4 5; do
-              if pnpm --dir vscode exec vsce publish --no-dependencies --skip-duplicate --packagePath "$package_path"; then
+              if pnpm --dir vscode exec vsce publish --no-dependencies --packagePath "$package_path"; then
                 published=true
                 break
               fi
