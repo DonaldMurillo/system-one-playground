@@ -37,7 +37,7 @@ try {
   const [expectedOS, expectedArch] = expected.split('-')
   assert.match(metadata, new RegExp(`build\\tGOOS=${expectedOS}(?:\\r?\\n|$)`))
   assert.match(metadata, new RegExp(`build\\tGOARCH=${expectedArch}(?:\\r?\\n|$)`))
-  assert.ok(fs.readFileSync(runtime).includes(Buffer.from(`SysOneScriptVersion=${manifest.version}`)), 'runtime binary is missing the release version marker')
+  assert.ok(fs.readFileSync(runtime).includes(Buffer.from(`SysOneScriptVersion=${manifest.version};SysOneScriptVersionEnd`)), 'runtime binary is missing the exact release version marker')
   if (expectedOS !== 'windows') assert.notEqual(fs.statSync(runtime).mode & 0o111, 0, 'packaged Unix runtime is not executable')
 } finally {
   fs.rmSync(temp, { recursive: true, force: true })

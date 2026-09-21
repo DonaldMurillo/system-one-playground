@@ -281,4 +281,7 @@ Document synchronization also routes through the restart gate after a failed
 language-server initialization instead of dereferencing a missing readiness
 promise. Explain and canonicalize resolve symlink targets before loading project
 policy. GitHub Release publication verifies the remote tag still identifies the
-tested commit and uploads artifacts with replacement semantics on safe reruns.
+tested commit. Repository release immutability is enabled; CI creates a draft,
+uploads every asset, rechecks the tag, publishes atomically, and verifies the
+resulting release attestation. Marketplace retries skip only platform versions
+that are already published.

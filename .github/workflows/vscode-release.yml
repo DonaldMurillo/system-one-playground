@@ -128,7 +128,7 @@ jobs:
           version="${GITHUB_REF_NAME#vscode-v}"
           rm -rf vscode/bin release/cli
           mkdir -p vscode/bin release/cli
-          version_ldflag="-X github.com/DonaldMurillo/system-one-playground/sos.Version=$version -X github.com/DonaldMurillo/system-one-playground/sos.ReleaseMarker=SysOneScriptVersion=$version"
+          version_ldflag="-X github.com/DonaldMurillo/system-one-playground/sos.Version=$version -X github.com/DonaldMurillo/system-one-playground/sos.ReleaseMarker=SysOneScriptVersion=$version;SysOneScriptVersionEnd"
           go build -trimpath -ldflags "$version_ldflag" -o "vscode/bin/${{ matrix.binary }}" ./cmd/sos
           go build -trimpath -ldflags "$version_ldflag" -o "release/cli/${{ matrix.binary }}" ./cmd/sos
           if [ "${{ matrix.goos }}" = "windows" ]; then
@@ -208,16 +208,27 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           version="${GITHUB_REF_NAME#vscode-v}"
-          git fetch --force origin "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
-          test "$(git rev-parse "${GITHUB_REF_NAME}^{commit}")" = "$GITHUB_SHA"
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" release/*.tar.gz release/*.zip release/checksums.txt release/install.sh release/install.ps1 --clobber
-          else
-            gh release create "$GITHUB_REF_NAME" release/*.tar.gz release/*.zip release/checksums.txt release/install.sh release/install.ps1 \
+          verify_tag() {
+            git fetch --force origin "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
+            test "$(git rev-parse "${GITHUB_REF_NAME}^{commit}")" = "$GITHUB_SHA"
+          }
+          verify_tag
+          if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" \
+              --draft \
               --verify-tag \
+              --target "$GITHUB_SHA" \
               --title "SysOneScript v${version}" \
               --generate-notes
           fi
+          if [ "$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft)" = "true" ]; then
+            gh release upload "$GITHUB_REF_NAME" release/*.tar.gz release/*.zip release/checksums.txt release/install.sh release/install.ps1 --clobber
+            verify_tag
+            gh release edit "$GITHUB_REF_NAME" --draft=false --verify-tag --target "$GITHUB_SHA" --title "SysOneScript v${version}"
+          else
+            echo "GitHub Release $GITHUB_REF_NAME is already published; immutable assets are unchanged."
+          fi
+          gh release verify "$GITHUB_REF_NAME"
 
       - name: Publish platform extensions when configured
         env:
@@ -228,5 +239,5 @@ jobs:
             exit 0
           fi
           for vsix in release/*.vsix; do
-            pnpm --dir vscode exec vsce publish --no-dependencies --packagePath "$vsix"
+            pnpm --dir vscode exec vsce publish --no-dependencies --skip-duplicate --packagePath "$vsix"
           done
