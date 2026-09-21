@@ -74,11 +74,11 @@
     "LICENSE"
   ],
   "scripts": {
-    "check": "node --check extension.js && node --check lsp-client.js && node --check project.js && node --check semantic.js && node --check test/lsp-client.test.js && node --check test/project.test.js && node --check test/semantic.test.js",
+    "check": "node --check extension.js && node --check lsp-client.js && node --check project.js && node --check semantic.js && node --check test/*.js",
     "test": "node --test test/*.test.js",
     "prepackage": "node test/build-runtime.js",
     "package": "pnpm exec vsce package --no-dependencies --allow-unused-files-pattern",
-    "package:smoke": "node test/package-smoke.js"
+    "package:smoke": "node test/package-smoke-current.js"
   },
   "contributes": {
     "walkthroughs": [

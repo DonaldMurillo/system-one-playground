@@ -2,13 +2,14 @@ const assert = require('node:assert/strict')
 const { execFileSync } = require('node:child_process')
 const fs = require('node:fs')
 const path = require('node:path')
+const { parseIdentity } = require('./vsix-identity')
 
 const packageRoot = path.resolve(__dirname, '..')
 const manifest = require('../package.json')
-const defaultVsix = `${manifest.name}-${manifest.version}.vsix`
-const supplied = process.argv.slice(2).filter(name => name !== '--')
-assert.ok(supplied.length === 0 || (supplied.length === 1 && supplied[0].endsWith('.vsix')), 'expected no arguments or exactly one VSIX path')
-const vsix = supplied[0] || defaultVsix
+const supplied = process.argv.slice(2)
+assert.equal(supplied.length, 1, 'expected exactly one VSIX path')
+assert.ok(supplied[0].endsWith('.vsix'), 'expected exactly one VSIX path')
+const vsix = supplied[0]
 const expectedTarget = process.env.SYSONESCRIPT_EXPECTED_TARGET
 const expectedName = `${manifest.name}${expectedTarget ? `-${expectedTarget}` : ''}-${manifest.version}.vsix`
 assert.equal(path.basename(vsix), expectedName, 'VSIX filename does not match the exact current version and expected target')
@@ -27,14 +28,15 @@ assert.equal(packaged.name, manifest.name)
 assert.equal(packaged.publisher, manifest.publisher)
 assert.equal(packaged.version, manifest.version)
 const vsixManifest = execFileSync('unzip', ['-p', vsixPath, 'extension.vsixmanifest'], { encoding: 'utf8' })
-const effectiveXml = vsixManifest.replace(/<!--[\s\S]*?-->/g, '')
-const identities = [...effectiveXml.matchAll(/<Identity\s+([^>]*?)\s*\/?\s*>/g)]
-assert.equal(identities.length, 1, 'VSIX manifest must contain exactly one effective Identity element')
-const identity = {}
-for (const match of identities[0][1].matchAll(/([A-Za-z_:][\w:.-]*)\s*=\s*"([^"]*)"/g)) {
-  assert.ok(!(match[1] in identity), `duplicate Identity attribute ${match[1]}`)
-  identity[match[1]] = match[2]
+const identity = parseIdentity(vsixManifest)
+const expectedIdentity = {
+  Id: manifest.name,
+  Language: 'en-US',
+  Publisher: manifest.publisher,
+  Version: manifest.version,
+  ...(expectedTarget ? { TargetPlatform: expectedTarget } : {})
 }
+assert.deepEqual(identity, expectedIdentity, 'VSIX Identity must contain exactly the expected attributes and values')
 assert.equal(identity.Id, manifest.name)
 assert.equal(identity.Version, manifest.version)
 assert.equal(identity.Publisher, manifest.publisher)
