@@ -276,3 +276,9 @@ fail the release. The smoke check validates the target GOOS/GOARCH, Unix execute
 permission, and a linker-injected runtime version marker. Symlinked entry files
 use their target project's configuration consistently for modules, diagnostics,
 and explicit semantic analysis.
+
+Document synchronization also routes through the restart gate after a failed
+language-server initialization instead of dereferencing a missing readiness
+promise. Explain and canonicalize resolve symlink targets before loading project
+policy. GitHub Release publication verifies the remote tag still identifies the
+tested commit and uploads artifacts with replacement semantics on safe reruns.

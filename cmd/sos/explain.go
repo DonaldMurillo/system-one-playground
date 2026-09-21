@@ -154,6 +154,9 @@ func cmdExplain(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
+	if canonical, resolveErr := filepath.EvalSymlinks(absPath); resolveErr == nil {
+		absPath = canonical
+	}
 	dir := filepath.Dir(absPath)
 	if err = sos.LoadEnv(filepath.Join(dir, ".env")); err != nil {
 		fmt.Fprintln(stderr, err)
@@ -349,6 +352,9 @@ func canonicalizeProjectDir(path string) (string, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return "", err
+	}
+	if canonical, resolveErr := filepath.EvalSymlinks(abs); resolveErr == nil {
+		abs = canonical
 	}
 	dir := filepath.Dir(abs)
 	for current := dir; ; current = filepath.Dir(current) {

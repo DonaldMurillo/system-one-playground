@@ -64,6 +64,30 @@ func TestCanonicalizeProjectDirUsesNearestManifest(t *testing.T) {
 	}
 }
 
+func TestCanonicalizeProjectDirUsesSymlinkTargetManifest(t *testing.T) {
+	project := t.TempDir()
+	launcher := t.TempDir()
+	if err := os.WriteFile(filepath.Join(project, "sos.toml"), []byte("version = 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	realFile := filepath.Join(project, "main.sos")
+	if err := os.WriteFile(realFile, []byte("show \"ok\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(launcher, "main.sos")
+	if err := os.Symlink(realFile, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	want, err := filepath.EvalSymlinks(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := canonicalizeProjectDir(link)
+	if err != nil || got != want {
+		t.Fatalf("project dir = %q, %v; want %q", got, err, want)
+	}
+}
+
 func TestRunCanPersistTheExactAnalysisForEditorReuse(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "main.sos")

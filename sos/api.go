@@ -11,7 +11,7 @@ var Version = "0.6.0"
 
 // ReleaseMarker is linked alongside Version so packaged cross-platform
 // runtimes can be verified without executing a foreign binary.
-var ReleaseMarker = "SysOneScriptVersion=0.6.0"
+var ReleaseMarker = "SysOneScriptVersion=development"
 
 type Diagnostic struct {
 	Line    int    `json:"line"`

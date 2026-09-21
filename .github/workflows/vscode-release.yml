@@ -208,9 +208,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           version="${GITHUB_REF_NAME#vscode-v}"
-          gh release create "$GITHUB_REF_NAME" release/*.tar.gz release/*.zip release/checksums.txt release/install.sh release/install.ps1 \
-            --title "SysOneScript v${version}" \
-            --generate-notes
+          git fetch --force origin "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
+          test "$(git rev-parse "${GITHUB_REF_NAME}^{commit}")" = "$GITHUB_SHA"
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" release/*.tar.gz release/*.zip release/checksums.txt release/install.sh release/install.ps1 --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" release/*.tar.gz release/*.zip release/checksums.txt release/install.sh release/install.ps1 \
+              --verify-tag \
+              --title "SysOneScript v${version}" \
+              --generate-notes
+          fi
 
       - name: Publish platform extensions when configured
         env:

@@ -892,28 +892,34 @@ function registerDocumentSync(context) {
   context.subscriptions.push(vscode.workspace.onDidOpenTextDocument(document => {
     const state = extensionState
     if (!state || !isSysOneScript(document)) return
-    state.ready.then(() => syncDocument(document)).catch(() => {})
+    withReadyServer(state, () => syncDocument(document))
   }))
   context.subscriptions.push(vscode.workspace.onDidChangeTextDocument(event => {
     const state = extensionState
     if (!state || !isSysOneScript(event.document)) return
     state.semanticAnalyses.delete(event.document.uri.toString())
     state.semanticLensEmitter?.fire()
-    state.ready.then(() => {
+    withReadyServer(state, () => {
       if (!state.opened.has(event.document.uri.toString())) syncDocument(event.document)
       else state.client.notify('textDocument/didChange', {
         textDocument: { uri: event.document.uri.toString(), version: event.document.version },
         contentChanges: [{ text: event.document.getText() }],
       })
-    }).catch(() => {})
+    })
   }))
   context.subscriptions.push(vscode.workspace.onDidCloseTextDocument(document => {
     const state = extensionState
     if (!state || !isSysOneScript(document)) return
     const documentUri = document.uri.toString()
     if (!state.opened.delete(documentUri)) return
-    state.ready.then(() => state.client.notify('textDocument/didClose', { textDocument: { uri: documentUri } })).catch(() => {})
+    withReadyServer(state, () => state.client.notify('textDocument/didClose', { textDocument: { uri: documentUri } }))
   }))
+}
+
+function withReadyServer(state, action) {
+  waitForServer(state).then(() => state.ready).then(() => {
+    if (!state.disposed && extensionState === state && state.client?.initialized) action()
+  }).catch(() => {})
 }
 
 function registerLanguageProviders(context) {
