@@ -44,3 +44,28 @@ func TestNestedEntrypointUsesProjectConfigAsBoundaryWithoutModulePath(t *testing
 		}
 	}
 }
+
+func TestSymlinkedEntrypointResolvesImportsFromRealProject(t *testing.T) {
+	project := t.TempDir()
+	launcher := t.TempDir()
+	if err := os.WriteFile(filepath.Join(project, "sos.toml"), []byte("version = 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "shared.sos"), []byte("package shared\nexport greet\nto greet:\n  show \"hello\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	entry := filepath.Join(project, "main.sos")
+	if err := os.WriteFile(entry, []byte("placeholder\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(launcher, "main.sos")
+	if err := os.Symlink(entry, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	_, diagnostics := LoadProgram(link, "import \"./shared.sos\" as shared\ncall shared.greet\n")
+	for _, diagnostic := range diagnostics {
+		if strings.Contains(diagnostic.Message, "cannot read") || strings.Contains(diagnostic.Message, "escapes the project boundary") {
+			t.Fatalf("symlinked entrypoint did not use real project: %+v", diagnostics)
+		}
+	}
+}

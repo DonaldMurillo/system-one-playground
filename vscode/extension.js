@@ -292,9 +292,12 @@ function runPanelProcess(action, args, cwd, label, commandOverride, onClose) {
   })
   child.on('close', code => {
 		state.processes.delete(child)
+    const stopped = state.stoppedProcesses.delete(child)
     output.appendLine('')
-    output.appendLine(`[${label} ${code === 0 ? 'completed' : `exited with code ${code ?? 'unknown'}`}]`)
-    setPanelRun(action, { status: code === 0 ? 'success' : 'failed', label: `${label} · ${code === 0 ? 'done' : `exit ${code ?? 'unknown'}`}` })
+    output.appendLine(`[${label} ${stopped ? 'stopped' : code === 0 ? 'completed' : `exited with code ${code ?? 'unknown'}`}]`)
+    setPanelRun(action, stopped
+      ? { status: 'stopped', label: `${label} · stopped` }
+      : { status: code === 0 ? 'success' : 'failed', label: `${label} · ${code === 0 ? 'done' : `exit ${code ?? 'unknown'}`}` })
     onClose?.(code)
   })
   return child
@@ -441,7 +444,10 @@ async function canonicalizeActiveDocument() {
 async function stopProcesses() {
 	const state = extensionState
 	state.debugEpoch++
-	for (const child of state.processes) child.kill()
+	for (const child of state.processes) {
+		state.stoppedProcesses.add(child)
+		child.kill()
+	}
 	state.processes.clear()
 	for (const session of state.debugSessions) {
 		state.stoppedDebugSessions.add(session.id)
@@ -747,9 +753,10 @@ function publishDiagnostics(params) {
 function startServer() {
   const state = extensionState
   if (!state || state.disposed) return Promise.resolve()
+  state.serverStartsPending++
   const start = state.serverStart.catch(() => {}).then(() => startServerNow(state))
-  state.serverStart = start
-  return start
+  state.serverStart = start.finally(() => { state.serverStartsPending-- })
+  return state.serverStart
 }
 
 async function startServerNow(state) {
@@ -757,7 +764,6 @@ async function startServerNow(state) {
   if (state.disposed || extensionState !== state) return
   const generation = ++state.serverGeneration
   const previous = state.client
-  state.client = null
   if (previous) await previous.stop()
   if (state.disposed || extensionState !== state || generation !== state.serverGeneration) return
   clearDiagnostics()
@@ -807,7 +813,7 @@ async function startServerNow(state) {
 
 function syncDocument(document) {
   const state = extensionState
-  if (!state || !isSysOneScript(document) || !state.client.initialized) return
+  if (!state?.client || !isSysOneScript(document) || !state.client.initialized) return
   const documentUri = document.uri.toString()
   state.client.notify('textDocument/didOpen', {
     textDocument: {
@@ -824,25 +830,41 @@ async function ensureDocument(document) {
   if (!isSysOneScript(document)) return false
   const state = extensionState
   if (!state) return false
+  await waitForServer(state)
   await state.ready
   if (!state.opened.has(document.uri.toString())) syncDocument(document)
   return true
 }
 
+async function waitForServer(state) {
+  if (!state.ready && state.serverStartsPending === 0 && !state.disposed) await startServer()
+  while (state.serverStartsPending > 0 && !state.disposed) await state.serverStart
+}
+
 async function request(method, params) {
   const state = extensionState
-  if (!state) return undefined
+  if (!state || state.disposed) return undefined
+  await waitForServer(state)
   await state.ready
+  if (!state.client || state.disposed || extensionState !== state) return undefined
   return state.client.request(method, params)
 }
 
 async function requestForDocument(document, method, params, token) {
 	const state = extensionState
 	if (!state || state.disposed) return undefined
+	await waitForServer(state)
+	if (state.disposed || extensionState !== state) return undefined
 	const version = document.version
 	const generation = state.serverGeneration
 	const client = state.client
-	const result = await request(method, params)
+	let result
+	try {
+		result = await request(method, params)
+	} catch (error) {
+		if (extensionState !== state || state.disposed || state.serverGeneration !== generation || state.client !== client) return undefined
+		throw error
+	}
 	if (token?.isCancellationRequested || document.version !== version || extensionState !== state || state.disposed || state.serverGeneration !== generation || state.client !== client) return undefined
 	return result
 }
@@ -1101,6 +1123,7 @@ class SysOneScriptDebugConfigurationProvider {
     const result = { ...config }
     result.type = 'sysonescript'
     result.request = 'launch'
+    result.__sysoneEpoch = result.__sysoneEpoch ?? extensionState?.debugEpoch ?? 0
     result.name = result.name || 'Debug SysOneScript'
     result.cwd = result.cwd || root
     if (!result.program) {
@@ -1143,6 +1166,7 @@ function activate(context) {
     ready: null,
     opened: new Set(),
 		processes: new Set(),
+		stoppedProcesses: new WeakSet(),
 		debugSessions: new Set(),
     panelRuns: new Map(),
     treeView: null,
@@ -1157,6 +1181,7 @@ function activate(context) {
     semanticLensEmitter: undefined,
     serverGeneration: 0,
     serverStart: Promise.resolve(),
+    serverStartsPending: 0,
     disposed: false,
     debugEpoch: 0,
     stoppedDebugSessions: new Set(),
@@ -1242,7 +1267,6 @@ async function deactivate() {
 	if (!state) return
 	state.disposed = true
 	state.serverGeneration++
-	await state.serverStart.catch(() => {})
 	if (state.client) await state.client.stop()
 	for (const child of state?.processes || []) child.kill()
 	for (const session of state?.debugSessions || []) await vscode.debug.stopDebugging(session)

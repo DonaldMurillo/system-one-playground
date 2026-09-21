@@ -447,6 +447,9 @@ func resolveModulesLoaded(filename string, source string) (*Program, []Diagnosti
 	root := "."
 	if filename != "" {
 		if abs, err := filepath.Abs(filename); err == nil {
+			if canonical, resolveErr := filepath.EvalSymlinks(abs); resolveErr == nil {
+				abs = canonical
+			}
 			root = filepath.Dir(abs)
 		}
 	}

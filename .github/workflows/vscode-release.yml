@@ -20,7 +20,7 @@ jobs:
 
       - uses: pnpm/action-setup@v4
         with:
-          version: 9
+          version: 9.15.9
 
       - uses: actions/setup-node@v4
         with:
@@ -31,6 +31,13 @@ jobs:
           go-version-file: go.mod
 
       - run: pnpm --dir vscode install --frozen-lockfile
+
+      - name: Test and vet runtime
+        run: |
+          go test ./...
+          go vet ./...
+          go build -trimpath -o /tmp/sos-release-smoke ./cmd/sos
+          test "$(/tmp/sos-release-smoke version)" = "sos $(node -p "require('./vscode/package.json').version")"
 
       - name: Check extension
         run: pnpm --dir vscode check
@@ -102,7 +109,7 @@ jobs:
 
       - uses: pnpm/action-setup@v4
         with:
-          version: 9
+          version: 9.15.9
 
       - uses: actions/setup-node@v4
         with:
@@ -141,8 +148,15 @@ jobs:
 
       - name: Package platform extension
         working-directory: vscode
+        env:
+          SYSONESCRIPT_EXPECTED_TARGET: ${{ matrix.target }}
         run: |
           pnpm exec vsce package --no-dependencies --target "${{ matrix.target }}"
+          ../scripts/normalize-vsix.sh ./*.vsix
+          cp ./*.vsix /tmp/first.vsix
+          pnpm exec vsce package --no-dependencies --target "${{ matrix.target }}"
+          ../scripts/normalize-vsix.sh ./*.vsix
+          cmp /tmp/first.vsix ./*.vsix
           pnpm run package:smoke -- *.vsix
 
       - name: Collect release artifacts
@@ -169,7 +183,7 @@ jobs:
 
       - uses: pnpm/action-setup@v4
         with:
-          version: 9
+          version: 9.15.9
 
       - uses: actions/setup-node@v4
         with:
