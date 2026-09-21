@@ -520,12 +520,62 @@ to caller returning integer:
   finish with value
 call caller called value
 `
-	if diagnostics := Check(source); len(diagnostics) != 0 {
+	if diagnostics := Check(source); len(diagnostics) == 0 || !strings.Contains(diagnostics[0].Message, "caller.recovery must be integer; received text") {
+		t.Fatalf("diagnostics = %+v", diagnostics)
+	}
+}
+
+func TestTypedFailureCanProduceImportedFailureAndBindMissingOptionalField(t *testing.T) {
+	dir := t.TempDir()
+	errorsDir := filepath.Join(dir, "errors")
+	if err := os.MkdirAll(errorsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(errorsDir, "errors.sos"), []byte(`package errors
+export Missing
+define failure Missing:
+  retry_after as optional duration
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	source := `import "./errors"
+to fetch returning duration may fail with Missing:
+  fail Missing with "missing"
+to caller returning duration:
+  call fetch called value
+    on failure Missing using retry_after:
+      when retry_after is null:
+        recover with 0s
+      recover with retry_after
+  finish with value
+call caller called delay
+`
+	p, diagnostics := LoadProgram(filepath.Join(dir, "main.sos"), source)
+	if len(diagnostics) != 0 {
 		t.Fatal(diagnostics)
 	}
-	_, err := Run(context.Background(), mustParse(t, source), Options{})
-	if err == nil || !strings.Contains(err.Error(), "recover with requires integer") {
-		t.Fatalf("error = %v", err)
+	result, err := Run(context.Background(), p, Options{Dir: dir})
+	if err != nil || result.Variables["delay"] == nil {
+		t.Fatalf("result = %#v, error = %v", result, err)
+	}
+}
+
+func TestTypedResultCheckerUsesParameterTypes(t *testing.T) {
+	source := `to convert with value as text returning integer:
+  finish with value
+`
+	if diagnostics := Check(source); len(diagnostics) == 0 || !strings.Contains(diagnostics[0].Message, "convert.result must be integer; received text") {
+		t.Fatalf("diagnostics = %+v", diagnostics)
+	}
+}
+
+func TestResolvedSentenceWrongArityGetsActionableDiagnostic(t *testing.T) {
+	dir := t.TempDir()
+	_, diagnostics := LoadProgram(filepath.Join(dir, "main.sos"), `import "std/text"
+upper called result
+`)
+	if len(diagnostics) == 0 || !strings.Contains(diagnostics[0].Message, "upper expects 1 argument(s)") {
+		t.Fatalf("diagnostics = %+v", diagnostics)
 	}
 }
 

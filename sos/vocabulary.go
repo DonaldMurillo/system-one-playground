@@ -224,13 +224,9 @@ func reclassifySent(sts []*Statement, v *fileVocab, reclassified map[int]string)
 	for _, s := range sts {
 		if s.Kind == "invalid" && handlersOnly(s.Body) {
 			if m := matchSent(s.Text); m != nil {
-				if mod, action, ok := v.resolveName(m[1]); ok {
-					if want, known := sentArity(mod, action); known {
-						if args, e := sentArguments(m); e == nil && len(args) == want {
-							s.Kind = "sent"
-							reclassified[s.Line] = s.Text
-						}
-					}
+				if _, _, ok := v.resolveName(m[1]); ok {
+					s.Kind = "sent"
+					reclassified[s.Line] = s.Text
 				}
 			}
 		}

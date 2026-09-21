@@ -71,6 +71,30 @@ func (m *Module) vocabulary(action string) *fileVocab {
 	return m.fileVocabs[action]
 }
 
+// definitionScope combines an action/file import scope with the imports used
+// by package-local record definitions, so nested named fields resolve where
+// they were declared rather than where they are consumed.
+func (m *Module) definitionScope(imports map[string]*Module) (map[string]*RecordDef, []string) {
+	result, problems := visibleDefinitions(m.Definitions, imports)
+	names := make([]string, 0, len(m.Definitions))
+	for name := range m.Definitions {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		nested, nestedProblems := visibleDefinitions(m.Definitions, m.definitionImports[name])
+		problems = append(problems, nestedProblems...)
+		for typeName, definition := range nested {
+			if existing := result[typeName]; existing != nil && existing != definition {
+				problems = append(problems, fmt.Sprintf("type name %s resolves differently across package definition scopes", typeName))
+				continue
+			}
+			result[typeName] = definition
+		}
+	}
+	return result, uniqueSorted(problems)
+}
+
 // ModuleTable is a program's resolved import graph.
 type ModuleTable struct {
 	// Aliases are the entry file's imports.
@@ -705,7 +729,7 @@ func buildModule(key string, files []*moduleFileDecls) (*Module, []Diagnostic) {
 		}
 	}
 	for name, definition := range m.Definitions {
-		definitionScope, typeProblems := visibleDefinitions(m.Definitions, m.definitionImports[name])
+		definitionScope, typeProblems := m.definitionScope(m.definitionImports[name])
 		for _, problem := range typeProblems {
 			ds = append(ds, Diagnostic{definition.Line, 1, problem})
 		}
@@ -714,7 +738,7 @@ func buildModule(key string, files []*moduleFileDecls) (*Module, []Diagnostic) {
 		}
 	}
 	for _, failure := range m.Failures {
-		definitionScope, typeProblems := visibleDefinitions(m.Definitions, m.failureImports[failure.Name])
+		definitionScope, typeProblems := m.definitionScope(m.failureImports[failure.Name])
 		for _, problem := range typeProblems {
 			ds = append(ds, Diagnostic{failure.Line, 1, problem})
 		}
@@ -726,7 +750,7 @@ func buildModule(key string, files []*moduleFileDecls) (*Module, []Diagnostic) {
 	}
 	reportedTypeProblems := map[string]bool{}
 	for _, name := range sortedActionNames(m) {
-		definitionScope, typeProblems := visibleDefinitions(m.Definitions, m.scope(name))
+		definitionScope, typeProblems := m.definitionScope(m.scope(name))
 		for _, problem := range typeProblems {
 			if !reportedTypeProblems[problem] {
 				ds = append(ds, Diagnostic{m.Actions[name].Line, 1, problem})

@@ -302,14 +302,18 @@ define Address:
 `); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeTestFile(filepath.Join(service, "service.sos"), `package service
+	if err := writeTestFile(filepath.Join(service, "types.sos"), `package service
 import "../models" as models
 export Wrapper
-export make_address
 define Wrapper:
   address as Address
-to make_address returning Address:
-  finish with {city: "Paris"}
+`); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTestFile(filepath.Join(service, "actions.sos"), `package service
+export make_address
+to make_address returning Wrapper:
+  finish with {address: {city: "Paris"}}
 `); err != nil {
 		t.Fatal(err)
 	}

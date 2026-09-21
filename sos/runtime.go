@@ -180,6 +180,7 @@ func Run(ctx context.Context, p *Program, opts Options) (result *Result, err err
 		r.vocab = p.Modules.vocab
 	}
 	r.definitions, _ = visibleDefinitions(p.Definitions, r.imports)
+	r.failures, _ = visibleFailuresFrom(p.Failures, r.imports, "the current file")
 	for k, v := range opts.Args {
 		r.env[k] = v
 	}
@@ -505,6 +506,8 @@ func (r *runtime) bindFailureHandler(h *Statement, err error) {
 	for _, field := range fields {
 		if v, ok := value[field]; ok {
 			r.env[field] = v
+		} else {
+			r.env[field] = nil
 		}
 	}
 	_ = kind
@@ -838,11 +841,15 @@ func (r *runtime) execute(s *Statement) error {
 		if r.module != nil {
 			definitionBase = r.module.Definitions
 		}
-		r.definitions, _ = visibleDefinitions(definitionBase, r.imports)
 		if r.module != nil {
-			r.failures = r.module.Failures
+			r.definitions, _ = r.module.definitionScope(r.imports)
 		} else {
-			r.failures = r.p.Failures
+			r.definitions, _ = visibleDefinitions(definitionBase, r.imports)
+		}
+		if r.module != nil {
+			r.failures, _ = visibleFailuresFrom(r.module.Failures, r.imports, "the current package")
+		} else {
+			r.failures, _ = visibleFailuresFrom(r.p.Failures, r.imports, "the current file")
 		}
 		r.depth++
 		actionPath := r.logicalPath
@@ -1493,7 +1500,7 @@ func (r *runtime) callModule(s *Statement, mod *Module, action, display string, 
 	}
 	local := map[string]any{}
 	localTypes := map[string]TypeRef{}
-	actionDefs, _ := visibleDefinitions(mod.Definitions, mod.scope(action))
+	actionDefs, _ := mod.definitionScope(mod.scope(action))
 	for i, param := range decl.Params {
 		v, e := r.eval(vals[i], nil)
 		if e != nil {
@@ -1527,7 +1534,7 @@ func (r *runtime) callModule(s *Statement, mod *Module, action, display string, 
 	r.functions, r.schemas, r.imports, r.vocab = copyStatements(mod.Actions), copyStatements(mod.Schemas), imports, mod.vocabulary(action)
 	r.types = localTypes
 	r.definitions = actionDefs
-	r.failures = mod.Failures
+	r.failures, _ = visibleFailuresFrom(mod.Failures, imports, "the current package")
 	r.depth++
 	modulePath := mod.actionPaths[action]
 	if modulePath == "" {

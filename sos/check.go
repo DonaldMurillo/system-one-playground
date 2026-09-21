@@ -58,13 +58,13 @@ func analyze(p *Program) []Diagnostic {
 			alias, name, _ := strings.Cut(action, ".")
 			if mod := moduleAlias(p, alias); mod != nil && mod.Exports[name] {
 				fn = mod.Actions[name]
-				targetDefs, _ = visibleDefinitions(mod.Definitions, mod.scope(name))
+				targetDefs, _ = mod.definitionScope(mod.scope(name))
 			}
 		}
 		if fn == nil && p.Modules != nil && p.Modules.vocab != nil {
 			if mod, name := sentTargetResolve(p.Modules.vocab, action); mod != nil && mod.Exports[name] {
 				fn = mod.Actions[name]
-				targetDefs, _ = visibleDefinitions(mod.Definitions, mod.scope(name))
+				targetDefs, _ = mod.definitionScope(mod.scope(name))
 			}
 		}
 		if fn == nil {
@@ -625,6 +625,10 @@ func checkActionContracts(p *Program, actions map[string]*Statement, defs map[st
 			continue
 		}
 		declared := map[string]bool{}
+		knownTypes := map[string]TypeRef{}
+		for _, param := range decl.Params {
+			knownTypes[param.Name] = param.Type.base()
+		}
 		for _, failure := range decl.Failures {
 			declared[failure] = true
 			if visibleFailures[failure] == nil {
@@ -644,7 +648,7 @@ func checkActionContracts(p *Program, actions map[string]*Statement, defs map[st
 						add(s.Line, "%s cannot finish with a value", name)
 					}
 					if decl.HasResult && m[1] != "" {
-						if message := staticArgumentProblem(m[1], decl.Result, map[string]TypeRef{}, defs, name, "result"); message != "" {
+						if message := staticArgumentProblem(m[1], decl.Result, knownTypes, defs, name, "result"); message != "" {
 							add(s.Line, "%s", message)
 						}
 					}
@@ -652,8 +656,14 @@ func checkActionContracts(p *Program, actions map[string]*Statement, defs map[st
 					if !decl.HasResult {
 						// Legacy return remains valid for untyped actions only.
 						add(s.Line, "%s cannot return a value; use finish with only for a returning action", name)
-					} else if message := staticArgumentProblem(m[1], decl.Result, map[string]TypeRef{}, defs, name, "result"); message != "" {
+					} else if message := staticArgumentProblem(m[1], decl.Result, knownTypes, defs, name, "result"); message != "" {
 						add(s.Line, "%s", message)
+					}
+				case "recover":
+					if decl.HasResult && m[1] != "" {
+						if message := staticArgumentProblem(m[1], decl.Result, knownTypes, defs, name, "recovery"); message != "" {
+							add(s.Line, "%s", message)
+						}
 					}
 				case "fail":
 					failure := m[1]
@@ -929,24 +939,32 @@ func visibleFailureDefinitions(p *Program) map[string]*FailureDef {
 }
 
 func visibleFailureDefinitionsWithProblems(p *Program) (map[string]*FailureDef, []string) {
+	if p == nil {
+		return map[string]*FailureDef{}, nil
+	}
+	modules := map[string]*Module(nil)
+	if p.Modules != nil {
+		modules = p.Modules.Aliases
+	}
+	return visibleFailuresFrom(p.Failures, modules, "the current file")
+}
+
+func visibleFailuresFrom(local map[string]*FailureDef, modules map[string]*Module, localOwner string) (map[string]*FailureDef, []string) {
 	result := map[string]*FailureDef{}
 	owners := map[string]string{}
 	var problems []string
-	if p == nil {
-		return result, nil
-	}
-	for name, definition := range p.Failures {
+	for name, definition := range local {
 		result[name] = definition
-		owners[name] = "the current file"
+		owners[name] = localOwner
 	}
-	if p.Modules != nil {
-		aliases := make([]string, 0, len(p.Modules.Aliases))
-		for alias := range p.Modules.Aliases {
+	if modules != nil {
+		aliases := make([]string, 0, len(modules))
+		for alias := range modules {
 			aliases = append(aliases, alias)
 		}
 		sort.Strings(aliases)
 		for _, alias := range aliases {
-			module := p.Modules.Aliases[alias]
+			module := modules[alias]
 			for name, definition := range module.Failures {
 				if module.Exports[name] {
 					identity := fmt.Sprintf("module %s (imported as %s)", module.Name, alias)
