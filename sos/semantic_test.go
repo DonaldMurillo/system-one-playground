@@ -309,6 +309,30 @@ only emit "high score" once score above 80
 	}
 }
 
+func TestSemanticProviderStateRedactsCollectionLiterals(t *testing.T) {
+	srv := semanticChoiceServer(t, func(req fixtureReq) (string, float64) {
+		payload, err := json.Marshal(req.State["visible_collections"])
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, secret := range []string{"customer/private.json", "secret-value", "42"} {
+			if strings.Contains(string(payload), secret) {
+				t.Fatalf("collection literal leaked to provider state: %s", payload)
+			}
+		}
+		for _, label := range req.Labels {
+			if label != "reject" {
+				return label, .96
+			}
+		}
+		return "reject", 1
+	})
+	semanticTestEnv(t, srv.URL)
+	source := "make tickets [{\"token\": \"secret-value\", \"count\": 42}]\nonly show \"ready\" once tickets has gone beyond 1\n"
+	out, err := Analyze(context.Background(), source, AnalyzeOptions{Config: semanticConfig("semantic", "semantic")})
+	requireSuccess(t, out, err)
+}
+
 func TestSemanticGauntletMemoizesOnlyHighConfidenceStructuralAnswers(t *testing.T) {
 	answers := 0
 	srv := semanticChoiceServer(t, func(req fixtureReq) (string, float64) {

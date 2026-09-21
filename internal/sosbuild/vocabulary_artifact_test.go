@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/DonaldMurillo/system-one-playground/sos"
@@ -46,6 +47,18 @@ func TestArtifactCarriesVocabulary(t *testing.T) {
 	}
 	if string(got) != "hello\nworld\n" {
 		t.Errorf("artifact output = %q, want %q", got, "hello\nworld\n")
+	}
+	if err := os.Mkdir(filepath.Join(run, ".env"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd = exec.Command(out)
+	cmd.Dir = run
+	got, err = cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("artifact ignored .env load failure: %s", got)
+	}
+	if strings.Contains(string(got), "hello") || strings.Contains(string(got), "world") {
+		t.Fatalf("artifact executed after .env load failure: %s", got)
 	}
 }
 

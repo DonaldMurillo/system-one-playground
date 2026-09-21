@@ -333,6 +333,34 @@ call service.outer
 	}
 }
 
+func TestModuleFailureFramesUseFilesystemPathWhenPackageNameDiffers(t *testing.T) {
+	for _, packageLine := range []string{"", "package billing\n"} {
+		dir := t.TempDir()
+		service := filepath.Join(dir, "deps", "service")
+		if err := os.MkdirAll(service, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		moduleFile := filepath.Join(service, "service.sos")
+		source := packageLine + "export Missing\nexport fail_now\ndefine failure Missing:\nto fail_now may fail with Missing:\n  fail Missing with \"missing\"\n"
+		if err := os.WriteFile(moduleFile, []byte(source), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		p, diagnostics := LoadProgram(filepath.Join(dir, "main.sos"), "import \"./deps/service\" as service\ncall service.fail_now\n")
+		if len(diagnostics) != 0 {
+			t.Fatal(diagnostics)
+		}
+		result, err := Run(context.Background(), p, Options{Dir: dir})
+		if err == nil {
+			t.Fatal("expected typed failure")
+		}
+		for _, frame := range result.Failure["frames"].([]map[string]any) {
+			if (frame["kind"] == "action" || frame["kind"] == "fail") && !strings.HasSuffix(frame["path"].(string), filepath.Join("deps", "service", "service.sos")) {
+				t.Fatalf("frame path = %q, want actual defining file %q", frame["path"], moduleFile)
+			}
+		}
+	}
+}
+
 func TestTypedFailureCapturePreservesHiddenNameBinding(t *testing.T) {
 	source := `define failure Missing:
 to fetch returning text may fail with Missing:

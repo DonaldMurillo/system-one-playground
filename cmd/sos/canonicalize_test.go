@@ -84,6 +84,32 @@ func TestRunCanPersistTheExactAnalysisForEditorReuse(t *testing.T) {
 	}
 }
 
+func TestFailedRunDoesNotReplaceExistingResolution(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "main.sos")
+	resolution := filepath.Join(dir, "analysis.json")
+	source := "+++\nversion = 1\n[interpretation]\nmode = \"semantic\"\n[budget.run]\nrequests = 1\n+++\nonly show \"adult\" once age has gone beyond 18\n"
+	if err := os.WriteFile(script, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	const existing = "valid existing resolution\n"
+	if err := os.WriteFile(resolution, []byte(existing), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TYPESAFE_API_KEY", "")
+	var stdout, stderr bytes.Buffer
+	if code := RunCLI([]string{"run", "--save-resolution", resolution, script}, &stdout, &stderr); code == 0 {
+		t.Fatalf("failed semantic run unexpectedly succeeded: %s", stderr.String())
+	}
+	got, err := os.ReadFile(resolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != existing {
+		t.Fatalf("failed run replaced resolution: %q", got)
+	}
+}
+
 func TestSaveResolutionFlagIsReservedOnlyBeforeScriptPath(t *testing.T) {
 	if isRunFlag("--save-resolution") {
 		t.Fatal("--save-resolution after FILE must remain available to script arguments; runner uses it before FILE")

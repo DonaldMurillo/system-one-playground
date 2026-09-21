@@ -649,7 +649,7 @@ type moduleFileDecls struct {
 // statements are refused (libraries never run effects on import). Word
 // declarations add package vocabulary: word W of A makes W a callable synonym
 // for exported action A, with deterministic duplicate checks.
-func buildModule(key string, files []*moduleFileDecls) (*Module, []Diagnostic) {
+func buildModule(key string, files []*moduleFileDecls, embedded bool) (*Module, []Diagnostic) {
 	m := &Module{
 		Key:               key,
 		Actions:           map[string]*Statement{},
@@ -684,7 +684,13 @@ func buildModule(key string, files []*moduleFileDecls) (*Module, []Diagnostic) {
 				m.Actions[name] = s
 				m.fileImports[name] = f.aliases
 				m.fileVocabs[name] = f.vocab
-				m.actionPaths[name] = filepath.Join(m.Name, f.name)
+				if embedded {
+					m.actionPaths[name] = filepath.Join(m.Name, f.name)
+				} else if filepath.Ext(key) == ".sos" {
+					m.actionPaths[name] = key
+				} else {
+					m.actionPaths[name] = filepath.Join(key, f.name)
+				}
 			case "schema":
 				name := match("schema", s.Text)[1]
 				if m.Schemas[name] != nil {
@@ -1121,7 +1127,7 @@ func (l *fsLoader) resolve(ref, importerDir string, depth int, line int) (*Modul
 	if failed {
 		return nil, false
 	}
-	mod, mds := buildModule(key, decls)
+	mod, mds := buildModule(key, decls, false)
 	if len(mds) > 0 {
 		for _, d := range mds {
 			l.modDiag(disp, d)
@@ -1218,7 +1224,7 @@ func (g *graphLoader) build(key string, line int) (*Module, bool) {
 	if failed {
 		return nil, false
 	}
-	mod, mds := buildModule(key, decls)
+	mod, mds := buildModule(key, decls, true)
 	if len(mds) > 0 {
 		for _, d := range mds {
 			g.diag(line, "module %s: line %d: %s", spec.Name, d.Line, d.Message)

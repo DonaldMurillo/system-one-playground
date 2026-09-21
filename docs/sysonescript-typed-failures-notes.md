@@ -4,6 +4,14 @@ These notes record the implementation seams for the proposed typed-failures
 surface. The language core remains the authority; Studio, LSP, and vocabulary
 clients consume its parsed metadata instead of maintaining duplicate registries.
 
+## 2026-09-21 - Final OMP boundary review
+- Scope: semantic-provider, CLI, standalone-build, debugger, VS Code
+- Trigger: Whole-branch OMP review found data-boundary and client-contract drift.
+- Approach: Redact provider collection origins, save only successful analyses, fail closed on `.env`, and separate live filesystem paths from embedded logical paths.
+- Evidence: `go test ./...`, `go test -race ./sos`, plus Studio and VS Code test/build scripts.
+- Next time: Review every new analysis field at provider, persistence, artifact, and editor boundaries before shipping.
+- Status: active
+
 ## What worked
 
 - `FailureDef` reuses named-record field validation while reserving host-owned

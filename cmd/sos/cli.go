@@ -289,7 +289,7 @@ parse:
 	if result != nil {
 		reportUsage(stderr, result.Usage, runErr)
 		reportInterpretations(stderr, result.Analysis)
-		if opts.saveResolution != "" && result.Analysis != nil {
+		if opts.saveResolution != "" && runErr == nil && result.Analysis != nil && result.Analysis.Canonical != "" && len(result.Analysis.Diagnostics) == 0 {
 			if err := saveResolution(opts.saveResolution, result.Analysis); err != nil {
 				fmt.Fprintf(stderr, "sos: run: save resolution: %v\n", err)
 				return 1

@@ -399,6 +399,7 @@ func run() int {
 	}
 	if err := loadEnv(); err != nil {
 		fmt.Fprintf(os.Stderr, "sos: %v\n", err)
+		return 1
 	}
 	ctx := context.Background()
 	d, durationErr := envDuration("SOS_TIMEOUT")

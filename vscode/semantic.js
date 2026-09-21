@@ -12,4 +12,18 @@ function decisionLensTitle(decision) {
   return `Deterministic · ${confidence} · no Jev cost`
 }
 
-module.exports = { decisionLensTitle }
+function analyzedLineMatches(current, analyzed) {
+  let quoted = false
+  let escaped = false
+  let semantic = ''
+  for (const char of current.trim()) {
+    if (!quoted && char === '#') break
+    semantic += char
+    if (escaped) { escaped = false; continue }
+    if (quoted && char === '\\') { escaped = true; continue }
+    if (char === '"') quoted = !quoted
+  }
+  return semantic.trim() === analyzed.trim()
+}
+
+module.exports = { decisionLensTitle, analyzedLineMatches }

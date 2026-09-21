@@ -665,7 +665,7 @@ func (a *semanticAnalysis) interpretationRequest(n *semNode, cands []semCandidat
 	}
 	visible := make([]map[string]any, 0, len(scope.collections))
 	for _, name := range scope.collectionNames() {
-		visible = append(visible, map[string]any{"name": name, "origin": scope.collections[name]})
+		visible = append(visible, map[string]any{"name": name, "origin": semanticCollectionOrigin(scope.collections[name])})
 	}
 	state := map[string]any{
 		"role":                "SysOneScript source interpretation",
@@ -676,6 +676,25 @@ func (a *semanticAnalysis) interpretationRequest(n *semNode, cands []semCandidat
 		"candidates":          views,
 	}
 	return labels, state
+}
+
+func semanticCollectionOrigin(origin string) string {
+	switch {
+	case strings.HasPrefix(origin, "read "):
+		return "records read from one source"
+	case strings.HasPrefix(origin, "records read from each "):
+		return "records read from multiple sources"
+	case strings.HasPrefix(origin, "files found under "):
+		return "files discovered from a source"
+	case strings.HasPrefix(origin, "value of "):
+		return "collection value"
+	case strings.HasPrefix(origin, "filtered by "):
+		return "filtered collection"
+	case strings.HasPrefix(origin, "sorted by "):
+		return "sorted collection"
+	default:
+		return "collection"
+	}
 }
 
 func (a *semanticAnalysis) validateInterpretationAnswer(n *semNode, cands []semCandidate, question typesafe.Question, answer map[string]any) (semCandidate, float64, bool) {

@@ -6,7 +6,7 @@ const { spawn } = require('node:child_process')
 const vscode = require('vscode')
 const { LspClient } = require('./lsp-client')
 const { compareVersions, discoverEntrypoints, findProjectRoot, parseVersionLine, readHelpers, relativeScript, resolveProjectEntrypoint } = require('./project')
-const { decisionLensTitle } = require('./semantic')
+const { decisionLensTitle, analyzedLineMatches } = require('./semantic')
 
 const LANGUAGE_ID = 'sos'
 const DOCUMENT_SELECTOR = [{ language: LANGUAGE_ID }]
@@ -1021,7 +1021,7 @@ async function canonicalizeAnalyzedLine(uriString, oneBasedLine, source, canonic
   const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(uriString))
   const editor = await vscode.window.showTextDocument(document)
   const line = oneBasedLine - 1
-  if (document.version !== analyzedVersion || line < 0 || line >= document.lineCount || document.lineAt(line).text.trim() !== source.trim()) {
+  if (document.version !== analyzedVersion || line < 0 || line >= document.lineCount || !analyzedLineMatches(document.lineAt(line).text, source)) {
     vscode.window.showWarningMessage('That interpretation is stale. Analyze the document again before making it canonical.')
     return
   }
