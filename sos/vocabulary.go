@@ -538,7 +538,7 @@ func localPreviewEntries(loader *fsLoader, enabledKeys map[string]bool) []Vocabu
 	if err != nil || len(refs) == 0 {
 		return nil
 	}
-	scout := &fsLoader{cache: map[string]*Module{}, loading: map[string]bool{}, root: loader.root, ns: loader.ns, tomlDir: loader.tomlDir}
+	scout := &fsLoader{cache: map[string]*Module{}, loading: map[string]bool{}, root: loader.root, boundary: loader.boundary, ns: loader.ns, tomlDir: loader.tomlDir}
 	var out []VocabularyEntry
 	seenKeys := map[string]bool{}
 	for _, ref := range refs {

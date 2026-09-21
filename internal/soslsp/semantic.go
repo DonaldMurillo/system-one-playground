@@ -191,7 +191,7 @@ func Analyze(ctx context.Context, req AnalyzeRequest) (*AnalyzeResult, error) {
 		if ctx.Err() != nil {
 			return nil, &AnalyzeError{Kind: classifyAnalyzeError(ctx, err), Err: err, Analysis: reused}
 		}
-
+		return &AnalyzeResult{Analysis: reused, Promoted: promoted}, &AnalyzeError{Kind: KindAnalysis, Message: "saved analysis is invalid or incompatible; remove it or explicitly analyze without reuse", Err: err, Analysis: reused}
 	}
 
 	analysis, err := sos.Analyze(ctx, req.Source, sos.AnalyzeOptions{

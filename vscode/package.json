@@ -2,8 +2,9 @@
   "name": "sysonescript-vscode",
   "displayName": "SysOneScript",
   "description": "Language support for SysOneScript (.sos) with the native SysOneScript language server.",
-  "version": "0.2.0",
+  "version": "0.6.0",
   "publisher": "donaldmurillo",
+  "packageManager": "pnpm@9.15.9",
   "icon": "icon.png",
   "license": "MIT",
   "repository": {
@@ -12,6 +13,12 @@
   },
   "engines": {
     "vscode": "^1.85.0"
+  },
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "SysOneScript executes project files and configured helpers; trust is required before activation."
+    }
   },
   "categories": [
     "Programming Languages",
@@ -54,6 +61,7 @@
     "extension.js",
     "lsp-client.js",
     "project.js",
+    "semantic.js",
     "bin/**",
     "icon.png",
     "icons/**",
@@ -68,7 +76,9 @@
   "scripts": {
     "check": "node --check extension.js && node --check lsp-client.js && node --check project.js && node --check semantic.js && node --check test/lsp-client.test.js && node --check test/project.test.js && node --check test/semantic.test.js",
     "test": "node --test test/*.test.js",
-    "package": "pnpm dlx @vscode/vsce package --allow-unused-files-pattern"
+    "prepackage": "node test/build-runtime.js",
+    "package": "pnpm exec vsce package --no-dependencies --allow-unused-files-pattern",
+    "package:smoke": "node test/package-smoke.js"
   },
   "contributes": {
     "walkthroughs": [
@@ -81,35 +91,53 @@
             "id": "sysonescript.getStarted.openPanel",
             "title": "Open the project controls",
             "description": "Use the SysOneScript Activity Bar panel for project-level Run, Check, Build, Debug, output, and helper actions.\n[Open SysOneScript Project](command:workbench.view.extension.sysonescript)",
-            "media": { "markdown": "./walkthrough/project.md" }
+            "media": {
+              "markdown": "./walkthrough/project.md"
+            }
           },
           {
             "id": "sysonescript.getStarted.run",
             "title": "Run your project",
             "description": "Run the detected project entrypoint and see the complete result in the SysOneScript Run output channel.\n[Run Project](command:sysonescript.runProject)",
-            "media": { "markdown": "./walkthrough/run.md" },
-            "completionEvents": ["onCommand:sysonescript.runProject"]
+            "media": {
+              "markdown": "./walkthrough/run.md"
+            },
+            "completionEvents": [
+              "onCommand:sysonescript.runProject"
+            ]
           },
           {
             "id": "sysonescript.getStarted.debug",
             "title": "Debug with native VS Code tools",
             "description": "Set breakpoints, step through statements, inspect locals, and evaluate expressions.\n[Debug Project](command:sysonescript.debugProject)",
-            "media": { "markdown": "./walkthrough/debug.md" },
-            "completionEvents": ["onCommand:sysonescript.debugProject"]
+            "media": {
+              "markdown": "./walkthrough/debug.md"
+            },
+            "completionEvents": [
+              "onCommand:sysonescript.debugProject"
+            ]
           },
           {
             "id": "sysonescript.getStarted.jev",
             "title": "Enable Jev features",
             "description": "Store the optional Jev token in VS Code SecretStorage for model-backed language features.\n[Set Jev Token](command:sysonescript.setJevToken)",
-            "media": { "markdown": "./walkthrough/jev.md" },
-            "completionEvents": ["onCommand:sysonescript.setJevToken"]
+            "media": {
+              "markdown": "./walkthrough/jev.md"
+            },
+            "completionEvents": [
+              "onCommand:sysonescript.setJevToken"
+            ]
           },
           {
             "id": "sysonescript.getStarted.cli",
             "title": "Get the standalone CLI",
             "description": "The extension already includes everything VS Code needs. Download the optional `sysone` and `sos` terminal commands separately when you want them on your PATH.\n[Open CLI Downloads](command:sysonescript.getCli)",
-            "media": { "markdown": "./walkthrough/cli.md" },
-            "completionEvents": ["onCommand:sysonescript.getCli"]
+            "media": {
+              "markdown": "./walkthrough/cli.md"
+            },
+            "completionEvents": [
+              "onCommand:sysonescript.getCli"
+            ]
           }
         ]
       }
@@ -359,6 +387,11 @@
           "group": "navigation@2"
         },
         {
+          "command": "sysonescript.explainFile",
+          "when": "resourceExtname == .sos",
+          "group": "navigation@3"
+        },
+        {
           "command": "sysonescript.runProject",
           "when": "resourceFilename == sos.toml",
           "group": "navigation@3"
@@ -434,18 +467,43 @@
       {
         "type": "sysonescript",
         "label": "SysOneScript",
-        "languages": ["sos"],
-        "enableBreakpointsFor": ["sos"],
+        "languages": [
+          "sos"
+        ],
+        "enableBreakpointsFor": [
+          "sos"
+        ],
         "configurationAttributes": {
           "launch": {
-            "required": ["program"],
+            "required": [
+              "program"
+            ],
             "properties": {
-              "program": { "type": "string", "description": "SysOneScript file to debug." },
-              "cwd": { "type": "string", "description": "Project working directory." },
-              "args": { "type": "array", "items": { "type": "string" }, "description": "Script arguments." },
-              "stopOnEntry": { "type": "boolean", "default": false },
-              "model": { "type": "string" },
-              "maxCalls": { "type": "number" }
+              "program": {
+                "type": "string",
+                "description": "SysOneScript file to debug."
+              },
+              "cwd": {
+                "type": "string",
+                "description": "Project working directory."
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Script arguments."
+              },
+              "stopOnEntry": {
+                "type": "boolean",
+                "default": false
+              },
+              "model": {
+                "type": "string"
+              },
+              "maxCalls": {
+                "type": "number"
+              }
             }
           }
         },
@@ -461,7 +519,9 @@
       }
     ],
     "breakpoints": [
-      { "language": "sos" }
+      {
+        "language": "sos"
+      }
     ],
     "configuration": {
       "title": "SysOneScript",
@@ -526,5 +586,8 @@
         }
       }
     }
+  },
+  "devDependencies": {
+    "@vscode/vsce": "3.6.2"
   }
 }

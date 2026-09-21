@@ -425,6 +425,7 @@ func (s *dapServer) start() error {
 			MaxCalls:    s.launch.MaxCalls,
 			Debugger:    s.session,
 			OnTrace: func(trace sos.Trace) {
+				trace.Item = redactDebugSecrets(trace.Item)
 				data, _ := json.Marshal(trace)
 				s.output("console", "Jev trace: "+string(data)+"\n")
 			},
@@ -540,7 +541,7 @@ func (s *dapServer) evaluate(request dapRequest) error {
 		return err
 	}
 	s.session.mu.Lock()
-	result := debugValue(value)
+	result := debugValue(args.Expression, value)
 	if isDebugContainer(value) {
 		result["variablesReference"] = s.nextVariableRefLocked(value)
 	}
@@ -694,7 +695,7 @@ func interpolateLogpoint(message string, variables map[string]any) string {
 		value, err := sos.EvaluateDebugExpression(expression, variables)
 		replacement := "<error>"
 		if err == nil {
-			replacement = fmt.Sprint(value)
+			replacement = debugDisplay(expression, value)
 		}
 		message = message[:start] + replacement + message[end+1:]
 	}
@@ -709,23 +710,46 @@ func isDebugContainer(value any) bool {
 	}
 }
 
-func debugValue(value any) map[string]any {
-	result := map[string]any{"value": debugDisplay(value), "type": fmt.Sprintf("%T", value), "variablesReference": 0}
+func debugValue(name string, value any) map[string]any {
+	result := map[string]any{"value": debugDisplay(name, value), "type": fmt.Sprintf("%T", value), "variablesReference": 0}
 	return result
 }
 
-func debugDisplay(value any) string {
+func debugDisplay(name string, value any) string {
 	if value == nil {
 		return "null"
 	}
-	if secretValue("", value) {
+	if secretValue(name, value) {
 		return "<redacted>"
 	}
 	if isDebugContainer(value) {
-		data, _ := json.Marshal(value)
+		data, _ := json.Marshal(redactDebugSecrets(value))
 		return string(data)
 	}
 	return fmt.Sprint(value)
+}
+
+func redactDebugSecrets(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(typed))
+		for key, item := range typed {
+			if secretValue(key, item) {
+				out[key] = "<redacted>"
+			} else {
+				out[key] = redactDebugSecrets(item)
+			}
+		}
+		return out
+	case []any:
+		out := make([]any, len(typed))
+		for i, item := range typed {
+			out[i] = redactDebugSecrets(item)
+		}
+		return out
+	default:
+		return value
+	}
 }
 
 func secretValue(name string, value any) bool {
@@ -747,7 +771,7 @@ func debugVariables(value any, refs *map[int]any, next *int, knownTypes map[stri
 		sort.Strings(keys)
 		for _, key := range keys {
 			item := typed[key]
-			result := debugValue(item)
+			result := debugValue(key, item)
 			if namedType := knownTypes[key]; namedType != "" {
 				result["type"] = namedType
 			}
@@ -765,7 +789,7 @@ func debugVariables(value any, refs *map[int]any, next *int, knownTypes map[stri
 		}
 	case []any:
 		for i, item := range typed {
-			result := debugValue(item)
+			result := debugValue("", item)
 			result["name"] = strconv.Itoa(i)
 			if isDebugContainer(item) {
 				ref := *next

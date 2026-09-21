@@ -81,8 +81,8 @@ func TestSemanticRolesAndCodeLens(t *testing.T) {
 	for _, m := range messages {
 		if m["method"] == "textDocument/publishDiagnostics" {
 			ds := getMap(t, m, "params")["diagnostics"].([]any)
-			if len(ds) != 0 {
-				t.Fatalf("valid semantic source has squiggles: %v", ds)
+			if len(ds) != 1 || ds[0].(map[string]any)["severity"] != float64(3) || !strings.Contains(ds[0].(map[string]any)["message"].(string), "interpretation pending") {
+				t.Fatalf("valid semantic source should have one informational pending notice: %v", ds)
 			}
 		}
 		id, ok := m["id"].(float64)

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.0
+
+- Adds semantic interpretation batching, memoization, and canonicalization.
+- Adds named records, typed failures, richer language tooling, and debugger hardening.
+- Aligns the bundled CLI, extension, updater, and release artifacts on one version.
+- Adds packaged-VSIX activation and runtime-content release gates.
+
 ## 0.2.0
 
 - add the SysOneScript project Activity Bar panel and folder/file actions

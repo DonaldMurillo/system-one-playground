@@ -120,6 +120,7 @@ func (s *server) didClose(params json.RawMessage) {
 		return
 	}
 	delete(s.docs, p.TextDocument.URI)
+	delete(s.vocabCache, p.TextDocument.URI)
 	s.notify("textDocument/publishDiagnostics", publishParams{
 		URI:         p.TextDocument.URI,
 		Diagnostics: []lspDiagnostic{},
@@ -137,7 +138,7 @@ func (s *server) publishDiagnostics(uri string, version *int, text string) {
 	for _, d := range sos.EditorDiagnostics(vocabFilename(uri, s.workspaceRoot), text, diags) {
 		severity := 1
 		if d.Severity == "information" {
-			continue
+			severity = 3
 		}
 		// Core diagnostics are one based line, one based byte column.
 		line := d.Line - 1

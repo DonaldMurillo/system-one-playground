@@ -221,8 +221,15 @@ function saveWorkspace() {
   return vscode.workspace.saveAll().catch(() => false)
 }
 
+function requireTrustedWorkspace() {
+  if (vscode.workspace.isTrusted) return true
+  vscode.window.showWarningMessage('Trust this workspace before running, building, debugging, or invoking SysOneScript project helpers.')
+  return false
+}
+
 function runInTerminal(args, cwd, label, commandOverride) {
-  const output = extensionState.output
+	const state = extensionState
+	const output = state.output
   const emitter = new vscode.EventEmitter()
   let child
   const write = text => {
@@ -240,12 +247,12 @@ function runInTerminal(args, cwd, label, commandOverride) {
         stdio: ['pipe', 'pipe', 'pipe'],
         windowsHide: true,
       })
-      extensionState.processes.add(child)
+		state.processes.add(child)
       child.stdout.on('data', chunk => write(chunk.toString()))
       child.stderr.on('data', chunk => write(chunk.toString()))
       child.on('error', error => write(`SysOneScript could not start: ${error.message}\n`))
       child.on('close', code => {
-        extensionState.processes.delete(child)
+			state.processes.delete(child)
         write(`\n[${label} exited with code ${code ?? 'unknown'}]\n`)
         emitter.fire('\x1b[?25h')
       })
@@ -266,6 +273,7 @@ function setPanelRun(action, value) {
 }
 
 function runPanelProcess(action, args, cwd, label, commandOverride, onClose) {
+	const state = extensionState
   const command = commandOverride || runnerCommand()
   const output = extensionState.runOutput
   output.clear()
@@ -275,7 +283,7 @@ function runPanelProcess(action, args, cwd, label, commandOverride, onClose) {
   output.show(true)
   setPanelRun(action, { status: 'running', label: `${label} · running` })
   const child = spawn(command, args, { cwd, env: serverEnvironment(), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
-  extensionState.processes.add(child)
+	state.processes.add(child)
   child.stdout.on('data', chunk => output.append(chunk.toString()))
   child.stderr.on('data', chunk => output.append(chunk.toString()))
   child.on('error', error => {
@@ -283,7 +291,7 @@ function runPanelProcess(action, args, cwd, label, commandOverride, onClose) {
     setPanelRun(action, { status: 'failed', label: `${label} · failed` })
   })
   child.on('close', code => {
-    extensionState.processes.delete(child)
+		state.processes.delete(child)
     output.appendLine('')
     output.appendLine(`[${label} ${code === 0 ? 'completed' : `exited with code ${code ?? 'unknown'}`}]`)
     setPanelRun(action, { status: code === 0 ? 'success' : 'failed', label: `${label} · ${code === 0 ? 'done' : `exit ${code ?? 'unknown'}`}` })
@@ -297,6 +305,7 @@ function showRunOutput() {
 }
 
 async function runProject(resource) {
+	if (!requireTrustedWorkspace()) return
   const selected = projectEntrypoint(resource)
   if (!selected) return
   if (!await saveWorkspace()) {
@@ -307,6 +316,7 @@ async function runProject(resource) {
 }
 
 async function runFile(resource) {
+	if (!requireTrustedWorkspace()) return
   const file = fileFor(resource) || fileFor(vscode.window.activeTextEditor?.document.uri)
   if (!file || !isSysOneScript({ fileName: file, languageId: LANGUAGE_ID })) {
     vscode.window.showInformationMessage('Choose a .sos file to run.')
@@ -358,26 +368,29 @@ async function runWithAnalysisCapture(file, root, label) {
 }
 
 async function checkProject(resource) {
+	if (!requireTrustedWorkspace()) return
   const selected = projectEntrypoint(resource)
   if (!selected) return
-  await saveWorkspace()
+	if (!await saveWorkspace()) return vscode.window.showWarningMessage('Check canceled because the workspace could not be saved.')
   runPanelProcess('check', ['check', relativeScript(selected.root, selected.file)], selected.root, `Check ${relativeScript(selected.root, selected.file)}`)
 }
 
 async function buildProject(resource) {
+	if (!requireTrustedWorkspace()) return
   const selected = projectEntrypoint(resource)
   if (!selected) return
   const defaultOutput = path.join(selected.root, 'bin', path.basename(selected.file, '.sos'))
-  await saveWorkspace()
+	if (!await saveWorkspace()) return vscode.window.showWarningMessage('Build canceled because the workspace could not be saved.')
   runPanelProcess('build', ['build', relativeScript(selected.root, selected.file), '--output', relativeScript(selected.root, defaultOutput)], selected.root, `Build ${relativeScript(selected.root, selected.file)}`)
 }
 
 async function explainFile(resource) {
+	if (!requireTrustedWorkspace()) return
   const file = fileFor(resource) || fileFor(vscode.window.activeTextEditor?.document.uri)
   if (!file) return
   const root = projectFor(file)
   if (!root) return
-  await saveWorkspace()
+	if (!await saveWorkspace()) return vscode.window.showWarningMessage('Explain canceled because the workspace could not be saved.')
   runInTerminal(['explain', relativeScript(root, file)], root, `explain ${relativeScript(root, file)}`)
 }
 
@@ -423,8 +436,10 @@ async function canonicalizeActiveDocument() {
 }
 
 async function stopProcesses() {
-  for (const child of extensionState.processes) child.kill()
-  extensionState.processes.clear()
+	const state = extensionState
+	for (const child of state.processes) child.kill()
+	state.processes.clear()
+	for (const session of state.debugSessions) await vscode.debug.stopDebugging(session)
   for (const state of extensionState.panelRuns.values()) {
     if (state.status === 'running') {
       state.status = 'stopped'
@@ -435,6 +450,7 @@ async function stopProcesses() {
 }
 
 async function debugFile(resource) {
+	if (!requireTrustedWorkspace()) return
   const file = fileFor(resource) || fileFor(vscode.window.activeTextEditor?.document.uri)
   if (!file) {
     vscode.window.showInformationMessage('Choose a .sos file to debug.')
@@ -442,7 +458,7 @@ async function debugFile(resource) {
   }
   const root = projectFor(file)
   if (!root) return
-  await saveWorkspace()
+	if (!await saveWorkspace()) return vscode.window.showWarningMessage('Debug canceled because the workspace could not be saved.')
   let args = []
   try {
     const source = fs.readFileSync(file, 'utf8')
@@ -479,9 +495,10 @@ function splitScriptArguments(value) {
 }
 
 async function debugProject(resource) {
+	if (!requireTrustedWorkspace()) return
   const selected = projectEntrypoint(resource)
   if (!selected) return
-  await saveWorkspace()
+	if (!await saveWorkspace()) return vscode.window.showWarningMessage('Debug canceled because the workspace could not be saved.')
   setPanelRun('debug', { status: 'running', label: `Debug ${relativeScript(selected.root, selected.file)} · running` })
   const started = await vscode.debug.startDebugging(vscode.workspace.getWorkspaceFolder(vscode.Uri.file(selected.root)), {
     type: 'sysonescript', request: 'launch', name: `Debug ${path.basename(selected.file)}`, program: selected.file, cwd: selected.root, args: [], stopOnEntry: false,
@@ -591,9 +608,10 @@ async function updateCli() {
 }
 
 async function runHelper(helper, resource) {
+	if (!requireTrustedWorkspace()) return
   const root = projectFor(resource)
   if (!root || !helper) return
-  await saveWorkspace()
+	if (!await saveWorkspace()) return vscode.window.showWarningMessage('Helper canceled because the workspace could not be saved.')
   const cwd = helper.cwd ? path.resolve(root, helper.cwd) : root
   const builtins = new Set(['run', 'check', 'build', 'fmt', 'explain', 'config', 'vocabulary'])
   if (builtins.has(helper.command)) runInTerminal([helper.command, ...helper.args], cwd, helper.name)
@@ -616,14 +634,18 @@ class SysOneScriptTreeProvider {
   constructor() { this.changed = new vscode.EventEmitter(); this.onDidChangeTreeData = this.changed.event }
   refresh() { this.changed.fire() }
   getTreeItem(element) { return element }
-  getChildren(element) {
+	getChildren(element) {
     const root = projectFor(element?.resource || workspaceRoot()) || workspaceRoot()
     if (!root) return [new SysOneScriptItem('Welcome & setup', vscode.TreeItemCollapsibleState.None, 'projectAction', undefined, { command: 'sysonescript.openWelcome', title: 'Open SysOneScript Welcome' }, 'sparkle')]
-    if (!element) {
-      const items = [
+		if (!element) {
+			const items = [
         new SysOneScriptItem(`Project · ${path.basename(root)}`, vscode.TreeItemCollapsibleState.None, 'projectStatus', root, undefined, 'rocket', `${entrypointDescription(root)} · ${root}`),
         new SysOneScriptItem('Welcome & setup', vscode.TreeItemCollapsibleState.None, 'projectAction', root, { command: 'sysonescript.openWelcome', title: 'Open SysOneScript Welcome' }, 'sparkle'),
-      ]
+			]
+			if (!vscode.workspace.isTrusted) {
+				items.push(new SysOneScriptItem('Trust workspace to enable project actions', vscode.TreeItemCollapsibleState.None, 'projectStatus', root, undefined, 'lock'))
+				return items
+			}
       const appendAction = (action, label, command, icon) => {
         const state = extensionState.panelRuns.get(action)
         items.push(new SysOneScriptItem(label, vscode.TreeItemCollapsibleState.None, 'projectAction', root, { command, title: label, arguments: [root] }, icon, state?.label))
@@ -646,7 +668,7 @@ class SysOneScriptTreeProvider {
         items.push(new SysOneScriptItem('CLI version status', vscode.TreeItemCollapsibleState.None, 'projectAction', root, { command: 'sysonescript.getCli', title: 'Get Standalone CLI' }, 'info', `VS Code ${versions.bundled || versions.extension} · terminal CLI not found`))
       }
       if (extensionState.jevToken) items.push(new SysOneScriptItem('Clear Jev token', vscode.TreeItemCollapsibleState.None, 'jevStatus', root, { command: 'sysonescript.clearJevToken', title: 'Clear Jev Token' }, 'trash'))
-      const helpers = readHelpers(root)
+		const helpers = vscode.workspace.isTrusted ? readHelpers(root) : []
       if (helpers.length) items.push(new SysOneScriptItem('Helpers & generators', vscode.TreeItemCollapsibleState.Expanded, 'helpers', root, undefined, 'tools'))
       return items
     }
@@ -792,6 +814,13 @@ async function request(method, params) {
   return state.client.request(method, params)
 }
 
+async function requestForDocument(document, method, params, token) {
+	const version = document.version
+	const result = await request(method, params)
+	if (token?.isCancellationRequested || document.version !== version) return undefined
+	return result
+}
+
 function registerDocumentSync(context) {
   context.subscriptions.push(vscode.workspace.onDidOpenTextDocument(document => {
     const state = extensionState
@@ -824,7 +853,7 @@ function registerLanguageProviders(context) {
   context.subscriptions.push(vscode.languages.registerCompletionItemProvider(DOCUMENT_SELECTOR, {
     async provideCompletionItems(document, position) {
       if (!await ensureDocument(document)) return undefined
-      const result = await request('textDocument/completion', {
+		const result = await requestForDocument(document, 'textDocument/completion', {
         textDocument: { uri: document.uri.toString() },
         position: { line: position.line, character: position.character },
       })
@@ -847,7 +876,7 @@ function registerLanguageProviders(context) {
   context.subscriptions.push(vscode.languages.registerHoverProvider(DOCUMENT_SELECTOR, {
     async provideHover(document, position) {
       if (!await ensureDocument(document)) return undefined
-      const result = await request('textDocument/hover', {
+		const result = await requestForDocument(document, 'textDocument/hover', {
         textDocument: { uri: document.uri.toString() },
         position: { line: position.line, character: position.character },
       })
@@ -859,7 +888,7 @@ function registerLanguageProviders(context) {
   context.subscriptions.push(vscode.languages.registerDefinitionProvider(DOCUMENT_SELECTOR, {
     async provideDefinition(document, position) {
       if (!await ensureDocument(document)) return undefined
-      const result = await request('textDocument/definition', {
+		const result = await requestForDocument(document, 'textDocument/definition', {
         textDocument: { uri: document.uri.toString() },
         position: { line: position.line, character: position.character },
       })
@@ -871,7 +900,7 @@ function registerLanguageProviders(context) {
   context.subscriptions.push(vscode.languages.registerDocumentFormattingEditProvider(DOCUMENT_SELECTOR, {
     async provideDocumentFormattingEdits(document) {
       if (!await ensureDocument(document)) return []
-      const result = await request('textDocument/formatting', { textDocument: { uri: document.uri.toString() } })
+		const result = await requestForDocument(document, 'textDocument/formatting', { textDocument: { uri: document.uri.toString() } })
       return (result || []).map(textEdit).filter(Boolean)
     },
   }))
@@ -879,7 +908,7 @@ function registerLanguageProviders(context) {
   context.subscriptions.push(vscode.languages.registerFoldingRangeProvider(DOCUMENT_SELECTOR, {
     async provideFoldingRanges(document) {
       if (!await ensureDocument(document)) return []
-      const result = await request('textDocument/foldingRange', { textDocument: { uri: document.uri.toString() } })
+		const result = await requestForDocument(document, 'textDocument/foldingRange', { textDocument: { uri: document.uri.toString() } })
       return (result || []).map(item => new vscode.FoldingRange(item.startLine, item.endLine, vscode.FoldingRangeKind.Region))
     },
   }))
@@ -890,7 +919,7 @@ function registerLanguageProviders(context) {
   context.subscriptions.push(vscode.languages.registerDocumentSemanticTokensProvider(DOCUMENT_SELECTOR, {
     async provideDocumentSemanticTokens(document) {
       if (!await ensureDocument(document)) return undefined
-      const result = await request('textDocument/semanticTokens/full', { textDocument: { uri: document.uri.toString() } })
+		const result = await requestForDocument(document, 'textDocument/semanticTokens/full', { textDocument: { uri: document.uri.toString() } })
       const builder = new vscode.SemanticTokensBuilder(legend)
       let line = 0
       let start = 0
@@ -909,7 +938,7 @@ function registerLanguageProviders(context) {
   context.subscriptions.push(vscode.languages.registerInlayHintsProvider(DOCUMENT_SELECTOR, {
     async provideInlayHints(document, hintRange) {
       if (!await ensureDocument(document)) return []
-      const result = await request('textDocument/inlayHint', {
+		const result = await requestForDocument(document, 'textDocument/inlayHint', {
         textDocument: { uri: document.uri.toString() },
         range: {
           start: { line: hintRange.start.line, character: hintRange.start.character },
@@ -931,7 +960,7 @@ function registerLanguageProviders(context) {
     onDidChangeCodeLenses: semanticLensEmitter.event,
     async provideCodeLenses(document) {
       if (!await ensureDocument(document)) return []
-      const result = await request('textDocument/codeLens', { textDocument: { uri: document.uri.toString() } })
+		const result = await requestForDocument(document, 'textDocument/codeLens', { textDocument: { uri: document.uri.toString() } })
       const lenses = (result || []).map(item => new vscode.CodeLens(range(item.range), command(item.command)))
       const analyzed = extensionState.semanticAnalyses.get(document.uri.toString())
       if (analyzed?.version === document.version) {
@@ -952,7 +981,7 @@ function registerLanguageProviders(context) {
   context.subscriptions.push(vscode.languages.registerCodeActionsProvider(DOCUMENT_SELECTOR, {
     async provideCodeActions(document, actionRange, context) {
       if (!await ensureDocument(document)) return []
-      const result = await request('textDocument/codeAction', {
+		const result = await requestForDocument(document, 'textDocument/codeAction', {
         textDocument: { uri: document.uri.toString() },
         range: {
           start: { line: actionRange.start.line, character: actionRange.start.character },
@@ -1087,7 +1116,8 @@ function activate(context) {
     client: null,
     ready: null,
     opened: new Set(),
-    processes: new Set(),
+		processes: new Set(),
+		debugSessions: new Set(),
     panelRuns: new Map(),
     treeView: null,
     extensionPath: context.extensionPath,
@@ -1106,9 +1136,13 @@ function activate(context) {
   extensionState.treeView = vscode.window.createTreeView('sysonescript.project', { treeDataProvider: tree, showCollapseAll: true })
   context.subscriptions.push(extensionState.treeView)
   context.subscriptions.push(vscode.debug.registerDebugConfigurationProvider('sysonescript', new SysOneScriptDebugConfigurationProvider()))
-  context.subscriptions.push(vscode.debug.registerDebugAdapterDescriptorFactory('sysonescript', new SysOneScriptDebugAdapterFactory()))
-  context.subscriptions.push(vscode.debug.onDidTerminateDebugSession(session => {
-    if (session.type === 'sysonescript') {
+	context.subscriptions.push(vscode.debug.registerDebugAdapterDescriptorFactory('sysonescript', new SysOneScriptDebugAdapterFactory()))
+	context.subscriptions.push(vscode.debug.onDidStartDebugSession(session => {
+		if (session.type === 'sysonescript') extensionState?.debugSessions.add(session)
+	}))
+	context.subscriptions.push(vscode.debug.onDidTerminateDebugSession(session => {
+		if (session.type === 'sysonescript') {
+			extensionState?.debugSessions.delete(session)
       output.appendLine('SysOneScript debugger session ended.')
       setPanelRun('debug', { status: 'success', label: 'Debug session ended' })
     }
@@ -1144,7 +1178,11 @@ function activate(context) {
   context.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(() => tree.refresh()))
   context.subscriptions.push(vscode.workspace.onDidCreateFiles(() => tree.refresh()))
   context.subscriptions.push(vscode.workspace.onDidDeleteFiles(() => tree.refresh()))
-  context.subscriptions.push(vscode.workspace.onDidRenameFiles(() => tree.refresh()))
+	context.subscriptions.push(vscode.workspace.onDidRenameFiles(() => tree.refresh()))
+	const helperWatcher = vscode.workspace.createFileSystemWatcher('**/.vscode/sysonescript.json')
+	context.subscriptions.push(helperWatcher)
+	context.subscriptions.push(helperWatcher.onDidChange(() => tree.refresh()), helperWatcher.onDidCreate(() => tree.refresh()), helperWatcher.onDidDelete(() => tree.refresh()))
+	context.subscriptions.push(vscode.workspace.onDidGrantWorkspaceTrust(() => tree.refresh()))
   context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(() => tree.refresh()))
   context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(event => {
     if (event.affectsConfiguration('sysonescript.server') || event.affectsConfiguration('sysonescript.trace.server')) {
@@ -1157,10 +1195,11 @@ function activate(context) {
 }
 
 async function deactivate() {
-  const state = extensionState
-  extensionState = undefined
-  if (state?.client) await state.client.stop()
-  for (const child of state?.processes || []) child.kill()
+	const state = extensionState
+	if (state?.client) await state.client.stop()
+	for (const child of state?.processes || []) child.kill()
+	for (const session of state?.debugSessions || []) await vscode.debug.stopDebugging(session)
+	extensionState = undefined
 }
 
 module.exports = { activate, deactivate }

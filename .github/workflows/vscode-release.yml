@@ -6,7 +6,7 @@ on:
       - 'vscode-v*'
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: sysonescript-release
@@ -26,6 +26,8 @@ jobs:
         with:
           node-version: 22
 
+      - run: pnpm --dir vscode install --frozen-lockfile
+
       - name: Check extension
         run: pnpm --dir vscode check
 
@@ -40,6 +42,9 @@ jobs:
             echo "Tag version $expected does not match package version $actual"
             exit 1
           }
+
+      - name: Verify runtime and release documentation versions
+        run: node vscode/test/release-contract.js
 
   build:
     needs: verify
@@ -93,6 +98,8 @@ jobs:
         with:
           node-version: 22
 
+      - run: pnpm --dir vscode install --frozen-lockfile
+
       - name: Build source bundle
         run: go generate ./internal/sosbuild
 
@@ -102,6 +109,7 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
         run: |
           version="${GITHUB_REF_NAME#vscode-v}"
+          rm -rf vscode/bin release/cli
           mkdir -p vscode/bin release/cli
           version_ldflag="-X github.com/DonaldMurillo/system-one-playground/sos.Version=$version"
           go build -trimpath -ldflags "$version_ldflag" -o "vscode/bin/${{ matrix.binary }}" ./cmd/sos
@@ -113,16 +121,19 @@ jobs:
           fi
           cp LICENSE release/cli/
           cp README.md release/cli/
+          find release/cli -exec touch -h -d '@0' {} +
           archive_base="sysonescript-cli-v${version}-${{ matrix.target }}"
           if [ "${{ matrix.archive }}" = "zip" ]; then
-            (cd release/cli && zip -q -r "../${archive_base}.zip" .)
+            (cd release/cli && find . -type f -print | LC_ALL=C sort | zip -X -q "../${archive_base}.zip" -@)
           else
-            tar -C release/cli -czf "release/${archive_base}.tar.gz" .
+            tar --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner -C release/cli -czf "release/${archive_base}.tar.gz" .
           fi
 
       - name: Package platform extension
         working-directory: vscode
-        run: pnpm dlx @vscode/vsce package --target "${{ matrix.target }}"
+        run: |
+          pnpm exec vsce package --no-dependencies --target "${{ matrix.target }}"
+          pnpm run package:smoke -- *.vsix
 
       - name: Collect release artifacts
         run: |
@@ -141,6 +152,8 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: marketplace
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -151,6 +164,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+
+      - run: pnpm --dir vscode install --frozen-lockfile
 
       - uses: actions/download-artifact@v4
         with:
@@ -182,5 +197,5 @@ jobs:
             exit 0
           fi
           for vsix in release/*.vsix; do
-            pnpm dlx @vscode/vsce publish --packagePath "$vsix"
+            pnpm --dir vscode exec vsce publish --no-dependencies --packagePath "$vsix"
           done

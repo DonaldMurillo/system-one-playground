@@ -74,9 +74,7 @@ type server struct {
 // A missing workspace yields an empty index: standard library auto-imports
 // keep working.
 func (s *server) pkgIndex() *packageIndex {
-	if s.index == nil {
-		s.index = indexWorkspace(s.workspaceRoot)
-	}
+	s.index = indexWorkspace(s.workspaceRoot)
 	return s.index
 }
 

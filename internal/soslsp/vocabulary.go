@@ -86,11 +86,6 @@ func vocabFilename(uri, workspaceRoot string) string {
 // vocabularyFor resolves the core catalog for one document, caching per URI
 // and text so keystroke-driven features share one resolution.
 func (s *server) vocabularyFor(uri, filename, text string) (*sos.VocabularyCatalog, []sos.Diagnostic) {
-	if uri != "" {
-		if c, ok := s.vocabCache[uri]; ok && c.text == text {
-			return c.catalog, c.diags
-		}
-	}
 	catalog, diags := sos.Vocabulary(filename, text)
 	if uri != "" {
 		if s.vocabCache == nil {

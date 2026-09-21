@@ -1,0 +1,10 @@
+const { execFileSync } = require('node:child_process')
+const fs = require('node:fs')
+const path = require('node:path')
+
+const root = path.resolve(__dirname, '..', '..')
+const bin = path.join(root, 'vscode', 'bin')
+fs.rmSync(bin, { recursive: true, force: true })
+fs.mkdirSync(bin, { recursive: true })
+execFileSync('go', ['generate', './internal/sosbuild'], { cwd: root, stdio: 'inherit' })
+execFileSync('go', ['build', '-trimpath', '-o', path.join(bin, process.platform === 'win32' ? 'sos.exe' : 'sos'), './cmd/sos'], { cwd: root, stdio: 'inherit' })

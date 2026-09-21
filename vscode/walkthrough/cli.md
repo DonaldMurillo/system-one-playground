@@ -2,6 +2,6 @@
 
 The extension privately bundles the runtime it needs. If you also want `sysone` and `sos` in an external terminal, use the checksum-verified installation scripts or download a release archive manually.
 
-**macOS/Linux:** `curl -fsSL https://raw.githubusercontent.com/DonaldMurillo/system-one-playground/main/scripts/install.sh | sh`
+**macOS/Linux:** `curl -fsSL https://github.com/DonaldMurillo/system-one-playground/releases/download/vscode-v0.6.0/install.sh | sh`
 
-**Windows PowerShell:** `irm https://raw.githubusercontent.com/DonaldMurillo/system-one-playground/main/scripts/install.ps1 | iex`
+**Windows PowerShell:** `irm https://github.com/DonaldMurillo/system-one-playground/releases/download/vscode-v0.6.0/install.ps1 | iex`

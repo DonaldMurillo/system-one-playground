@@ -917,15 +917,16 @@ func packageFiles(dir, ref string) ([]string, error) {
 
 // fsLoader resolves imports against the filesystem and the project sos.toml.
 type fsLoader struct {
-	cache   map[string]*Module
-	loading map[string]bool
-	order   []string
-	root    string // absolute entry-file directory
-	tomlDir string // absolute directory of the project sos.toml
-	ns      string // raw [module] path value
-	layers  []sosconfig.Layer
-	diags   []Diagnostic
-	total   int
+	cache    map[string]*Module
+	loading  map[string]bool
+	order    []string
+	root     string // absolute entry-file directory
+	boundary string // canonical project/session directory imports may not escape
+	tomlDir  string // absolute directory of the project sos.toml
+	ns       string // raw [module] path value
+	layers   []sosconfig.Layer
+	diags    []Diagnostic
+	total    int
 }
 
 func (l *fsLoader) diag(line int, format string, args ...any) {
@@ -960,6 +961,18 @@ func (l *fsLoader) findModuleBase() {
 		l.ns = layer.Config.Module.Path
 		l.tomlDir = filepath.Dir(layer.Name)
 	}
+	l.boundary = l.root
+	if l.tomlDir != "" {
+		l.boundary = l.tomlDir
+	}
+	if canonical, err := filepath.EvalSymlinks(l.boundary); err == nil {
+		l.boundary = canonical
+	}
+}
+
+func pathWithin(root, candidate string) bool {
+	rel, err := filepath.Rel(root, candidate)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // configBindings resolves the configured [[language.libraries]] list for the
@@ -1046,6 +1059,10 @@ func (l *fsLoader) resolve(ref, importerDir string, depth int, line int) (*Modul
 		canonical, e := filepath.EvalSymlinks(path)
 		if e != nil {
 			l.diag(line, "import %q: %v", ref, e)
+			return nil, false
+		}
+		if !pathWithin(l.boundary, canonical) {
+			l.diag(line, "import %q escapes the project boundary", ref)
 			return nil, false
 		}
 		files[i] = canonical
