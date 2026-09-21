@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -30,6 +31,7 @@ type runtime struct {
 	functions        map[string]*Statement
 	schemas          map[string]*Statement
 	definitions      map[string]*RecordDef
+	failures         map[string]*FailureDef
 	types            map[string]TypeRef
 	imports          map[string]*Module
 	module           *Module
@@ -43,7 +45,17 @@ type runtime struct {
 	condition        bool
 	debugStack       []DebugFrame
 }
-type returnValue struct{ value any }
+type returnValue struct {
+	value    any
+	hasValue bool
+}
+
+type recoveryValue struct {
+	value    any
+	hasValue bool
+}
+
+func (recoveryValue) Error() string { return "recover" }
 
 func (r returnValue) Error() string { return "return outside action" }
 
@@ -162,7 +174,7 @@ func Run(ctx context.Context, p *Program, opts Options) (result *Result, err err
 			logicalPath = absolute
 		}
 	}
-	r := &runtime{shared: &executionState{}, logicalPath: logicalPath, ctx: ctx, p: p, opts: opts, replay: replay, env: map[string]any{}, functions: map[string]*Statement{}, schemas: map[string]*Statement{}, definitions: p.Definitions, types: map[string]TypeRef{}, imports: map[string]*Module{}, result: &Result{Traces: []Trace{}}}
+	r := &runtime{shared: &executionState{}, logicalPath: logicalPath, ctx: ctx, p: p, opts: opts, replay: replay, env: map[string]any{}, functions: map[string]*Statement{}, schemas: map[string]*Statement{}, definitions: p.Definitions, failures: p.Failures, types: map[string]TypeRef{}, imports: map[string]*Module{}, result: &Result{Traces: []Trace{}}}
 	if p.Modules != nil {
 		r.imports = p.Modules.Aliases
 		r.vocab = p.Modules.vocab
@@ -200,6 +212,10 @@ func Run(ctx context.Context, p *Program, opts Options) (result *Result, err err
 		r.result.Steps = int(r.shared.steps.Load())
 		r.result.Usage = opts.Budget.Snapshot()
 		result = r.result
+		var typed *typedFailure
+		if errors.As(err, &typed) {
+			r.result.Failure = FailureValue(err)
+		}
 		if err == nil && opts.Replay != "" && r.replayIndex != len(r.replay) {
 			err = fmt.Errorf("replay has unused judgments")
 		}
@@ -279,10 +295,14 @@ func (r *runtime) block(sts []*Statement) error {
 			var ret returnValue
 			var exit interface{ ExitCode() int }
 			var replayErr *ReplayIntegrityError
+			var recovered recoveryValue
 			if errors.As(err, &exit) || errors.As(err, &replayErr) {
 				return err
 			}
-			if errors.As(err, &ret) {
+			if fatalParallel(err) {
+				return err
+			}
+			if errors.As(err, &ret) || errors.As(err, &recovered) {
 				return err
 			}
 			if r.ctx.Err() != nil {
@@ -290,16 +310,37 @@ func (r *runtime) block(sts []*Statement) error {
 			}
 			handled := false
 			for _, h := range s.Body {
-				if h.Kind == "handler" && match("handler", h.Text)[1] == "failure" {
-					r.env["error"] = err.Error()
-					r.env["failure"] = FailureValue(err)
-					outerFailure := r.activeFailure
-					r.activeFailure = err
-					err = r.handler(h)
-					r.activeFailure = outerFailure
-					handled = true
-					break
+				if h.Kind != "handler" || match("handler", h.Text)[1] != "failure" || !r.matchesFailureHandler(h, err) {
+					continue
 				}
+				r.env["error"] = err.Error()
+				r.env["failure"] = FailureValue(err)
+				r.bindFailureHandler(h, err)
+				outerFailure := r.activeFailure
+				r.activeFailure = err
+				handledErr := r.handler(h)
+				r.activeFailure = outerFailure
+				var recovered recoveryValue
+				if errors.As(handledErr, &recovered) {
+					if recovered.hasValue && !r.callHasResult(s) {
+						return fmt.Errorf("line %d: recover with is only valid for a value-returning operation", h.Line)
+					}
+					if !recovered.hasValue && r.callHasResult(s) {
+						return fmt.Errorf("line %d: recover requires a value for this operation", h.Line)
+					}
+					if recovered.hasValue {
+						if wanted, ok := r.callResultType(s); ok && !typeMatchesRef(recovered.value, wanted, r.definitions) {
+							return fmt.Errorf("line %d: recover with requires %s; received %s", h.Line, wanted.String(), valueTypeName(recovered.value))
+						}
+					}
+					if recovered.hasValue && !bindCallResult(s, recovered.value, r) {
+						return fmt.Errorf("line %d: recover with cannot bind operation result", h.Line)
+					}
+					handledErr = nil
+				}
+				err = handledErr
+				handled = true
+				break
 			}
 			if err != nil {
 				return fmt.Errorf("line %d: %w", s.Line, err)
@@ -368,6 +409,11 @@ func (r *runtime) debugBefore(s *Statement) error {
 func (r *runtime) handler(h *Statement) error {
 	m := match("handler", h.Text)
 	if m[2] != "" {
+		if m[1] == "failure" {
+			if _, _, _, typed := failureHandlerHeader(h.Text); typed {
+				return r.block(h.Body)
+			}
+		}
 		text := m[2]
 		if text == "discard" {
 			return nil
@@ -380,10 +426,244 @@ func (r *runtime) handler(h *Statement) error {
 	}
 	return r.block(h.Body)
 }
+
+func failureHandlerHeader(text string) (kind, binding string, fields []string, typed bool) {
+	rest := strings.TrimSpace(strings.TrimPrefix(text, "on failure"))
+	if rest == "" {
+		return "", "", nil, false
+	}
+	if rest == "discard" || strings.HasPrefix(rest, "stop ") || rest == "stop" || rest == "rethrow" || rest == "pass failure on" || strings.HasPrefix(rest, "recover") {
+		return "", "", nil, false
+	}
+	m := regexp.MustCompile(`^([A-Z][A-Za-z0-9_]*)(?: called ([a-z_][A-Za-z0-9_]*)| using (.+))?$`).FindStringSubmatch(strings.TrimSuffix(rest, ":"))
+	if m == nil {
+		return "", "", nil, false
+	}
+	if m[2] != "" {
+		return m[1], m[2], nil, true
+	}
+	if m[3] != "" {
+		for _, field := range strings.Split(m[3], ",") {
+			fields = append(fields, strings.TrimSpace(field))
+		}
+	}
+	return m[1], "", fields, true
+}
+
+func (r *runtime) matchesFailureHandler(h *Statement, err error) bool {
+	kind, _, _, typed := failureHandlerHeader(h.Text)
+	if !typed {
+		return true
+	}
+	var tf *typedFailure
+	if !errors.As(err, &tf) {
+		return false
+	}
+	return tf.kind == kind
+}
+
+func (r *runtime) bindFailureHandler(h *Statement, err error) {
+	kind, binding, fields, typed := failureHandlerHeader(h.Text)
+	if !typed {
+		return
+	}
+	value := FailureValue(err)
+	if binding != "" {
+		r.env[binding] = value
+		return
+	}
+	for _, field := range fields {
+		if v, ok := value[field]; ok {
+			r.env[field] = v
+		}
+	}
+	_ = kind
+}
+
+func (r *runtime) callHasResult(s *Statement) bool {
+	if s == nil {
+		return false
+	}
+	if s.Kind == "call" {
+		m := match("call", s.Text)
+		if strings.Contains(m[1], ".") {
+			alias, action, _ := strings.Cut(m[1], ".")
+			if mod := r.imports[alias]; mod != nil {
+				if fn := mod.Actions[action]; fn != nil {
+					decl, _ := parseActionDecl(fn.Text)
+					return decl.HasResult
+				}
+			}
+			return false
+		}
+		if fn := r.functions[m[1]]; fn != nil {
+			decl, _ := parseActionDecl(fn.Text)
+			return decl.HasResult
+		}
+		return false
+	}
+	if s.Kind == "sent" {
+		m := matchSent(s.Text)
+		mod, action, ok := r.vocabLookup(m[1])
+		if !ok || mod.Actions[action] == nil {
+			return false
+		}
+		decl, _ := parseActionDecl(mod.Actions[action].Text)
+		return decl.HasResult
+	}
+	return false
+}
+
+func (r *runtime) callResultType(s *Statement) (TypeRef, bool) {
+	if s == nil {
+		return TypeRef{}, false
+	}
+	var declaration *Statement
+	if s.Kind == "call" {
+		m := match("call", s.Text)
+		if strings.Contains(m[1], ".") {
+			alias, action, _ := strings.Cut(m[1], ".")
+			if module := r.imports[alias]; module != nil {
+				declaration = module.Actions[action]
+			}
+		} else {
+			declaration = r.functions[m[1]]
+		}
+	} else if s.Kind == "sent" {
+		m := matchSent(s.Text)
+		if mod, action, ok := r.vocabLookup(m[1]); ok {
+			declaration = mod.Actions[action]
+		}
+	}
+	if declaration == nil {
+		return TypeRef{}, false
+	}
+	decl, err := parseActionDecl(declaration.Text)
+	if err != nil || !decl.HasResult {
+		return TypeRef{}, false
+	}
+	return decl.Result, true
+}
+
+func bindCallResult(s *Statement, value any, r *runtime) bool {
+	if s == nil {
+		return true
+	}
+	if s.Kind == "call" {
+		name := match("call", s.Text)[3]
+		if name != "" {
+			r.env[name] = value
+		}
+		return true
+	}
+	if s.Kind == "sent" {
+		name := matchSent(s.Text)[4]
+		if name != "" {
+			r.env[name] = value
+		}
+		return true
+	}
+	return false
+}
+
+func (r *runtime) failureFrames() []map[string]any {
+	frames := make([]map[string]any, 0, len(r.debugStack)+1)
+	for _, frame := range r.debugStack {
+		frames = append(frames, map[string]any{
+			"name": frame.Name, "path": frame.Path, "line": frame.Line,
+			"column": frame.Column, "kind": frame.Kind, "text": frame.Text,
+		})
+	}
+	return frames
+}
+
+func (r *runtime) failureStatementFrame(s *Statement) map[string]any {
+	if s == nil {
+		return nil
+	}
+	return map[string]any{
+		"name": r.logicalPath, "path": r.logicalPath, "line": s.Line,
+		"column": 1, "kind": s.Kind, "text": s.Text,
+	}
+}
+
+func (r *runtime) propagateFailure(err error, s *Statement) error {
+	var failure *typedFailure
+	if !errors.As(err, &failure) {
+		return err
+	}
+	value := map[string]any{}
+	for key, item := range failure.value {
+		value[key] = item
+	}
+	frames := append([]map[string]any(nil), failure.frames...)
+	if frame := r.failureStatementFrame(s); frame != nil {
+		frames = append(frames, frame)
+	}
+	value["frames"] = frames
+	return &typedFailure{kind: failure.kind, value: value, frames: frames}
+}
+
+func (r *runtime) makeFailure(s *Statement, kind, message string) error {
+	definition := r.failures[kind]
+	if definition == nil {
+		return fmt.Errorf("unknown failure %s", kind)
+	}
+	frames := r.failureFrames()
+	value := map[string]any{
+		"kind": kind, "message": message, "retryable": false,
+		"frames": frames,
+	}
+	if frame := r.failureStatementFrame(s); frame != nil {
+		frames = append(frames, frame)
+		value["frames"] = frames
+	}
+	seen := map[string]bool{}
+	for _, field := range s.Body {
+		if field.Kind != "field" {
+			continue
+		}
+		name, expression, ok := strings.Cut(field.Text, " from ")
+		if !ok {
+			return fmt.Errorf("failure %s field must use NAME from VALUE", kind)
+		}
+		if seen[name] {
+			return fmt.Errorf("failure %s field %s appears more than once", kind, name)
+		}
+		seen[name] = true
+		declared, ok := failureFieldsByName(definition)[name]
+		if !ok {
+			return fmt.Errorf("failure %s has no field %s", kind, name)
+		}
+		v, err := r.eval(expression, nil)
+		if err != nil {
+			return err
+		}
+		if !typeMatchesRef(v, declared.Type, r.definitions) {
+			return fmt.Errorf("%s.%s must be %s; received %s", kind, name, declared.Type.String(), valueTypeName(v))
+		}
+		value[name] = v
+	}
+	for _, field := range definition.Fields {
+		if !field.Type.Optional && !seen[field.Name] {
+			return fmt.Errorf("%s requires field %s as %s", kind, field.Name, field.Type.String())
+		}
+	}
+	return &typedFailure{kind: kind, value: value, frames: frames}
+}
+
+func isFatalFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	var typed *typedFailure
+	return !errors.As(err, &typed) && fatalParallel(err)
+}
+
 func (r *runtime) execute(s *Statement) error {
 	m := match(s.Kind, s.Text)
 	switch s.Kind {
-	case "command", "parameter", "import", "package", "export", "define":
+	case "command", "parameter", "import", "package", "export", "define", "failure":
 		return nil
 	case "schema":
 		r.schemas[m[1]] = s
@@ -395,13 +675,51 @@ func (r *runtime) execute(s *Statement) error {
 		if r.activeFailure == nil {
 			return fmt.Errorf("rethrow requires an active failure handler")
 		}
-		return r.activeFailure
+		return r.propagateFailure(r.activeFailure, s)
+	case "passFailure":
+		if r.activeFailure == nil {
+			return fmt.Errorf("pass failure on requires an active failure handler")
+		}
+		return r.propagateFailure(r.activeFailure, s)
+	case "finish":
+		if m[1] == "" {
+			return returnValue{hasValue: false}
+		}
+		v, e := r.eval(m[1], nil)
+		if e != nil {
+			return e
+		}
+		return returnValue{value: v, hasValue: true}
+	case "recover":
+		if r.activeFailure == nil {
+			return fmt.Errorf("recover requires an active failure handler")
+		}
+		if m[1] == "" {
+			return recoveryValue{}
+		}
+		v, e := r.eval(m[1], nil)
+		if e != nil {
+			return e
+		}
+		return recoveryValue{value: v, hasValue: true}
+	case "fail":
+		message := ""
+		if m[2] != "" {
+			var e error
+			message, e = r.text(m[2])
+			if e != nil {
+				return e
+			}
+		}
+		return r.makeFailure(s, m[1], message)
+	case "capture":
+		return r.capture(s, m)
 	case "return":
 		v, e := r.eval(m[1], nil)
 		if e != nil {
 			return e
 		}
-		return returnValue{v}
+		return returnValue{value: v, hasValue: true}
 	case "sent":
 		m := matchSent(s.Text)
 		mod, action, ok := r.vocabLookup(m[1])
@@ -475,7 +793,7 @@ func (r *runtime) execute(s *Statement) error {
 			}
 		}
 		outer := r.env
-		outerImports, outerVocab, outerTypes, outerDefs := r.imports, r.vocab, r.types, r.definitions
+		outerImports, outerVocab, outerTypes, outerDefs, outerFailures := r.imports, r.vocab, r.types, r.definitions, r.failures
 		if r.module != nil {
 			r.imports = r.module.scope(m[1])
 			r.vocab = r.module.vocabulary(m[1])
@@ -487,6 +805,11 @@ func (r *runtime) execute(s *Statement) error {
 			definitionBase = r.module.Definitions
 		}
 		r.definitions, _ = visibleDefinitions(definitionBase, r.imports)
+		if r.module != nil {
+			r.failures = r.module.Failures
+		} else {
+			r.failures = r.p.Failures
+		}
 		r.depth++
 		r.debugStack = append(r.debugStack, DebugFrame{Path: r.logicalPath, Line: fn.Line, Column: 1, Name: m[1], Kind: "action", Text: fn.Text, Depth: r.depth})
 		e = r.block(fn.Body)
@@ -497,12 +820,24 @@ func (r *runtime) execute(s *Statement) error {
 		r.vocab = outerVocab
 		r.types = outerTypes
 		r.definitions = outerDefs
+		r.failures = outerFailures
 		var ret returnValue
 		if errors.As(e, &ret) {
-			if m[3] != "" {
+			if decl.HasResult && !ret.hasValue {
+				return fmt.Errorf("action %s finished without a value", m[1])
+			}
+			if decl.HasResult && !typeMatchesRef(ret.value, decl.Result, r.definitions) {
+				return fmt.Errorf("action %s must finish with %s; received %s", m[1], decl.Result.String(), valueTypeName(ret.value))
+			}
+			if m[3] != "" && ret.hasValue {
 				r.env[m[3]] = ret.value
+			} else if m[3] != "" {
+				return fmt.Errorf("action %s did not return a value", m[1])
 			}
 			return nil
+		}
+		if e == nil && decl.HasResult {
+			return fmt.Errorf("action %s did not finish with a value", m[1])
 		}
 		if e == nil && m[3] != "" {
 			return fmt.Errorf("action %s did not return a value", m[1])
@@ -1002,13 +1337,13 @@ func (r *runtime) execute(s *Statement) error {
 		return e
 	case "stop":
 		if m[1] == "" {
-			return fmt.Errorf("script stopped")
+			return &StopError{Message: "script stopped"}
 		}
 		v, e := r.text(m[1])
 		if e != nil {
 			return e
 		}
-		return fmt.Errorf("%s", v)
+		return &StopError{Message: v}
 	default:
 		return fmt.Errorf("construction %q is not executable here", s.Kind)
 	}
@@ -1142,7 +1477,7 @@ func (r *runtime) callModule(s *Statement, mod *Module, action, display string, 
 		}
 	}
 	outer := r.env
-	outerFns, outerSchemas, outerImports, outerVocab, outerTypes, outerDefs := r.functions, r.schemas, r.imports, r.vocab, r.types, r.definitions
+	outerFns, outerSchemas, outerImports, outerVocab, outerTypes, outerDefs, outerFailures := r.functions, r.schemas, r.imports, r.vocab, r.types, r.definitions, r.failures
 	outerModule := r.module
 	r.module = mod
 	imports := mod.scope(action)
@@ -1153,6 +1488,7 @@ func (r *runtime) callModule(s *Statement, mod *Module, action, display string, 
 	r.functions, r.schemas, r.imports, r.vocab = copyStatements(mod.Actions), copyStatements(mod.Schemas), imports, mod.vocabulary(action)
 	r.types = localTypes
 	r.definitions = actionDefs
+	r.failures = mod.Failures
 	r.depth++
 	modulePath := mod.Key
 	if !filepath.IsAbs(modulePath) && r.logicalPath != "" {
@@ -1165,11 +1501,20 @@ func (r *runtime) callModule(s *Statement, mod *Module, action, display string, 
 	r.env = outer
 	r.functions, r.schemas, r.imports, r.vocab = outerFns, outerSchemas, outerImports, outerVocab
 	r.types, r.definitions = outerTypes, outerDefs
+	r.failures = outerFailures
 	r.module = outerModule
 	var ret returnValue
 	if errors.As(e, &ret) {
-		if called != "" {
+		if decl.HasResult && !ret.hasValue {
+			return fmt.Errorf("action %s finished without a value", display)
+		}
+		if decl.HasResult && !typeMatchesRef(ret.value, decl.Result, actionDefs) {
+			return fmt.Errorf("action %s must finish with %s; received %s", display, decl.Result.String(), valueTypeName(ret.value))
+		}
+		if called != "" && ret.hasValue {
 			r.env[called] = ret.value
+		} else if called != "" {
+			return fmt.Errorf("action %s did not return a value", display)
 		}
 		return nil
 	}
@@ -1177,8 +1522,48 @@ func (r *runtime) callModule(s *Statement, mod *Module, action, display string, 
 		// Lines inside a module body are module-relative; name the module.
 		return fmt.Errorf("module %s: %w", mod.Name, e)
 	}
+	if decl.HasResult {
+		return fmt.Errorf("action %s did not finish with a value", display)
+	}
 	if called != "" {
 		return fmt.Errorf("action %s did not return a value", display)
+	}
+	return nil
+}
+
+func (r *runtime) capture(s *Statement, m []string) error {
+	const hiddenResult = "__captured_value"
+	previous, hadPrevious := r.env[hiddenResult]
+	defer func() {
+		if hadPrevious {
+			r.env[hiddenResult] = previous
+		} else {
+			delete(r.env, hiddenResult)
+		}
+	}()
+	callText := "call " + m[1]
+	if m[2] != "" {
+		callText += " with " + m[2]
+	}
+	callText += " called " + hiddenResult
+	call := &Statement{Kind: "call", Text: callText, Line: s.Line}
+	err := r.execute(call)
+	if err == nil {
+		r.env[m[3]] = map[string]any{
+			"succeeded": true,
+			"value":     r.env[hiddenResult],
+			"failure":   nil,
+		}
+		return nil
+	}
+	var typed *typedFailure
+	if !errors.As(err, &typed) || isFatalFailure(err) {
+		return err
+	}
+	r.env[m[3]] = map[string]any{
+		"succeeded": false,
+		"value":     nil,
+		"failure":   FailureValue(err),
 	}
 	return nil
 }

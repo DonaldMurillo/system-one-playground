@@ -3,6 +3,7 @@
 package e2e
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -97,6 +98,31 @@ func TestCheckCleanScript(t *testing.T) {
 	_, _, code := runCLI(t, dir, "check", script)
 	if code != 0 {
 		t.Fatalf("exit = %d, want 0", code)
+	}
+}
+
+func TestCheckJSONIncludesTypedFailureMetadata(t *testing.T) {
+	dir := t.TempDir()
+	script := writeScript(t, dir, "failure.sos", `define failure Missing:
+to fetch may fail with Missing:
+  fail Missing with "missing"
+`)
+	stdout, stderr, code := runCLI(t, dir, "check", script, "--json")
+	if code != 0 {
+		t.Fatalf("exit = %d; stderr:\n%s", code, stderr)
+	}
+	var payload struct {
+		Diagnostics []any            `json:"diagnostics"`
+		Actions     []map[string]any `json:"actions"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
+		t.Fatalf("check JSON = %q: %v", stdout, err)
+	}
+	if len(payload.Diagnostics) != 0 || len(payload.Actions) != 1 {
+		t.Fatalf("check payload = %#v", payload)
+	}
+	if got := payload.Actions[0]["possibleFailures"]; got == nil {
+		t.Fatalf("check payload action = %#v, want possibleFailures", payload.Actions[0])
 	}
 }
 
@@ -206,6 +232,32 @@ func TestBuildNativeStandalone(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "5") {
 		t.Errorf("standalone stdout = %q, want it to contain 5", out.String())
+	}
+}
+
+func TestBuildNativeStandaloneTypedFailurePayload(t *testing.T) {
+	dir := t.TempDir()
+	script := writeScript(t, dir, "failure.sos", `define failure InvalidCity:
+  city as text
+to fetch with city as text returning text may fail with InvalidCity:
+  fail InvalidCity with "A city is required":
+    city from city
+call fetch with "" called value
+`)
+	output := filepath.Join(dir, "build", "failure")
+	_, stderr, code := runCLI(t, dir, "build", script, "--output", output)
+	if code != 0 {
+		t.Fatalf("build exit = %d; stderr:\n%s", code, stderr)
+	}
+	var out, errBuf strings.Builder
+	cmd := exec.Command(output)
+	cmd.Dir = t.TempDir()
+	cmd.Stdout, cmd.Stderr = &out, &errBuf
+	if err := cmd.Run(); err == nil {
+		t.Fatal("typed failure artifact succeeded")
+	}
+	if !strings.Contains(errBuf.String(), `"kind":"InvalidCity"`) || !strings.Contains(errBuf.String(), `"city":""`) {
+		t.Fatalf("artifact stderr = %q, want structured typed failure", errBuf.String())
 	}
 }
 

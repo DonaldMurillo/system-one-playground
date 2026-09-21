@@ -225,6 +225,7 @@ func (s *server) completion(params json.RawMessage) any {
 	uri, text, pos, ok := s.documentAt(params)
 	prefix := ""
 	currentLine := ""
+	lineContext := ""
 	var replace *lspRange
 	if ok {
 		line := lineAt(text, pos.Line)
@@ -241,7 +242,9 @@ func (s *server) completion(params json.RawMessage) any {
 			end++
 		}
 		prefix = strings.ToLower(line[start:col])
-		if prefix != "" {
+		lineContext = strings.ToLower(strings.TrimSpace(line[:col]))
+		semanticContext := strings.HasSuffix(lineContext, "may fail with") || strings.HasSuffix(lineContext, "fail") || strings.Contains(lineContext, "on failure")
+		if prefix != "" || semanticContext {
 			replace = &lspRange{Start: lspPosition{Line: pos.Line, Character: byteToChar(line, start)}, End: lspPosition{Line: pos.Line, Character: byteToChar(line, end)}}
 		}
 
@@ -260,7 +263,8 @@ func (s *server) completion(params json.RawMessage) any {
 		}
 		items = append(items, item)
 	}
-	if !ok || prefix == "" || replace == nil {
+	semanticContext := strings.HasSuffix(lineContext, "may fail with") || strings.HasSuffix(lineContext, "fail") || strings.Contains(lineContext, "on failure")
+	if !ok || replace == nil || (prefix == "" && !semanticContext) {
 		// Empty prefix keeps the canonical keyword list exactly, matching
 		// long-standing clients.
 		return items
@@ -285,6 +289,15 @@ func (s *server) completion(params json.RawMessage) any {
 				"textEdit": wordEdit(name),
 			})
 		}
+		for name, definition := range program.Failures {
+			if prefix != "" && !strings.HasPrefix(strings.ToLower(name), prefix) {
+				continue
+			}
+			items = append(items, map[string]any{
+				"label": name, "kind": 7, "detail": failureSignature(definition),
+				"textEdit": wordEdit(name),
+			})
+		}
 		for _, field := range recordFieldCompletions(program, text, currentLine, prefix) {
 			items = append(items, map[string]any{
 				"label":    field,
@@ -305,7 +318,7 @@ func (s *server) completion(params json.RawMessage) any {
 			if !completionAddresses(t, form.label, prefix) {
 				continue
 			}
-			detail := entrySignature(t.Name, t.Params, t.Result)
+			detail := entrySignature(t.Name, t.Params, t.Result, t.PossibleFailures)
 			if !t.Enabled {
 				detail = "auto-import · " + t.ImportPath
 			}

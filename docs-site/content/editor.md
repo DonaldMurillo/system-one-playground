@@ -9,7 +9,9 @@ retains comments, incomplete strings, source spans, and indented blocks.
 The repository ships a standalone extension in [`vscode/`](https://github.com/DonaldMurillo/system-one-playground/tree/main/vscode) for `.sos`
 files. It starts the same stdio language server as Studio, so diagnostics,
 completion, hover, definition lookup, formatting, semantic tokens, inlay hints,
-code actions, folding and CodeLens use the shared Go implementation.
+code actions, folding and CodeLens use the shared Go implementation. The
+extension also owns project execution and debugging through the same native
+runtime used by the CLI.
 
 Build and install it from the repository root:
 
@@ -18,7 +20,7 @@ go generate ./internal/sosbuild
 mkdir -p vscode/bin
 go build -o vscode/bin/sos ./cmd/sos
 pnpm --dir vscode package
-code --install-extension vscode/sysonescript-vscode-0.1.1.vsix
+code --install-extension vscode/sysonescript-vscode-0.2.0.vsix
 ```
 
 Marketplace releases bundle a platform-matched `sos` language-server binary,
@@ -40,15 +42,80 @@ other provider-backed behavior. Typing assistance itself is offline. The
 `sos/analyze` request; the server never makes a model call just because a file
 is open.
 
+### Project panel, execution, and debugging
+
+The SysOneScript Activity Bar panel is a project-control dashboard, not a
+second file browser. It resolves the project entrypoint deterministically from
+the workspace setting, the active `.sos` editor, `main.sos`/`index.sos`, or the first runnable script, and
+exposes **Run project**, **Check project**, **Build project**, **Debug
+project**, **Stop processes**, helper/generator actions, and Jev status. The
+Run, Check, and Build commands execute immediately; the panel keeps concise
+status while VS Code automatically opens the dedicated **SysOneScript Run**
+Output channel with the command, complete output, errors, and exit result. The
+panel's **Show run output** action reopens it. **Build project** writes to
+`bin/ENTRY_NAME` by default. The
+editor and Explorer context menus provide file-level **Run File**, **Explain
+File**, and **Debug File** commands. When a script declares command inputs,
+Debug File asks for the command and arguments; launch configurations can
+provide `args` directly.
+The extension contributes the `.sos` mark as a language-default icon, so
+compatible file-icon packs can display it without replacing the user's active
+pack. A pack's own `.sos` mapping wins, and packs that set
+`showLanguageModeIcons` to `false` suppress language-default icons. The
+standalone **SysOneScript Icons** theme remains available from VS Code's File
+Icon Theme picker as a fallback.
+
+VS Code presents a native **Get Started with SysOneScript** walkthrough after
+installation. It covers the project panel, visible run output, debugging, Jev
+setup, and the optional standalone CLI. Reopen it from **Welcome & setup** in
+the project panel or **SysOneScript: Open Welcome** in the Command Palette.
+Primary project actions remain available in both surfaces. The CLI download
+action is explicit and never modifies the user's PATH automatically.
+The panel also compares its bundled runtime version with `sysone` on `PATH`.
+When they differ, VS Code reports both versions and offers to run the CLI's
+explicit, checksum-verified updater in a visible terminal.
+
+The native `sos debug` command speaks the Debug Adapter Protocol. It pauses at
+executable source statements and supports source/conditional/hit-count
+breakpoints, logpoints, continue/pause/stop/restart controls, stepping,
+call-stack frames, locals, read-only expression evaluation, and runtime/trace
+output. The runtime supplies source locations and snapshots; the extension is
+not simulating a debugger from terminal text.
+
+Use **SysOneScript: Set Jev Token** to store `TYPESAFE_API_KEY` in VS Code's
+encrypted SecretStorage. The value is injected into the language server,
+runner, and debugger process environments and is never returned through the
+extension output or Variables view. Existing process and project `.env`
+configuration remains valid. The project panel's **Set Jev token** row performs
+the same setup directly and displays whether the credential comes from VS Code
+or the environment. **Clear Jev Token** appears in the panel for a VS
+Code-managed token and removes only the extension's stored secret. The view
+title bar contains Refresh only; Run and Jev are not duplicated there.
+
+Project helpers and generators are configured in `.vscode/sysonescript.json`:
+
+```json
+{
+  "helpers": [
+    { "name": "Build CLI", "command": "build", "args": ["main.sos", "--output", "bin/main"] },
+    { "name": "Generate fixtures", "command": "my-sos-generator", "args": ["--project", "."] }
+  ]
+}
+```
+
+Built-in SysOneScript commands use the bundled runner; other helper commands
+are launched from `PATH` with the configured project working directory.
+
 ### Marketplace publishing
 
 The extension release workflow is [`.github/workflows/vscode-release.yml`](https://github.com/DonaldMurillo/system-one-playground/blob/main/.github/workflows/vscode-release.yml).
 Create a VS Code Marketplace publisher whose identifier matches the extension
-manifest (`donaldmurillo`), create an Azure DevOps Personal Access Token with
-Marketplace **Manage** scope, and save it as the `VSCE_PAT` secret on a
-protected GitHub environment named `marketplace` with required reviewers. Then
+manifest (`donaldmurillo`). Automatic publishing uses an Azure DevOps Personal
+Access Token with Marketplace **Manage** scope saved as `VSCE_PAT` on a
+protected GitHub environment named `marketplace`; without it, CI produces the
+same platform VSIX files for manual Marketplace upload. Then
 bump `vscode/package.json` and `vscode/CHANGELOG.md` together. Pushing a tag
-like `vscode-v0.1.1` runs the checks, builds the platform bundles, waits for
+like `vscode-v0.2.0` runs the checks, builds the platform bundles, waits for
 approval, and publishes the matching version. The first publisher, token, and
 GitHub environment setup are account-level actions; they cannot be completed
 from the repository alone.
@@ -61,10 +128,21 @@ The Marketplace receives the `.vsix` extension packages, each with its matching
 
 Immediate lexical colors remain available while a language-server request is in
 flight. Semantic colors distinguish operations, bindings, parameters, types,
-namespaces, operators (including `plus` and `+`), strings, numbers, and comments.
+namespaces, operators (including `plus`, `times`, `+`, and `*`), strings,
+numbers, and comments. Interpolated expressions receive their own variable,
+number, and operator tokens instead of inheriting the surrounding string color.
+The extension's operator token inherits keyword styling so themes do not render
+language operators as ordinary variables.
 Hover describes known constructions
 and their effects. Inlay hints annotate values/types only when local analysis can
-justify them; they do not predict provider answers. Colon-led blocks can be folded.
+justify them, including confidently typed variables inside interpolations; they
+do not predict provider answers. Colon-led blocks can be folded.
+
+Named record definitions participate in the same offline editor model: type
+names after `as` complete and navigate to `define`, hover shows the ordered
+required/optional field shape, and definition/field tokens receive semantic
+highlighting. Known fields in `field of value` and dotted access are checked by
+the core; dynamic records continue to defer unknown-field errors to runtime.
 
 LSP positions use UTF-16 columns, including for emoji. Comments and quoted strings
 are scanned before keywords. The tolerant syntax engine (`internal/sossyntax`)

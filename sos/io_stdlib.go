@@ -247,6 +247,7 @@ func runProcess(ctx context.Context, opts Options, args []any) (any, error) {
 		}
 		argv = append(argv, s)
 	}
+	parentCtx := ctx
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, args[0].(string), argv...)
@@ -257,6 +258,9 @@ func runProcess(ctx context.Context, opts Options, args []any) (any, error) {
 	cmd.Stderr = &stderr
 	err := cmd.Run()
 	if ctx.Err() != nil {
+		if parentCtx.Err() == nil {
+			return nil, &operationTimeoutError{"process operation timed out"}
+		}
 		return nil, ctx.Err()
 	}
 	status := 0

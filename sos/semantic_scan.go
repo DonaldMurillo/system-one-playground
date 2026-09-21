@@ -168,8 +168,12 @@ func classifyUnderParent(parent *semNode, text string) (string, string) {
 		return "unknown", ""
 	}
 	switch parent.form {
-	case "schema", "define":
+	case "schema", "define", "failure":
 		if semanticSchemaFieldRe.MatchString(text) {
+			return "canonical", "field"
+		}
+	case "fail":
+		if semanticMakeFieldRe.MatchString(text) {
 			return "canonical", "field"
 		}
 	case "make":

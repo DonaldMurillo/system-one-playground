@@ -30,6 +30,13 @@ func analyze(p *Program) []Diagnostic {
 	for _, problem := range importedTypeProblems {
 		ds = append(ds, Diagnostic{1, 1, problem})
 	}
+	for _, failure := range p.Failures {
+		for _, field := range failure.Fields {
+			if err := validateTypeRefs(field.Type, visibleDefs, map[string]bool{}); err != nil {
+				ds = append(ds, Diagnostic{field.Line, 1, fmt.Sprintf("%s.%s: %v", failure.Name, field.Name, err)})
+			}
+		}
+	}
 	for _, statement := range p.Statements {
 		if statement.Kind == "to" {
 			actions[match("to", statement.Text)[1]] = statement
@@ -122,7 +129,8 @@ func analyze(p *Program) []Diagnostic {
 	}
 	var walk func([]*Statement)
 	walk = func(sts []*Statement) {
-		for _, s := range sts {
+		for i := 0; i < len(sts); i++ {
+			s := sts[i]
 			m := match(s.Kind, s.Text)
 			switch s.Kind {
 			case "command":
@@ -401,11 +409,51 @@ func analyze(p *Program) []Diagnostic {
 						add(s, s.Kind+" requires boolean")
 					}
 				}
+				if s.Kind == "when" {
+					if outcome, ok := resultNarrowing(m[1]); ok {
+						oldTypes := types
+						types = copyTypes(types)
+						types[outcome] = TypeRef{Name: "ResultSuccess"}
+						walk(s.Body)
+						if i+1 < len(sts) && sts[i+1].Kind == "otherwise" {
+							types = copyTypes(oldTypes)
+							types[outcome] = TypeRef{Name: "ResultFailure"}
+							walk(sts[i+1].Body)
+							i++
+						}
+						types = oldTypes
+						continue
+					}
+				}
 			case "repeat", "return", "folder", "append":
 				checkExpr(s, m[1], false)
 				if s.Kind == "append" && !names[m[2]] {
 					add(s, "unknown list "+m[2])
 				}
+			case "finish", "recover":
+				if m[1] != "" {
+					checkExpr(s, m[1], false)
+				}
+			case "fail":
+				if m[2] != "" {
+					checkExpr(s, m[2], false)
+				}
+				for _, field := range s.Body {
+					if field.Kind == "field" {
+						if _, expression, ok := strings.Cut(field.Text, " from "); ok {
+							checkExpr(field, expression, false)
+						}
+					}
+				}
+			case "capture":
+				if !captureTargetKnown(p, actions, m[1]) {
+					add(s, "unknown capture target "+m[1])
+				}
+				if m[2] != "" {
+					checkExpr(s, m[2], false)
+				}
+				names[m[3]] = true
+				types[m[3]] = TypeRef{Name: "Result"}
 			case "take":
 				checkExpr(s, m[2], false)
 				checkExpr(s, m[3], false)
@@ -448,6 +496,18 @@ func analyze(p *Program) []Diagnostic {
 					checkExpr(s, m[1], false)
 				}
 			case "handler":
+				if m[1] == "failure" {
+					_, binding, fields, typed := failureHandlerHeader(s.Text)
+					if typed {
+						if binding != "" {
+							names[binding] = true
+						} else {
+							for _, field := range fields {
+								names[field] = true
+							}
+						}
+					}
+				}
 				if m[1] == "uncertain" && m[2] == "" {
 					add(s, "on uncertain expects inline keep, discard, or stop")
 				}
@@ -462,6 +522,9 @@ func analyze(p *Program) []Diagnostic {
 							add(s, "on existing expects stop or replace")
 						}
 					default:
+						if _, _, _, typed := failureHandlerHeader(s.Text); typed {
+							break
+						}
 						kind := classifyLine(m[2])
 						if kind == "" {
 							add(s, "unknown handler action")
@@ -489,7 +552,7 @@ func analyze(p *Program) []Diagnostic {
 			continue
 		}
 		name := match("export", s.Text)[1]
-		if !funcs[name] && !schemas[name] && p.Definitions[name] == nil {
+		if !funcs[name] && !schemas[name] && p.Definitions[name] == nil && p.Failures[name] == nil {
 			add(s, "export "+name+" has no matching declaration")
 			continue
 		}
@@ -500,7 +563,395 @@ func analyze(p *Program) []Diagnostic {
 		exported[name] = true
 	}
 	walk(p.Statements)
+	ds = append(ds, checkActionContracts(p, actions, visibleDefs)...)
 	return ds
+}
+
+// checkActionContracts performs the deterministic part of typed failure
+// checking. Untyped legacy actions remain dynamic; once an action declares a
+// result or failure set, direct calls and explicit terminal forms participate
+// in the closed contract.
+func checkActionContracts(p *Program, actions map[string]*Statement, defs map[string]*RecordDef) []Diagnostic {
+	var ds []Diagnostic
+	visibleFailures := visibleFailureDefinitions(p)
+	add := func(line int, format string, args ...any) {
+		ds = append(ds, Diagnostic{line, 1, fmt.Sprintf(format, args...)})
+	}
+	for name, fn := range actions {
+		decl, err := parseActionDecl(fn.Text)
+		if err != nil {
+			continue
+		}
+		typed := decl.HasResult || len(decl.Failures) > 0
+		if !typed {
+			continue
+		}
+		declared := map[string]bool{}
+		for _, failure := range decl.Failures {
+			declared[failure] = true
+			if visibleFailures[failure] == nil {
+				add(fn.Line, "%s declares unknown failure %s", name, failure)
+			}
+		}
+		var visit func([]*Statement, bool)
+		visit = func(stmts []*Statement, inHandler bool) {
+			for _, s := range stmts {
+				m := match(s.Kind, s.Text)
+				switch s.Kind {
+				case "finish":
+					if decl.HasResult && m[1] == "" {
+						add(s.Line, "%s must finish with %s", name, decl.Result.String())
+					}
+					if !decl.HasResult && m[1] != "" {
+						add(s.Line, "%s cannot finish with a value", name)
+					}
+					if decl.HasResult && m[1] != "" {
+						if message := staticArgumentProblem(m[1], decl.Result, map[string]TypeRef{}, defs, name, "result"); message != "" {
+							add(s.Line, "%s", message)
+						}
+					}
+				case "return":
+					if !decl.HasResult {
+						// Legacy return remains valid for untyped actions only.
+						add(s.Line, "%s cannot return a value; use finish with only for a returning action", name)
+					} else if message := staticArgumentProblem(m[1], decl.Result, map[string]TypeRef{}, defs, name, "result"); message != "" {
+						add(s.Line, "%s", message)
+					}
+				case "fail":
+					failure := m[1]
+					if visibleFailures[failure] == nil {
+						add(s.Line, "unknown failure %s", failure)
+					} else if !declared[failure] {
+						add(s.Line, "%s may pass %s on; handle it or add it to \"may fail with\"", name, failure)
+					}
+					if m[2] != "" {
+						checkStaticActionExpr(s, m[2], defs, add)
+					}
+					checkFailurePayload(s, visibleFailures[failure], defs, add)
+				case "call":
+					checkFailureHandlers(s, visibleFailures, add)
+					visit(s.Body, true)
+					for _, failure := range possibleFailuresForCall(p, actions, s) {
+						if declared[failure] || callHasFailureHandler(s, failure) {
+							continue
+						}
+						add(s.Line, "%s may pass %s on; handle it or add it to \"may fail with\"", name, failure)
+					}
+				case "sent":
+					for _, failure := range possibleFailuresForCall(p, actions, s) {
+						if declared[failure] || callHasFailureHandler(s, failure) {
+							continue
+						}
+						add(s.Line, "%s may pass %s on; handle it or add it to \"may fail with\"", name, failure)
+					}
+				case "handler":
+					if match(s.Kind, s.Text)[1] != "failure" {
+						break
+					}
+					if m[2] == "" && len(s.Body) > 0 && !handlerTerminates(s.Body) {
+						add(s.Line, "failure handler must recover, finish, fail, stop, or pass failure on")
+					}
+					kind, binding, fields, isTyped := failureHandlerHeader(s.Text)
+					if isTyped && visibleFailures[kind] == nil {
+						add(s.Line, "unknown failure handler %s", kind)
+					}
+					if isTyped {
+						if len(s.Body) == 0 {
+							add(s.Line, "failure handler must recover, finish, fail, stop, or pass failure on")
+						} else if !handlerTerminates(s.Body) {
+							add(s.Line, "failure handler must recover, finish, fail, stop, or pass failure on")
+						}
+						if binding != "" && len(fields) > 0 {
+							add(s.Line, "called and using are mutually exclusive in a failure handler")
+						}
+						if visibleFailures[kind] != nil {
+							valid := map[string]bool{"kind": true, "message": true, "retryable": true, "status": true, "code": true, "frames": true}
+							for _, field := range visibleFailures[kind].Fields {
+								valid[field.Name] = true
+							}
+							for _, field := range fields {
+								if !valid[field] {
+									add(s.Line, "failure %s has no field %s", kind, field)
+								}
+							}
+						}
+					}
+					visit(s.Body, true)
+				default:
+					visit(s.Body, inHandler)
+				}
+			}
+		}
+		visit(fn.Body, false)
+		flow := actionFlow(fn.Body)
+		if decl.HasResult && flow.fallsThrough {
+			add(fn.Line, "%s does not have a successful path ending in finish with a value", name)
+		}
+	}
+	return ds
+}
+
+func checkStaticActionExpr(s *Statement, expression string, defs map[string]*RecordDef, add func(int, string, ...any)) {
+	v, err := evaluate(expression, nil, nil)
+	if err == nil && !typeMatchesRef(v, TypeRef{Name: "text"}, defs) {
+		add(s.Line, "failure message must be text")
+	}
+}
+
+func checkFailurePayload(s *Statement, def *FailureDef, defs map[string]*RecordDef, add func(int, string, ...any)) {
+	if def == nil {
+		return
+	}
+	seen := map[string]bool{}
+	for _, child := range s.Body {
+		if child.Kind != "field" {
+			continue
+		}
+		name, expression, ok := strings.Cut(child.Text, " from ")
+		if !ok {
+			continue
+		}
+		if seen[name] {
+			add(child.Line, "%s field %s appears more than once", def.Name, name)
+		}
+		seen[name] = true
+		field, ok := failureFieldsByName(def)[name]
+		if !ok {
+			add(child.Line, "%s has no field %s", def.Name, name)
+			continue
+		}
+		if message := staticArgumentProblem(expression, field.Type, map[string]TypeRef{}, defs, def.Name, name); message != "" {
+			add(child.Line, "%s", message)
+		}
+	}
+	for _, field := range def.Fields {
+		if !field.Type.Optional && !seen[field.Name] {
+			add(s.Line, "%s requires field %s as %s", def.Name, field.Name, field.Type.String())
+		}
+	}
+}
+
+func possibleFailuresForCall(p *Program, actions map[string]*Statement, s *Statement) []string {
+	if p == nil || s == nil {
+		return nil
+	}
+	if s.Kind == "call" {
+		m := match("call", s.Text)
+		if strings.Contains(m[1], ".") {
+			alias, action, _ := strings.Cut(m[1], ".")
+			if p.Modules != nil {
+				if mod := p.Modules.Aliases[alias]; mod != nil {
+					return modulePossibleFailures(mod, action, map[string]bool{})
+				}
+			}
+			return nil
+		}
+		if actions[m[1]] != nil {
+			return p.actionPossibleFailures(m[1], map[string]bool{})
+		}
+		return nil
+	}
+	if s.Kind == "sent" && p.Modules != nil && p.Modules.vocab != nil {
+		m := matchSent(s.Text)
+		mod, action, ok := p.Modules.vocab.resolveName(m[1])
+		if ok {
+			return modulePossibleFailures(mod, action, map[string]bool{})
+		}
+	}
+	return nil
+}
+
+func modulePossibleFailures(m *Module, action string, visiting map[string]bool) []string {
+	if m == nil || visiting[action] {
+		return nil
+	}
+	fn := m.Actions[action]
+	if fn == nil {
+		return nil
+	}
+	visiting[action] = true
+	defer delete(visiting, action)
+	decl, _ := parseActionDecl(fn.Text)
+	result := append([]string(nil), decl.Failures...)
+	var walk func([]*Statement)
+	walk = func(stmts []*Statement) {
+		for _, statement := range stmts {
+			switch statement.Kind {
+			case "fail":
+				result = append(result, match("fail", statement.Text)[1])
+			case "call":
+				callMatch := match("call", statement.Text)
+				callee := callMatch[1]
+				calleeModule := callMatch
+				if strings.Contains(callee, ".") {
+					alias, name, _ := strings.Cut(callee, ".")
+					calleeModule = nil
+					if imported := m.scope(action)[alias]; imported != nil {
+						result = append(result, modulePossibleFailures(imported, name, visiting)...)
+					}
+				}
+				if calleeModule != nil {
+					result = append(result, modulePossibleFailures(m, callee, visiting)...)
+				}
+			case "sent":
+				if vocab := m.vocabulary(action); vocab != nil {
+					if sent := matchSent(statement.Text); sent != nil {
+						if imported, name, ok := vocab.resolveName(sent[1]); ok {
+							result = append(result, modulePossibleFailures(imported, name, visiting)...)
+						}
+					}
+				}
+			}
+			walk(statement.Body)
+		}
+	}
+	walk(fn.Body)
+	return uniqueSorted(result)
+}
+
+func callHasFailureHandler(s *Statement, kind string) bool {
+	for _, child := range s.Body {
+		if child.Kind != "handler" || match("handler", child.Text)[1] != "failure" {
+			continue
+		}
+		handled, _, _, typed := failureHandlerHeader(child.Text)
+		if (!typed || handled == kind) && !handlerPassesFailure(child) {
+			return true
+		}
+	}
+	return false
+}
+
+func handlerPassesFailure(h *Statement) bool {
+	if h == nil {
+		return false
+	}
+	if strings.Contains(h.Text, "pass failure on") || strings.Contains(h.Text, "rethrow") {
+		return true
+	}
+	for _, child := range h.Body {
+		if handlerPassesFailure(child) {
+			return true
+		}
+	}
+	return false
+}
+
+func checkFailureHandlers(operation *Statement, failureDefs map[string]*FailureDef, add func(int, string, ...any)) {
+	seen := map[string]bool{}
+	general := -1
+	for i, child := range operation.Body {
+		if child.Kind != "handler" || match("handler", child.Text)[1] != "failure" {
+			continue
+		}
+		kind, _, _, typed := failureHandlerHeader(child.Text)
+		if !typed && match("handler", child.Text)[2] != "" {
+			continue
+		}
+		if !typed {
+			kind = ""
+		}
+		if seen[kind] {
+			add(child.Line, "failure handler %s is declared more than once", kind)
+		}
+		seen[kind] = true
+		if kind == "" {
+			general = i
+		}
+		if general >= 0 && i > general {
+			add(child.Line, "general failure handler must be last")
+		}
+	}
+	_ = failureDefs
+}
+
+func visibleFailureDefinitions(p *Program) map[string]*FailureDef {
+	result := map[string]*FailureDef{}
+	if p == nil {
+		return result
+	}
+	for name, definition := range p.Failures {
+		result[name] = definition
+	}
+	if p.Modules != nil {
+		for _, module := range p.Modules.Aliases {
+			for name, definition := range module.Failures {
+				if module.Exports[name] {
+					if _, exists := result[name]; !exists {
+						result[name] = definition
+					}
+				}
+			}
+		}
+	}
+	return result
+}
+
+type flowSummary struct {
+	fallsThrough bool
+	hasValue     bool
+	hasFailure   bool
+}
+
+// actionFlow is conservative: every branch must terminate for a typed action
+// to be considered complete. Loops may execute zero times, so a terminal
+// inside a loop cannot prove the outer action path complete.
+func actionFlow(stmts []*Statement) flowSummary {
+	result := flowSummary{fallsThrough: true}
+	for i := 0; i < len(stmts) && result.fallsThrough; i++ {
+		s := stmts[i]
+		switch s.Kind {
+		case "finish", "return":
+			result.fallsThrough = false
+			result.hasValue = match(s.Kind, s.Text)[1] != ""
+		case "fail", "stop", "passFailure", "rethrow":
+			result.fallsThrough = false
+			result.hasFailure = true
+		case "when":
+			then := actionFlow(s.Body)
+			otherwise := flowSummary{fallsThrough: true}
+			if i+1 < len(stmts) && stmts[i+1].Kind == "otherwise" {
+				otherwise = actionFlow(stmts[i+1].Body)
+				i++
+			}
+			result.fallsThrough = then.fallsThrough || otherwise.fallsThrough
+			result.hasValue = then.hasValue || otherwise.hasValue
+			result.hasFailure = then.hasFailure || otherwise.hasFailure
+		case "for", "while", "repeat", "map":
+			result.fallsThrough = true
+		}
+	}
+	return result
+}
+
+// handlerTerminates verifies that every handler branch produces an outcome.
+// recover is terminal for the handler because control returns to the wrapped
+// operation after recovery; finish/fail/pass/rethrow/stop terminate the action
+// or propagate the failure.
+func handlerTerminates(stmts []*Statement) bool {
+	var fallsThrough func([]*Statement) bool
+	fallsThrough = func(body []*Statement) bool {
+		canFallThrough := true
+		for i := 0; i < len(body) && canFallThrough; i++ {
+			s := body[i]
+			switch s.Kind {
+			case "recover", "finish", "fail", "stop", "passFailure", "rethrow", "return":
+				canFallThrough = false
+			case "when":
+				then := fallsThrough(s.Body)
+				otherwise := true
+				if i+1 < len(body) && body[i+1].Kind == "otherwise" {
+					otherwise = fallsThrough(body[i+1].Body)
+					i++
+				}
+				canFallThrough = then || otherwise
+			case "for", "while", "repeat", "map":
+				canFallThrough = true
+			}
+		}
+		return canFallThrough
+	}
+	return !fallsThrough(stmts)
 }
 
 // sentTargetResolve resolves a sentence-call name for checking. Qualified
@@ -590,6 +1041,24 @@ func knownFieldProblem(field, receiver string, types map[string]TypeRef, defs ma
 	if typ.Name == "" || typ.Name == "any" || typ.Element != nil {
 		return ""
 	}
+	if typ.Name == "Result" {
+		if field != "succeeded" && field != "value" && field != "failure" {
+			return fmt.Sprintf("Result has no field %s", field)
+		}
+		return ""
+	}
+	if typ.Name == "ResultSuccess" {
+		if field == "failure" {
+			return "Result.failure is unavailable in a successful branch"
+		}
+		return ""
+	}
+	if typ.Name == "ResultFailure" {
+		if field == "value" {
+			return "Result.value is unavailable in a failed branch"
+		}
+		return ""
+	}
 	if def := defs[typ.Name]; def != nil {
 		if _, ok := fieldsByName(def)[field]; !ok {
 			return fmt.Sprintf("%s has no field %s", typ.Name, field)
@@ -608,6 +1077,19 @@ func dottedFieldProblem(expression string, types map[string]TypeRef, defs map[st
 		if typ.Name == "" || typ.Name == "any" || typ.Element != nil {
 			return ""
 		}
+		if typ.Name == "Result" {
+			if field != "succeeded" && field != "value" && field != "failure" {
+				return fmt.Sprintf("Result has no field %s", field)
+			}
+			typ = TypeRef{}
+			continue
+		}
+		if typ.Name == "ResultSuccess" && field == "failure" {
+			return "Result.failure is unavailable in a successful branch"
+		}
+		if typ.Name == "ResultFailure" && field == "value" {
+			return "Result.value is unavailable in a failed branch"
+		}
 		def := defs[typ.Name]
 		if def == nil {
 			return ""
@@ -619,6 +1101,30 @@ func dottedFieldProblem(expression string, types map[string]TypeRef, defs map[st
 		typ = declared.Type.base()
 	}
 	return ""
+}
+
+func resultNarrowing(expression string) (string, bool) {
+	parts := strings.SplitN(strings.TrimSpace(expression), " of ", 2)
+	if len(parts) == 2 && strings.TrimSpace(parts[0]) == "succeeded" {
+		name := strings.TrimSpace(parts[1])
+		if validName(name) {
+			return name, true
+		}
+	}
+	return "", false
+}
+
+func captureTargetKnown(p *Program, actions map[string]*Statement, target string) bool {
+	if actions[target] != nil {
+		return true
+	}
+	if strings.Contains(target, ".") && p != nil && p.Modules != nil {
+		alias, action, _ := strings.Cut(target, ".")
+		if module := p.Modules.Aliases[alias]; module != nil {
+			return module.Actions[action] != nil || module.Native[action].Name != ""
+		}
+	}
+	return false
 }
 
 func actionBodyBinds(stmts []*Statement, wanted string) bool {

@@ -30,7 +30,7 @@ commands:
   canonicalize FILE [--write|--diff] [--line N]
                                       resolve canonical source or one line
   config FILE                         show effective configuration as JSON
-  check FILE                          report diagnostics for FILE
+  check FILE [--json]                 report diagnostics and failure contracts
   fmt FILE [--write]                  print formatted FILE, or rewrite it
   build FILE --output PATH [--target native|wasm-browser|wasm-wasi]
                                       build a standalone executable
@@ -50,7 +50,7 @@ script's command declarations; --help after FILE prints the script's usage.
 token available to scripts after FILE.
 `
 
-const checkUsage = "usage: sos check FILE\n"
+const checkUsage = "usage: sos check FILE [--json]\n"
 
 const fmtUsage = "usage: sos fmt FILE [--write]\n"
 
@@ -298,10 +298,21 @@ parse:
 	}
 	var exit interface{ ExitCode() int }
 	if errors.As(runErr, &exit) {
+		var stopped *sos.StopError
+		if errors.As(runErr, &stopped) {
+			fmt.Fprintf(stderr, "sos: run: %s\n", stopped.Message)
+		}
 		return exit.ExitCode()
 	}
 	if runErr != nil {
-		fmt.Fprintf(stderr, "sos: run: %v\n", runErr)
+		failure := sos.FailureValue(runErr)
+		if kind, ok := failure["kind"].(string); ok && kind != "runtime" {
+			message, _ := failure["message"].(string)
+			payload, _ := json.Marshal(failure)
+			fmt.Fprintf(stderr, "sos: run: failure %s: %s (%s)\n", kind, message, payload)
+		} else {
+			fmt.Fprintf(stderr, "sos: run: %v\n", runErr)
+		}
 		return 1
 	}
 	return 0
@@ -309,11 +320,14 @@ parse:
 
 func cmdCheck(args []string, stdout, stderr io.Writer) int {
 	file := ""
+	jsonOut := false
 	for _, arg := range args {
 		switch {
 		case arg == "-h" || arg == "--help":
 			fmt.Fprint(stdout, checkUsage)
 			return 0
+		case arg == "--json":
+			jsonOut = true
 		case strings.HasPrefix(arg, "-"):
 			fmt.Fprintf(stderr, "sos: check: unknown flag %s\n%s", arg, checkUsage)
 			return 2
@@ -333,10 +347,39 @@ func cmdCheck(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "sos: check: %v\n", err)
 		return 1
 	}
-	if printDiagnostics(stderr, file, sos.CheckFile(file, string(source))) {
+	program, diagnostics := sos.LoadProgram(file, string(source))
+	if jsonOut {
+		payload := map[string]any{
+			"diagnostics":      diagnostics,
+			"actions":          program.ActionMetadata(),
+			"possibleFailures": failureMetadata(program),
+		}
+		if err := json.NewEncoder(stdout).Encode(payload); err != nil {
+			fmt.Fprintf(stderr, "sos: check: %v\n", err)
+			return 1
+		}
+		if len(diagnostics) > 0 {
+			return 1
+		}
+		return 0
+	}
+	if printDiagnostics(stderr, file, diagnostics) {
 		return 1
 	}
 	return 0
+}
+
+func failureMetadata(program *sos.Program) map[string][]string {
+	result := map[string][]string{}
+	if program == nil {
+		return result
+	}
+	for _, action := range program.ActionMetadata() {
+		if len(action.PossibleFailures) > 0 {
+			result[action.Name] = append([]string(nil), action.PossibleFailures...)
+		}
+	}
+	return result
 }
 
 func cmdFmt(args []string, stdout, stderr io.Writer) int {

@@ -82,11 +82,12 @@ func TestBudgetExhaustionStopsAdditionalHTTPAttempts(t *testing.T) {
 	defer server.Close()
 	t.Setenv("TYPESAFE_BASE_URL", server.URL)
 	dir := t.TempDir()
-	// Handling a provider failure must not reset the consumed allowance.
+	// Handling a provider failure must not reset the consumed allowance, and
+	// budget exhaustion is fatal rather than catchable by the legacy handler.
 	source := "+++\nversion=1\n[budget.run]\nrequests=1\n+++\nrepeat 3 times:\n  judge \"text\" by jev \"Urgent\" called answer\n    on failure show \"handled\"\n"
 	script := writeScript(t, dir, "limits.sos", source)
 	out, stderr, code := runCLI(t, dir, "run", script)
-	if code != 0 || calls.Load() != 1 || strings.Count(out, "handled") != 3 || !strings.Contains(stderr, "requests=1/1") {
+	if code != 1 || calls.Load() != 1 || strings.Count(out, "handled") != 1 || !strings.Contains(stderr, "requests=1/1") {
 		t.Fatalf("exit=%d calls=%d out=%s err=%s", code, calls.Load(), out, stderr)
 	}
 }

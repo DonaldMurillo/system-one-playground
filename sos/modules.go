@@ -44,6 +44,7 @@ type Module struct {
 	Actions     map[string]*Statement
 	Schemas     map[string]*Statement
 	Definitions map[string]*RecordDef
+	Failures    map[string]*FailureDef
 	// fileImports maps each action to its defining file's import scope;
 	// fileVocabs maps it to that file's definition-site vocabulary.
 	fileImports map[string]map[string]*Module
@@ -156,10 +157,112 @@ func (t *ModuleTable) Graph() *ModuleGraph {
 
 // OperationInfo describes one exported operation for tooling.
 type OperationInfo struct {
-	Module string   `json:"module"`
-	Name   string   `json:"name"`
-	Kind   string   `json:"kind"` // action, schema, or native
-	Params []string `json:"params,omitempty"`
+	Module           string      `json:"module"`
+	Name             string      `json:"name"`
+	Kind             string      `json:"kind"` // action, failure, schema, or native
+	Params           []string    `json:"params,omitempty"`
+	Result           string      `json:"result,omitempty"`
+	PossibleFailures []string    `json:"possibleFailures,omitempty"`
+	Failure          *FailureDef `json:"failure,omitempty"`
+}
+
+// ActionMetadata exposes the stable signature surface used by checkers,
+// Studio, and editor clients for actions declared in the current source.
+func (p *Program) ActionMetadata() []OperationInfo {
+	if p == nil {
+		return nil
+	}
+	var out []OperationInfo
+	for _, statement := range p.Statements {
+		if statement.Kind != "to" {
+			continue
+		}
+		decl, err := parseActionDecl(statement.Text)
+		if err != nil {
+			continue
+		}
+		info := OperationInfo{Name: decl.Name, Kind: "action"}
+		for _, param := range decl.Params {
+			info.Params = append(info.Params, param.Name+" as "+param.Type.String())
+		}
+		if decl.HasResult {
+			info.Result = decl.Result.String()
+		}
+		info.PossibleFailures = append(info.PossibleFailures, decl.Failures...)
+		info.PossibleFailures = append(info.PossibleFailures, p.actionPossibleFailures(decl.Name, map[string]bool{})...)
+		info.PossibleFailures = uniqueSorted(info.PossibleFailures)
+		out = append(out, info)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+func (p *Program) actionPossibleFailures(name string, visiting map[string]bool) []string {
+	if p == nil || visiting[name] {
+		return nil
+	}
+	fn := p.actionDeclaration(name)
+	if fn == nil {
+		return nil
+	}
+	visiting[name] = true
+	defer delete(visiting, name)
+	decl, _ := parseActionDecl(fn.Text)
+	result := append([]string(nil), decl.Failures...)
+	var walk func([]*Statement)
+	walk = func(stmts []*Statement) {
+		for _, statement := range stmts {
+			switch statement.Kind {
+			case "fail":
+				result = append(result, match("fail", statement.Text)[1])
+			case "call":
+				m := match("call", statement.Text)
+				if strings.Contains(m[1], ".") && p.Modules != nil {
+					alias, action, _ := strings.Cut(m[1], ".")
+					if module := p.Modules.Aliases[alias]; module != nil {
+						result = append(result, modulePossibleFailures(module, action, map[string]bool{})...)
+					}
+				} else if p.actionDeclaration(m[1]) != nil {
+					result = append(result, p.actionPossibleFailures(m[1], visiting)...)
+				}
+			case "sent":
+				if p.Modules != nil && p.Modules.vocab != nil {
+					if sent := matchSent(statement.Text); sent != nil {
+						if module, action, ok := p.Modules.vocab.resolveName(sent[1]); ok {
+							result = append(result, modulePossibleFailures(module, action, map[string]bool{})...)
+						}
+					}
+				}
+			}
+			walk(statement.Body)
+		}
+	}
+	walk(fn.Body)
+	return uniqueSorted(result)
+}
+
+func (p *Program) actionDeclaration(name string) *Statement {
+	for _, statement := range p.Statements {
+		if statement.Kind == "to" && match("to", statement.Text)[1] == name {
+			return statement
+		}
+	}
+	return nil
+}
+
+func uniqueSorted(values []string) []string {
+	seen := map[string]bool{}
+	for _, value := range values {
+		if value != "" {
+			seen[value] = true
+		}
+	}
+	result := make([]string, 0, len(seen))
+	for value := range seen {
+		result = append(result, value)
+	}
+	sort.Strings(result)
+	return result
 }
 
 // ExportedOperations lists every importable operation, sorted for stability.
@@ -206,11 +309,22 @@ func moduleOperations(m *Module) []OperationInfo {
 			}
 		} else if s := m.Actions[name]; s != nil {
 			info.Kind = "action"
+			if decl, err := parseActionDecl(s.Text); err == nil {
+				if decl.HasResult {
+					info.Result = decl.Result.String()
+				}
+				info.PossibleFailures = append(info.PossibleFailures, decl.Failures...)
+			}
+			info.PossibleFailures = append(info.PossibleFailures, modulePossibleFailures(m, name, map[string]bool{})...)
+			info.PossibleFailures = uniqueSorted(info.PossibleFailures)
 			if fm := match("to", s.Text); fm[2] != "" {
 				for _, n := range strings.Split(fm[2], ",") {
 					info.Params = append(info.Params, strings.TrimSpace(n))
 				}
 			}
+		} else if failure := m.Failures[name]; failure != nil {
+			info.Kind = "failure"
+			info.Failure = failure
 		} else {
 			info.Kind = "schema"
 		}
@@ -488,6 +602,7 @@ func buildModule(key string, files []*moduleFileDecls) (*Module, []Diagnostic) {
 		Actions:     map[string]*Statement{},
 		Schemas:     map[string]*Statement{},
 		Definitions: map[string]*RecordDef{},
+		Failures:    map[string]*FailureDef{},
 		fileImports: map[string]map[string]*Module{},
 		fileVocabs:  map[string]*fileVocab{},
 		Exports:     map[string]bool{},
@@ -531,6 +646,15 @@ func buildModule(key string, files []*moduleFileDecls) (*Module, []Diagnostic) {
 					ds = append(ds, diagnostic)
 				}
 				m.Definitions[name] = definition
+			case "failure":
+				name := match("failure", s.Text)[1]
+				if m.Failures[name] != nil {
+					ds = append(ds, Diagnostic{s.Line, 1, "duplicate failure " + name + " in package"})
+					continue
+				}
+				definition, definitionDiagnostics := parseFailureDefinition(s)
+				ds = append(ds, definitionDiagnostics...)
+				m.Failures[name] = definition
 			case "import", "export", "word":
 			default:
 				ds = append(ds, Diagnostic{s.Line, 1, "module top level allows only package, import, export, word, and declarations"})
@@ -540,6 +664,19 @@ func buildModule(key string, files []*moduleFileDecls) (*Module, []Diagnostic) {
 	for _, problem := range validateRecordDefinitions(m.Definitions) {
 		ds = append(ds, Diagnostic{1, 1, problem})
 	}
+	for _, failure := range m.Failures {
+		for _, field := range failure.Fields {
+			if err := validateTypeRefs(field.Type, m.Definitions, map[string]bool{}); err != nil {
+				ds = append(ds, Diagnostic{field.Line, 1, fmt.Sprintf("%s.%s: %v", failure.Name, field.Name, err)})
+			}
+		}
+	}
+	moduleStatements := make([]*Statement, 0, len(m.Actions))
+	for _, name := range sortedActionNames(m) {
+		moduleStatements = append(moduleStatements, m.Actions[name])
+	}
+	moduleProgram := &Program{Statements: moduleStatements, Definitions: m.Definitions, Failures: m.Failures}
+	ds = append(ds, checkActionContracts(moduleProgram, m.Actions, m.Definitions)...)
 	seen := map[string]bool{}
 	for _, f := range files {
 		for _, s := range f.stmts {
@@ -547,7 +684,7 @@ func buildModule(key string, files []*moduleFileDecls) (*Module, []Diagnostic) {
 				continue
 			}
 			name := match("export", s.Text)[1]
-			if m.Actions[name] == nil && m.Schemas[name] == nil && m.Definitions[name] == nil {
+			if m.Actions[name] == nil && m.Schemas[name] == nil && m.Definitions[name] == nil && m.Failures[name] == nil {
 				ds = append(ds, Diagnostic{s.Line, 1, "export " + name + " has no matching declaration"})
 				continue
 			}

@@ -176,6 +176,26 @@ read "optional.json" as json called rows
 
 An operation's handlers are indented under it, even if the operation has no colon. A failure sets the `error` text binding. `on success` runs only after successful execution. A failure inside a handler propagates. Cancellation always propagates.
 
+Typed actions can declare a result and a closed set of domain failures:
+
+```text
+define failure InvalidCity:
+  city as text
+
+to weather with city as text returning text may fail with InvalidCity:
+  when city is "":
+    fail InvalidCity with "A city is required":
+      city from city
+  finish with city
+```
+
+Typed handlers use `on failure NAME`, bind the structured `failure` value with
+`called`, and must explicitly `recover`, `finish`, `fail`, or `pass failure on`.
+Use `capture ACTION ... called outcome` when the failure should become data;
+`when succeeded of outcome` narrows `value` and `failure` to their valid
+branches. `sos check FILE --json` reports diagnostics, action signatures, and
+possible failure names for editor and build tooling.
+
 ## Commands and inputs
 
 ```text

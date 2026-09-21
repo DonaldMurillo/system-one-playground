@@ -262,9 +262,21 @@ func (s *Server) handleCheck(w http.ResponseWriter, r *http.Request) {
 		diagnostics = []sos.Diagnostic{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"diagnostics": sos.EditorDiagnostics(filename, req.Source, diagnostics),
-		"commands":    commandsMeta(program),
+		"diagnostics":      sos.EditorDiagnostics(filename, req.Source, diagnostics),
+		"commands":         commandsMeta(program),
+		"actions":          program.ActionMetadata(),
+		"possibleFailures": failureMetadata(program),
 	})
+}
+
+func failureMetadata(program *sos.Program) map[string][]string {
+	result := map[string][]string{}
+	for _, action := range program.ActionMetadata() {
+		if len(action.PossibleFailures) > 0 {
+			result[action.Name] = append([]string(nil), action.PossibleFailures...)
+		}
+	}
+	return result
 }
 
 func (s *Server) handleFormat(w http.ResponseWriter, r *http.Request) {
@@ -398,7 +410,11 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, context.Canceled):
 		resp["error"] = map[string]string{"kind": "cancelled", "message": "run was stopped"}
 	case err != nil:
-		resp["error"] = map[string]string{"kind": "runtime", "message": err.Error()}
+		if result != nil && result.Failure != nil {
+			resp["error"] = result.Failure
+		} else {
+			resp["error"] = map[string]string{"kind": "runtime", "message": err.Error()}
+		}
 	default:
 		resp["ok"] = true
 		if result != nil {

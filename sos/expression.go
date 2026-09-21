@@ -621,13 +621,17 @@ func (p *exprParser) skipRHS(min int) error {
 	return nil
 }
 
+type valueLimitError struct{ message string }
+
+func (e *valueLimitError) Error() string { return e.message }
+
 func validateValue(value any) error {
 	units, bytes := 0, 0
 	var walk func(any, int) error
 	walk = func(v any, depth int) error {
 		units++
 		if depth > 64 || units > 100000 {
-			return fmt.Errorf("value exceeds nesting or item limit")
+			return &valueLimitError{"value exceeds nesting or item limit"}
 		}
 		switch x := v.(type) {
 		case string:
@@ -647,7 +651,7 @@ func validateValue(value any) error {
 			}
 		}
 		if bytes > 16<<20 {
-			return fmt.Errorf("value exceeds 16 MiB limit")
+			return &valueLimitError{"value exceeds 16 MiB limit"}
 		}
 		return nil
 	}

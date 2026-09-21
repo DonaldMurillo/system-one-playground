@@ -32,6 +32,10 @@ func (s *server) hover(params json.RawMessage) any {
 					role = "type"
 					detail = recordSignature(definition)
 				}
+				if failure := program.Failures[token.Text]; failure != nil {
+					role = "failure"
+					detail = failureSignature(failure)
+				}
 			}
 			for _, t := range syntaxTokens(tree, s.sentHeads(uri, text)) {
 				if t.line == pos.Line && t.start == token.Start {
@@ -65,7 +69,7 @@ func (s *server) hover(params json.RawMessage) any {
 				headStart := byteToChar(line.Text, len(line.Text)-len(strings.TrimLeft(line.Text, " \t")))
 				if token.Start < headStart+len(head) {
 					role = "action"
-					detail = fmt.Sprintf("`%s` from `%s`.\n\n%s", entrySignature(target.Name, target.Params, target.Result), target.ImportPath, target.Doc)
+					detail = fmt.Sprintf("`%s` from `%s`.\n\n%s", entrySignature(target.Name, target.Params, target.Result, target.PossibleFailures), target.ImportPath, target.Doc)
 					if strings.Contains(head, ".") && token.Text == strings.SplitN(head, ".", 2)[0] {
 						role = "library parent"
 						detail = fmt.Sprintf("Qualifies words from `%s`.", target.ImportPath)
@@ -130,4 +134,15 @@ func (s *server) hover(params json.RawMessage) any {
 		return map[string]any{"contents": map[string]any{"kind": "markdown", "value": value}, "range": lspRange{Start: lspPosition{Line: pos.Line, Character: token.Start}, End: lspPosition{Line: pos.Line, Character: token.End}}}
 	}
 	return s.sentenceHover(params)
+}
+
+func failureSignature(definition *sos.FailureDef) string {
+	if definition == nil {
+		return "failure"
+	}
+	parts := make([]string, 0, len(definition.Fields))
+	for _, field := range definition.Fields {
+		parts = append(parts, field.Name+" as "+field.Type.String())
+	}
+	return "failure " + definition.Name + " { " + strings.Join(parts, ", ") + " }"
 }

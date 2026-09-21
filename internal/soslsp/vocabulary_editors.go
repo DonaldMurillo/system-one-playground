@@ -17,17 +17,18 @@ import (
 // carry the forms actually usable here: open imports expose the bare sentence
 // plus the default-alias qualifier; aliased imports require their qualifier.
 type wordTarget struct {
-	ImportPath string
-	Name       string // canonical operation name
-	Enabled    bool   // usable in this file right now
-	Bare       bool   // bare sentence form usable (open import)
-	Qualifier  string // usable qualified prefix ("" when not usable)
-	Params     []sos.VocabularyParam
-	Result     string   // result type when known
-	Doc        string   // prose
-	Origin     string   // core origin string: import / config <layer> / standard library / local <path>
-	ImportLine string   // enabling import statement for auto-import edits
-	Synonyms   []string // extra bare words for the same operation
+	ImportPath       string
+	Name             string // canonical operation name
+	Enabled          bool   // usable in this file right now
+	Bare             bool   // bare sentence form usable (open import)
+	Qualifier        string // usable qualified prefix ("" when not usable)
+	Params           []sos.VocabularyParam
+	Result           string // result type when known
+	PossibleFailures []string
+	Doc              string   // prose
+	Origin           string   // core origin string: import / config <layer> / standard library / local <path>
+	ImportLine       string   // enabling import statement for auto-import edits
+	Synonyms         []string // extra bare words for the same operation
 }
 
 // reSentLine matches a sentence-call head: a bare word or alias.word at
@@ -45,7 +46,8 @@ func (s *server) wordTargets(uri, filename, source string) []wordTarget {
 			ImportPath: e.Library, Name: e.Name, Enabled: e.Enabled,
 			Bare: hasBarePattern(e), Qualifier: qualifierOf(e),
 			Params: e.Params, Result: e.Result,
-			Doc: e.Description, Origin: e.Origin, ImportLine: e.Import,
+			PossibleFailures: e.PossibleFailures,
+			Doc:              e.Description, Origin: e.Origin, ImportLine: e.Import,
 			Synonyms: e.Synonyms,
 		})
 	}
@@ -88,7 +90,7 @@ func qualifierOf(e sos.VocabularyEntry) string {
 
 // entrySignature renders an entry's callable signature, e.g.
 // "trim(value as text) → text".
-func entrySignature(name string, params []sos.VocabularyParam, result string) string {
+func entrySignature(name string, params []sos.VocabularyParam, result string, failures []string) string {
 	parts := make([]string, 0, len(params))
 	for _, p := range params {
 		parts = append(parts, p.Name+" as "+p.Type)
@@ -96,6 +98,9 @@ func entrySignature(name string, params []sos.VocabularyParam, result string) st
 	sig := name + "(" + strings.Join(parts, ", ") + ")"
 	if result != "" {
 		sig += " → " + result
+	}
+	if len(failures) > 0 {
+		sig += " may fail with " + strings.Join(failures, ", ")
 	}
 	return sig
 }

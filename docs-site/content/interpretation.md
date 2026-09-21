@@ -168,7 +168,7 @@ commands and unused actions do not consume interpretation requests. Source lines
 are preserved by blanking excluded constructions. Command declarations remain
 local and canonical. `check`, `explain`, and `build` cover the whole application.
 
-Saved analysis and registry formats are now version 2; regenerate older saved
+Saved analysis and registry formats are now version 3; regenerate older saved
 interpretations. Selected-source and whole-source hashes distinguish their
 coverage. A selected result cannot stand in for a whole build or a different
 command. Packaged applications validate the embedded whole result offline, then

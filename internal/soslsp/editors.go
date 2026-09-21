@@ -412,7 +412,7 @@ func sentHover(code, head string, t *wordTarget) string {
 		form = "qualified"
 	}
 	value := fmt.Sprintf("```sos\n%s\n```\n\n**Calls** `%s` (%s) from `%s`", code, head, form, t.ImportPath)
-	if sig := entrySignature(t.Name, t.Params, t.Result); sig != t.Name+"()" {
+	if sig := entrySignature(t.Name, t.Params, t.Result, t.PossibleFailures); sig != t.Name+"()" {
 		value += "\n\n" + sig
 	}
 	if t.Doc != "" {

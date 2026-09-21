@@ -15,6 +15,7 @@ var forms = []struct{ kind, pattern string }{
 	{"import", `^import "([^"\n]+)"(?: as ([A-Za-z_]\w*))?$`},
 	{"export", `^export ([A-Za-z_]\w*)$`},
 	{"define", `^define ([A-Z][A-Za-z0-9_]*)\s*:$`},
+	{"failure", `^define failure ([A-Z][A-Za-z0-9_]*)\s*:$`},
 	{"word", `^word ([A-Za-z_]\w*) of ([A-Za-z_]\w*)$`},
 	{"describe", `^describe (".*")$`},
 	{"schema", `^expect ([\w-]+) with:$`},
@@ -43,8 +44,13 @@ var forms = []struct{ kind, pattern string }{
 	{"save", `^save (.+) as (json|text) (?:in (.+)|under (.+) named (.+))$`},
 	{"show", `^(?:show|print|emit) (.+)$`},
 	{"rethrow", `^rethrow$`},
+	{"passFailure", `^pass failure on$`},
+	{"recover", `^recover(?: with (.+))?$`},
+	{"finish", `^finish(?: with (.+))?$`},
+	{"fail", `^fail ([A-Z][A-Za-z0-9_]*) with (.+?)(?::)?$`},
+	{"capture", `^capture ([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?)(?: with (.+?))? called ([A-Za-z_]\w*)$`},
 	{"stop", `^stop(?: with (.+))?$`},
-	{"to", `^to (\w+)(?: with (.+))?:$`},
+	{"to", `^to ([A-Za-z_]\w*)(?: with (.*?))?(?: returning ((?:optional )?(?:list of )?(?:text|timestamp|number|integer|boolean|duration|[A-Z][A-Za-z0-9_]*)))?(?: may fail with (.+?))?:$`},
 	{"call", `^call ([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?)(?: with (.+?))?(?: called (\w+))?$`},
 	{"return", `^return (.+)$`},
 	{"handler", `^on (failure|success|uncertain|existing)(?::| (.+))$`},
@@ -80,7 +86,7 @@ func match(kind, text string) []string {
 }
 
 func Keywords() []string {
-	return []string{"rethrow", "map", "evaluate", "describe", "choices", "read", "keep", "sort", "group", "save", "show", "make", "assign", "remember", "find", "for each", "when", "otherwise", "classify", "jev", "called", "where", "by", "as", "optional", "into", "on failure", "to", "call", "return", "while", "repeat", "judge", "score", "create folder", "take", "append", "require", "expect", "define", "command", "option", "argument", "switch", "using", "ask", "accept", "model", "on uncertain", "on existing", "package", "import", "export"}
+	return []string{"finish", "fail", "recover", "pass failure on", "capture", "rethrow", "map", "evaluate", "describe", "choices", "read", "keep", "sort", "group", "save", "show", "make", "assign", "remember", "find", "for each", "when", "otherwise", "classify", "jev", "called", "where", "by", "as", "optional", "into", "on failure", "may fail with", "returning", "to", "call", "return", "while", "repeat", "judge", "score", "create folder", "take", "append", "require", "expect", "define", "failure", "command", "option", "argument", "switch", "using", "ask", "accept", "model", "on uncertain", "on existing", "package", "import", "export"}
 }
 func classifyLine(text string) string {
 	for _, f := range forms {
@@ -133,6 +139,24 @@ func Parse(source string) (*Program, []Diagnostic) {
 	}
 	stack := []frame{{-1, &p.Statements, nil}}
 	lines := strings.Split(strings.ReplaceAll(body, "\r\n", "\n"), "\n")
+	// A formatter may wrap the long action suffix before `returning` or
+	// `may fail with`. Join only an immediately-following continuation of a
+	// `to` header; all other physical lines retain ordinary indentation rules.
+	for i := 1; i < len(lines); i++ {
+		continuation := strings.TrimSpace(lines[i])
+		previousIndex := i - 1
+		for previousIndex >= 0 && strings.TrimSpace(lines[previousIndex]) == "" {
+			previousIndex--
+		}
+		previous := ""
+		if previousIndex >= 0 {
+			previous = strings.TrimSpace(lines[previousIndex])
+		}
+		if (strings.HasPrefix(continuation, "returning ") || strings.HasPrefix(continuation, "may fail with ")) && strings.HasPrefix(previous, "to ") && !strings.HasSuffix(previous, ":") {
+			lines[previousIndex] = previous + " " + continuation
+			lines[i] = ""
+		}
+	}
 	for i, raw := range lines {
 		if strings.TrimSpace(raw) == "" || strings.HasPrefix(strings.TrimSpace(raw), "#") {
 			continue
@@ -163,8 +187,12 @@ func Parse(source string) (*Program, []Diagnostic) {
 		kind := classifyLine(text)
 		if kind == "" && fr.parent != nil {
 			switch fr.parent.Kind {
-			case "define":
+			case "define", "failure":
 				if _, err := parseFieldDecl(text); err == nil {
+					kind = "field"
+				}
+			case "fail":
+				if regexp.MustCompile(`^[A-Za-z_]\w* from .+$`).MatchString(text) {
 					kind = "field"
 				}
 			case "schema":
@@ -199,7 +227,7 @@ func Parse(source string) (*Program, []Diagnostic) {
 		if kind == "command" && fr.parent != nil && fr.parent.Kind != "command" {
 			ds = append(ds, Diagnostic{i + 1, 1, "command belongs at top level or directly inside a command"})
 		}
-		if kind == "define" && fr.parent != nil {
+		if (kind == "define" || kind == "failure") && fr.parent != nil {
 			ds = append(ds, Diagnostic{i + 1, 1, "define declarations belong at top level or in a package"})
 		}
 		if kind == "package" || kind == "import" || kind == "export" || kind == "word" {
@@ -220,8 +248,8 @@ func Parse(source string) (*Program, []Diagnostic) {
 	var validate func([]*Statement)
 	validate = func(sts []*Statement) {
 		for _, s := range sts {
-			block := semanticCriterionDeclRe.MatchString(s.Text) || s.Kind == "map" || s.Kind == "for" || s.Kind == "while" || s.Kind == "repeat" || s.Kind == "when" || s.Kind == "otherwise" || s.Kind == "to" || s.Kind == "command" || s.Kind == "schema" || s.Kind == "define" || s.Kind == "classify" || s.Kind == "score" || strings.HasSuffix(s.Text, "with:") || strings.HasSuffix(s.Text, "jev:") || s.Kind == "handler" && strings.HasSuffix(s.Text, ":")
-			if block && len(s.Body) == 0 {
+			block := semanticCriterionDeclRe.MatchString(s.Text) || s.Kind == "map" || s.Kind == "for" || s.Kind == "while" || s.Kind == "repeat" || s.Kind == "when" || s.Kind == "otherwise" || s.Kind == "to" || s.Kind == "command" || s.Kind == "schema" || s.Kind == "define" || s.Kind == "failure" || (s.Kind == "fail" && strings.HasSuffix(s.Text, ":")) || s.Kind == "classify" || s.Kind == "score" || strings.HasSuffix(s.Text, "with:") || strings.HasSuffix(s.Text, "jev:") || s.Kind == "handler" && strings.HasSuffix(s.Text, ":")
+			if block && len(s.Body) == 0 && s.Kind != "failure" {
 				ds = append(ds, Diagnostic{s.Line, 1, "expected an indented body"})
 			}
 			for _, c := range s.Body {
@@ -234,6 +262,9 @@ func Parse(source string) (*Program, []Diagnostic) {
 	}
 	validate(p.Statements)
 	p.Definitions, _ = collectRecordDefinitions(p.Statements)
+	var failureDiagnostics []Diagnostic
+	p.Failures, failureDiagnostics = collectFailureDefinitions(p.Statements)
+	ds = append(ds, failureDiagnostics...)
 	ds = append(ds, buildCommands(p)...)
 	return p, ds
 }

@@ -3,6 +3,7 @@ package sos
 import (
 	"fmt"
 	"math"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -48,15 +49,70 @@ type RecordDef struct {
 	Line   int           `json:"line,omitempty"`
 }
 
+// FailureDef describes a declared catchable domain failure. Failure payloads
+// use the same closed named-record rules as ordinary records, while the
+// runtime adds host-owned common metadata.
+type FailureDef struct {
+	Name   string        `json:"name"`
+	Fields []RecordField `json:"fields"`
+	Line   int           `json:"line,omitempty"`
+}
+
 type ActionParam struct {
 	Name string  `json:"name"`
 	Type TypeRef `json:"type"`
 }
 
 type ActionDecl struct {
-	Name   string
-	Params []ActionParam
-	Using  []string
+	Name      string
+	Params    []ActionParam
+	Using     []string
+	Result    TypeRef
+	HasResult bool
+	Failures  []string
+}
+
+var failureCommonFields = map[string]bool{
+	"kind": true, "message": true, "retryable": true, "status": true,
+	"code": true, "frames": true,
+}
+
+func parseFailureDefinition(statement *Statement) (*FailureDef, []Diagnostic) {
+	m := match("failure", statement.Text)
+	definition := &FailureDef{Name: m[1], Line: statement.Line}
+	var diagnostics []Diagnostic
+	seen := map[string]bool{}
+	for _, child := range statement.Body {
+		if child.Kind != "field" {
+			diagnostics = append(diagnostics, Diagnostic{child.Line, 1, "define failure " + m[1] + " expects fields"})
+			continue
+		}
+		field, err := parseFieldDecl(child.Text)
+		if err != nil {
+			diagnostics = append(diagnostics, Diagnostic{child.Line, 1, fmt.Sprintf("%s.%s: %v", m[1], strings.Fields(child.Text)[0], err)})
+			continue
+		}
+		if failureCommonFields[field.Name] {
+			diagnostics = append(diagnostics, Diagnostic{child.Line, 1, "failure field " + field.Name + " is reserved"})
+			continue
+		}
+		if seen[field.Name] {
+			diagnostics = append(diagnostics, Diagnostic{child.Line, 1, "duplicate field " + m[1] + "." + field.Name})
+			continue
+		}
+		seen[field.Name] = true
+		field.Line = child.Line
+		definition.Fields = append(definition.Fields, field)
+	}
+	return definition, diagnostics
+}
+
+func failureFieldsByName(def *FailureDef) map[string]RecordField {
+	result := make(map[string]RecordField, len(def.Fields))
+	for _, field := range def.Fields {
+		result[field.Name] = field
+	}
+	return result
 }
 
 func collectRecordDefinitions(stmts []*Statement) (map[string]*RecordDef, []Diagnostic) {
@@ -77,6 +133,25 @@ func collectRecordDefinitions(stmts []*Statement) (map[string]*RecordDef, []Diag
 	}
 	for _, problem := range validateRecordDefinitions(defs) {
 		diagnostics = append(diagnostics, Diagnostic{1, 1, problem})
+	}
+	return defs, diagnostics
+}
+
+func collectFailureDefinitions(stmts []*Statement) (map[string]*FailureDef, []Diagnostic) {
+	defs := map[string]*FailureDef{}
+	var diagnostics []Diagnostic
+	for _, statement := range stmts {
+		if statement.Kind != "failure" {
+			continue
+		}
+		name := match("failure", statement.Text)[1]
+		if _, exists := defs[name]; exists {
+			diagnostics = append(diagnostics, Diagnostic{statement.Line, 1, "duplicate failure " + name})
+			continue
+		}
+		definition, problems := parseFailureDefinition(statement)
+		diagnostics = append(diagnostics, problems...)
+		defs[name] = definition
 	}
 	return defs, diagnostics
 }
@@ -207,12 +282,30 @@ func parseFieldDecl(text string) (RecordField, error) {
 }
 
 func parseActionDecl(text string) (ActionDecl, error) {
-	m := match("to", text)
-	if len(m) < 3 {
+	m := actionHeaderRE.FindStringSubmatch(strings.TrimSpace(text))
+	if len(m) == 0 {
 		return ActionDecl{}, fmt.Errorf("invalid action declaration")
 	}
 	d := ActionDecl{Name: m[1]}
 	params := strings.TrimSpace(m[2])
+	resultText := strings.TrimSpace(m[3])
+	failureText := strings.TrimSpace(m[4])
+	if resultText != "" {
+		t, err := parseType(resultText, false)
+		if err != nil {
+			return ActionDecl{}, fmt.Errorf("return type: %w", err)
+		}
+		d.Result, d.HasResult = t, true
+	}
+	if failureText != "" {
+		for _, name := range strings.Split(failureText, ",") {
+			name = strings.TrimSpace(name)
+			if !validTypeName(name) {
+				return ActionDecl{}, fmt.Errorf("invalid failure name %q", name)
+			}
+			d.Failures = append(d.Failures, name)
+		}
+	}
 	if params == "" {
 		return d, nil
 	}
@@ -247,6 +340,8 @@ func parseActionDecl(text string) (ActionDecl, error) {
 	}
 	return d, nil
 }
+
+var actionHeaderRE = regexp.MustCompile(`^to ([A-Za-z_]\w*)(?: with (.*?))?(?: returning ((?:optional )?(?:list of )?(?:text|timestamp|number|integer|boolean|duration|[A-Z][A-Za-z0-9_]*)))?(?: may fail with (.+?))?:$`)
 
 func validBindingName(name string) bool {
 	return validName(name) && (name[0] == '_' || name[0] >= 'a' && name[0] <= 'z')

@@ -120,6 +120,9 @@ func Build(ctx context.Context, opts BuildOptions) error {
 	if err != nil {
 		return fmt.Errorf("interpretation: %w", err)
 	}
+	if len(analysis.Diagnostics) > 0 {
+		return fmt.Errorf("interpretation: %s", analysis.Diagnostics[0].Message)
+	}
 	canonical, ds := sos.ParseWithVocabulary(analysis.Canonical, opts.Program.Modules)
 	if len(ds) > 0 {
 		return fmt.Errorf("line %d: %s", ds[0].Line, ds[0].Message)
@@ -433,9 +436,20 @@ func run() int {
   fmt.Fprintf(os.Stderr,"sos: usage requests=%d/%d inputTokens=%d unresolved=%d\n",result.Usage.TotalAdmitted,result.Usage.TotalLimit,usage.ReportedInputTokens,usage.Unresolved)
  }
  var exit interface{ExitCode() int}
- if errors.As(err,&exit){return exit.ExitCode()}
- if err != nil {
-		fmt.Fprintf(os.Stderr, "sos: %v\n", err)
+ if errors.As(err,&exit){
+  var stopped *sos.StopError
+  if errors.As(err,&stopped){ fmt.Fprintf(os.Stderr,"sos: %s\n",stopped.Message) }
+  return exit.ExitCode()
+ }
+	if err != nil {
+		failure := sos.FailureValue(err)
+		if kind, ok := failure["kind"].(string); ok && kind != "runtime" {
+			message, _ := failure["message"].(string)
+			payload, _ := json.Marshal(failure)
+			fmt.Fprintf(os.Stderr, "sos: run: failure %s: %s (%s)\n", kind, message, payload)
+		} else {
+			fmt.Fprintf(os.Stderr, "sos: %v\n", err)
+		}
 		return 1
 	}
 	return 0

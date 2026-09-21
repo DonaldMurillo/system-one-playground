@@ -26,9 +26,33 @@ type executionLimitError struct{ message string }
 
 func (e *executionLimitError) Error() string { return e.message }
 
+type operationTimeoutError struct{ message string }
+
+func (e *operationTimeoutError) Error() string { return e.message }
+
 // FailureValue exposes portable error fields without requiring string matching.
 // Existing handlers retain their error text; failure is the structured companion.
 func FailureValue(err error) map[string]any {
+	var typed *typedFailure
+	if errors.As(err, &typed) {
+		out := make(map[string]any, len(typed.value)+1)
+		for k, v := range typed.value {
+			out[k] = v
+		}
+		if _, ok := out["kind"]; !ok {
+			out["kind"] = typed.kind
+		}
+		if _, ok := out["message"]; !ok {
+			out["message"] = typed.Error()
+		}
+		if _, ok := out["retryable"]; !ok {
+			out["retryable"] = false
+		}
+		if len(typed.frames) > 0 {
+			out["frames"] = typed.frames
+		}
+		return out
+	}
 	var recorded *recordedFailure
 	if errors.As(err, &recorded) {
 		out := make(map[string]any, len(recorded.value))
@@ -42,6 +66,8 @@ func FailureValue(err error) map[string]any {
 	var api *typesafe.APIError
 	var budget *BudgetError
 	var limit *executionLimitError
+	var valueLimit *valueLimitError
+	var operationTimeout *operationTimeoutError
 	switch {
 	case errors.Is(err, context.Canceled):
 		out["kind"] = "canceled"
@@ -49,8 +75,11 @@ func FailureValue(err error) map[string]any {
 		out["kind"] = "timeout"
 	case errors.As(err, &budget):
 		out["kind"] = "budget"
-	case errors.As(err, &limit):
+	case errors.As(err, &limit) || errors.As(err, &valueLimit):
 		out["kind"] = "limit"
+	case errors.As(err, &operationTimeout):
+		out["kind"] = "operation_timeout"
+		out["retryable"] = true
 	case errors.As(err, &api):
 		out["kind"] = "provider"
 		out["status"] = float64(api.Status)
@@ -69,12 +98,28 @@ func FailureValue(err error) map[string]any {
 	return out
 }
 
+type typedFailure struct {
+	kind   string
+	value  map[string]any
+	frames []map[string]any
+}
+
+func (e *typedFailure) Error() string {
+	if message, ok := e.value["message"].(string); ok {
+		return message
+	}
+	return e.kind
+}
+
+func (e *typedFailure) failureKind() string { return e.kind }
+
 func fatalParallel(err error) bool {
 	var b *BudgetError
 	var l *executionLimitError
 	var exit interface{ ExitCode() int }
 	var replay *ReplayIntegrityError
-	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.As(err, &b) || errors.As(err, &l) || errors.As(err, &exit) || errors.As(err, &replay)
+	var valueLimit *valueLimitError
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.As(err, &b) || errors.As(err, &l) || errors.As(err, &exit) || errors.As(err, &replay) || errors.As(err, &valueLimit)
 }
 
 // cloneValue copies the language's JSON value domain, including containers.

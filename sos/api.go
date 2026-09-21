@@ -29,12 +29,13 @@ type Command struct {
 	Line        int          `json:"line"`
 }
 type Program struct {
-	RootCommand *Command              `json:"rootCommand,omitempty"`
-	Source      string                `json:"source"`
-	Statements  []*Statement          `json:"statements"`
-	Command     string                `json:"command,omitempty"`
-	Parameters  []Parameter           `json:"parameters,omitempty"`
-	Definitions map[string]*RecordDef `json:"definitions,omitempty"`
+	RootCommand *Command               `json:"rootCommand,omitempty"`
+	Source      string                 `json:"source"`
+	Statements  []*Statement           `json:"statements"`
+	Command     string                 `json:"command,omitempty"`
+	Parameters  []Parameter            `json:"parameters,omitempty"`
+	Definitions map[string]*RecordDef  `json:"definitions,omitempty"`
+	Failures    map[string]*FailureDef `json:"failures,omitempty"`
 	// Modules is the resolved import graph; nil for plain Parse results.
 	Modules *ModuleTable `json:"-"`
 }
@@ -114,7 +115,16 @@ type Result struct {
 	Variables map[string]any `json:"variables"`
 	Traces    []Trace        `json:"traces"`
 	Steps     int            `json:"steps"`
+	Failure   map[string]any `json:"failure,omitempty"`
 }
+
+// StopError is explicit application termination requested by `stop`. It is
+// fatal to normal failure handlers but retains the user-facing message at the
+// CLI and standalone-runner boundaries.
+type StopError struct{ Message string }
+
+func (e *StopError) Error() string { return e.Message }
+func (e *StopError) ExitCode() int { return 1 }
 
 // EvaluateDebugExpression evaluates a read-only language expression against a
 // debugger variable snapshot. It intentionally exposes the same expression

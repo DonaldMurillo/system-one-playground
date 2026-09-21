@@ -294,6 +294,7 @@ func ParseWithVocabulary(source string, modules *ModuleTable) (*Program, []Diagn
 type VocabularyCatalog struct {
 	Entries   []VocabularyEntry   `json:"entries"`
 	Libraries []VocabularyLibrary `json:"libraries"`
+	Failures  []FailureDef        `json:"failures,omitempty"`
 }
 
 // VocabularyParam is one typed parameter of a vocabulary entry.
@@ -305,20 +306,21 @@ type VocabularyParam struct {
 // VocabularyEntry is one catalog row: a callable operation with its usable
 // sentence forms, signature, effects, origin, and whether it is enabled here.
 type VocabularyEntry struct {
-	ID          string            `json:"id"`
-	Library     string            `json:"library"`
-	Alias       string            `json:"alias,omitempty"`
-	Name        string            `json:"name"`
-	Kind        string            `json:"kind"`
-	Patterns    []string          `json:"patterns"`
-	Synonyms    []string          `json:"synonyms,omitempty"`
-	Description string            `json:"description,omitempty"`
-	Params      []VocabularyParam `json:"params,omitempty"`
-	Result      string            `json:"result,omitempty"`
-	Effects     []string          `json:"effects,omitempty"`
-	Origin      string            `json:"origin"`
-	Enabled     bool              `json:"enabled"`
-	Import      string            `json:"import,omitempty"`
+	ID               string            `json:"id"`
+	Library          string            `json:"library"`
+	Alias            string            `json:"alias,omitempty"`
+	Name             string            `json:"name"`
+	Kind             string            `json:"kind"`
+	Patterns         []string          `json:"patterns"`
+	Synonyms         []string          `json:"synonyms,omitempty"`
+	Description      string            `json:"description,omitempty"`
+	Params           []VocabularyParam `json:"params,omitempty"`
+	Result           string            `json:"result,omitempty"`
+	PossibleFailures []string          `json:"possibleFailures,omitempty"`
+	Effects          []string          `json:"effects,omitempty"`
+	Origin           string            `json:"origin"`
+	Enabled          bool              `json:"enabled"`
+	Import           string            `json:"import,omitempty"`
 }
 
 // VocabularyLibrary is one library binding: how it is reached and from where.
@@ -339,6 +341,26 @@ type VocabularyLibrary struct {
 func Vocabulary(filename, source string) (*VocabularyCatalog, []Diagnostic) {
 	p, ds, loader := resolveModulesLoaded(filename, source)
 	catalog := &VocabularyCatalog{Entries: []VocabularyEntry{}, Libraries: []VocabularyLibrary{}}
+	if p != nil {
+		for _, name := range sortedFailureNames(p.Failures) {
+			catalog.Failures = append(catalog.Failures, *p.Failures[name])
+		}
+		if p.Modules != nil {
+			seen := map[string]bool{}
+			for _, definition := range catalog.Failures {
+				seen[definition.Name] = true
+			}
+			for _, module := range p.Modules.Aliases {
+				for name, definition := range module.Failures {
+					if module.Exports[name] && !seen[name] {
+						catalog.Failures = append(catalog.Failures, *definition)
+						seen[name] = true
+					}
+				}
+			}
+			sort.Slice(catalog.Failures, func(i, j int) bool { return catalog.Failures[i].Name < catalog.Failures[j].Name })
+		}
+	}
 	enabledKeys := map[string]bool{}
 	if p != nil && p.Modules != nil && p.Modules.vocab != nil {
 		for _, lib := range p.Modules.vocab.libs {
@@ -352,6 +374,15 @@ func Vocabulary(filename, source string) (*VocabularyCatalog, []Diagnostic) {
 	sortEntries(catalog.Entries)
 	sort.Slice(catalog.Libraries, func(i, j int) bool { return catalog.Libraries[i].Path < catalog.Libraries[j].Path })
 	return catalog, ds
+}
+
+func sortedFailureNames(defs map[string]*FailureDef) []string {
+	names := make([]string, 0, len(defs))
+	for name := range defs {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 func sortEntries(entries []VocabularyEntry) {
@@ -401,6 +432,14 @@ func moduleEntries(lib vocabLib, enabled bool) []VocabularyEntry {
 			}
 		} else if s := mod.Actions[name]; s != nil {
 			e.Kind = "action"
+			if decl, err := parseActionDecl(s.Text); err == nil {
+				if decl.HasResult {
+					e.Result = decl.Result.String()
+				}
+				e.PossibleFailures = append(e.PossibleFailures, decl.Failures...)
+			}
+			e.PossibleFailures = append(e.PossibleFailures, modulePossibleFailures(mod, name, map[string]bool{})...)
+			e.PossibleFailures = uniqueSorted(e.PossibleFailures)
 			if fm := match("to", s.Text); fm[2] != "" {
 				for _, part := range strings.Split(fm[2], ",") {
 					if part = strings.TrimSpace(part); part != "" {
