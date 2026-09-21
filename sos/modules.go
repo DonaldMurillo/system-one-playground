@@ -47,9 +47,10 @@ type Module struct {
 	Failures    map[string]*FailureDef
 	// fileImports maps each action to its defining file's import scope;
 	// fileVocabs maps it to that file's definition-site vocabulary.
-	fileImports    map[string]map[string]*Module
-	fileVocabs     map[string]*fileVocab
-	failureImports map[string]map[string]*Module
+	fileImports       map[string]map[string]*Module
+	fileVocabs        map[string]*fileVocab
+	failureImports    map[string]map[string]*Module
+	definitionImports map[string]map[string]*Module
 	// Native holds compiled-in operations (standard packages).
 	Native map[string]NativeOp
 	// Exports lists names importers may reference.
@@ -625,16 +626,17 @@ type moduleFileDecls struct {
 // for exported action A, with deterministic duplicate checks.
 func buildModule(key string, files []*moduleFileDecls) (*Module, []Diagnostic) {
 	m := &Module{
-		Key:            key,
-		Actions:        map[string]*Statement{},
-		Schemas:        map[string]*Statement{},
-		Definitions:    map[string]*RecordDef{},
-		Failures:       map[string]*FailureDef{},
-		fileImports:    map[string]map[string]*Module{},
-		fileVocabs:     map[string]*fileVocab{},
-		failureImports: map[string]map[string]*Module{},
-		Exports:        map[string]bool{},
-		Words:          map[string]string{},
+		Key:               key,
+		Actions:           map[string]*Statement{},
+		Schemas:           map[string]*Statement{},
+		Definitions:       map[string]*RecordDef{},
+		Failures:          map[string]*FailureDef{},
+		fileImports:       map[string]map[string]*Module{},
+		fileVocabs:        map[string]*fileVocab{},
+		failureImports:    map[string]map[string]*Module{},
+		definitionImports: map[string]map[string]*Module{},
+		Exports:           map[string]bool{},
+		Words:             map[string]string{},
 	}
 	var ds []Diagnostic
 	for _, f := range files {
@@ -674,6 +676,7 @@ func buildModule(key string, files []*moduleFileDecls) (*Module, []Diagnostic) {
 					ds = append(ds, diagnostic)
 				}
 				m.Definitions[name] = definition
+				m.definitionImports[name] = f.aliases
 			case "failure":
 				name := match("failure", s.Text)[1]
 				if m.Failures[name] != nil {
@@ -690,8 +693,14 @@ func buildModule(key string, files []*moduleFileDecls) (*Module, []Diagnostic) {
 			}
 		}
 	}
-	for _, problem := range validateRecordDefinitions(m.Definitions) {
-		ds = append(ds, Diagnostic{1, 1, problem})
+	for name, definition := range m.Definitions {
+		definitionScope, typeProblems := visibleDefinitions(m.Definitions, m.definitionImports[name])
+		for _, problem := range typeProblems {
+			ds = append(ds, Diagnostic{definition.Line, 1, problem})
+		}
+		for _, problem := range validateRecordDefinitionSet(map[string]*RecordDef{name: definition}, definitionScope) {
+			ds = append(ds, Diagnostic{definition.Line, 1, problem})
+		}
 	}
 	for _, failure := range m.Failures {
 		definitionScope, typeProblems := visibleDefinitions(m.Definitions, m.failureImports[failure.Name])
@@ -704,17 +713,48 @@ func buildModule(key string, files []*moduleFileDecls) (*Module, []Diagnostic) {
 			}
 		}
 	}
+	reportedTypeProblems := map[string]bool{}
 	for _, name := range sortedActionNames(m) {
 		definitionScope, typeProblems := visibleDefinitions(m.Definitions, m.scope(name))
 		for _, problem := range typeProblems {
-			ds = append(ds, Diagnostic{m.Actions[name].Line, 1, problem})
+			if !reportedTypeProblems[problem] {
+				ds = append(ds, Diagnostic{m.Actions[name].Line, 1, problem})
+				reportedTypeProblems[problem] = true
+			}
 		}
 		if decl, err := parseActionDecl(m.Actions[name].Text); err != nil {
 			ds = append(ds, Diagnostic{m.Actions[name].Line, 1, err.Error()})
 		} else {
+			seenParams := map[string]bool{}
 			for _, param := range decl.Params {
+				if seenParams[param.Name] {
+					ds = append(ds, Diagnostic{m.Actions[name].Line, 1, "duplicate action parameter " + param.Name})
+				}
+				seenParams[param.Name] = true
 				if err := validateTypeRefs(param.Type, definitionScope, map[string]bool{}); err != nil && param.Type.Name != "any" {
 					ds = append(ds, Diagnostic{m.Actions[name].Line, 1, "parameter " + param.Name + ": " + err.Error()})
+				}
+			}
+			if len(decl.Using) > 0 {
+				if len(decl.Params) != 1 || decl.Params[0].Type.Name == "any" || decl.Params[0].Type.Element != nil {
+					ds = append(ds, Diagnostic{m.Actions[name].Line, 1, "using is allowed only for one named-record parameter"})
+				} else if def := definitionScope[decl.Params[0].Type.Name]; def == nil {
+					ds = append(ds, Diagnostic{m.Actions[name].Line, 1, "using requires a named-record parameter"})
+				} else {
+					fields := fieldsByName(def)
+					usingSeen := map[string]bool{}
+					for _, field := range decl.Using {
+						if usingSeen[field] {
+							ds = append(ds, Diagnostic{m.Actions[name].Line, 1, "using field " + field + " is selected more than once"})
+						}
+						usingSeen[field] = true
+						if _, ok := fields[field]; !ok {
+							ds = append(ds, Diagnostic{m.Actions[name].Line, 1, fmt.Sprintf("%s has no field %s", def.Name, field)})
+						}
+						if seenParams[field] || actionBodyBinds(m.Actions[name].Body, field) {
+							ds = append(ds, Diagnostic{m.Actions[name].Line, 1, "using field " + field + " conflicts with an action binding"})
+						}
+					}
 				}
 			}
 			if decl.HasResult {
@@ -733,7 +773,7 @@ func buildModule(key string, files []*moduleFileDecls) (*Module, []Diagnostic) {
 			Failures:    m.Failures,
 			Modules:     &ModuleTable{Aliases: m.scope(name), vocab: m.vocabulary(name)},
 		}
-		ds = append(ds, checkActionContracts(moduleProgram, map[string]*Statement{name: m.Actions[name]}, m.Definitions)...)
+		ds = append(ds, checkActionContracts(moduleProgram, map[string]*Statement{name: m.Actions[name]}, definitionScope)...)
 	}
 	seen := map[string]bool{}
 	for _, f := range files {

@@ -2,6 +2,7 @@ package sos
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -282,6 +283,76 @@ show "loaded"
 `)
 	if len(diagnostics) < 2 || !strings.Contains(diagnostics[0].Message+diagnostics[1].Message, `unknown type "Missing"`) {
 		t.Fatalf("diagnostics = %+v", diagnostics)
+	}
+}
+
+func TestDefinitionSiteImportsAreVisibleToRecordsAndActionContracts(t *testing.T) {
+	dir := t.TempDir()
+	models := filepath.Join(dir, "models")
+	service := filepath.Join(dir, "service")
+	for _, path := range []string{models, service} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writeTestFile(filepath.Join(models, "models.sos"), `package models
+export Address
+define Address:
+  city as text
+`); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTestFile(filepath.Join(service, "service.sos"), `package service
+import "../models" as models
+export Wrapper
+export make_address
+define Wrapper:
+  address as Address
+to make_address returning Address:
+  finish with {city: "Paris"}
+`); err != nil {
+		t.Fatal(err)
+	}
+	source := `import "./models" as models
+import "./service" as service
+define LocalWrapper:
+  address as Address
+call service.make_address called address
+`
+	if _, diagnostics := LoadProgram(filepath.Join(dir, "main.sos"), source); len(diagnostics) != 0 {
+		t.Fatalf("diagnostics = %+v", diagnostics)
+	}
+}
+
+func TestImportedActionDeclarationValidationAndDirectArity(t *testing.T) {
+	dir := t.TempDir()
+	broken := filepath.Join(dir, "broken")
+	if err := os.MkdirAll(broken, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTestFile(filepath.Join(broken, "broken.sos"), `package broken
+export inspect
+define User:
+  name as text
+to inspect with user as User, user as User using missing:
+  finish
+`); err != nil {
+		t.Fatal(err)
+	}
+	_, diagnostics := LoadProgram(filepath.Join(dir, "main.sos"), `import "./broken" as broken
+show "loaded"
+`)
+	joined := fmt.Sprint(diagnostics)
+	if !strings.Contains(joined, "duplicate action parameter user") || !strings.Contains(joined, "using is allowed only for one named-record parameter") {
+		t.Fatalf("diagnostics = %+v", diagnostics)
+	}
+
+	local := `to greet with first as text, last as text:
+  finish
+call greet with "Ada"
+`
+	if diagnostics := Check(local); len(diagnostics) == 0 || !strings.Contains(diagnostics[0].Message, "greet expects 2 argument(s)") {
+		t.Fatalf("arity diagnostics = %+v", diagnostics)
 	}
 }
 

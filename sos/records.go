@@ -138,9 +138,6 @@ func collectRecordDefinitions(stmts []*Statement) (map[string]*RecordDef, []Diag
 		diagnostics = append(diagnostics, definitionDiagnostics...)
 		defs[name] = definition
 	}
-	for _, problem := range validateRecordDefinitions(defs) {
-		diagnostics = append(diagnostics, Diagnostic{1, 1, problem})
-	}
 	return defs, diagnostics
 }
 
@@ -381,21 +378,25 @@ func fieldsByName(def *RecordDef) map[string]RecordField {
 }
 
 func validateRecordDefinitions(defs map[string]*RecordDef) []string {
+	return validateRecordDefinitionSet(defs, defs)
+}
+
+func validateRecordDefinitionSet(selected, visible map[string]*RecordDef) []string {
 	var problems []string
-	names := make([]string, 0, len(defs))
-	for name := range defs {
+	names := make([]string, 0, len(selected))
+	for name := range selected {
 		names = append(names, name)
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		def := defs[name]
+		def := selected[name]
 		seen := map[string]bool{}
 		for _, field := range def.Fields {
 			if seen[field.Name] {
 				problems = append(problems, fmt.Sprintf("duplicate field %s.%s", name, field.Name))
 			}
 			seen[field.Name] = true
-			if err := validateTypeRefs(field.Type, defs, map[string]bool{name: true}); err != nil {
+			if err := validateTypeRefs(field.Type, visible, map[string]bool{name: true}); err != nil {
 				problems = append(problems, fmt.Sprintf("%s.%s: %v", name, field.Name, err))
 			}
 		}

@@ -31,6 +31,9 @@ func analyze(p *Program) []Diagnostic {
 	for _, problem := range importedTypeProblems {
 		ds = append(ds, Diagnostic{1, 1, problem})
 	}
+	for _, problem := range validateRecordDefinitionSet(localDefinitions, visibleDefs) {
+		ds = append(ds, Diagnostic{1, 1, problem})
+	}
 	_, importedFailureProblems := visibleFailureDefinitionsWithProblems(p)
 	for _, problem := range importedFailureProblems {
 		ds = append(ds, Diagnostic{1, 1, problem})
@@ -50,15 +53,18 @@ func analyze(p *Program) []Diagnostic {
 	add := func(s *Statement, msg string) { ds = append(ds, Diagnostic{s.Line, 1, msg}) }
 	checkActionArgs := func(s *Statement, action string, args []string) {
 		fn := actions[action]
+		targetDefs := visibleDefs
 		if fn == nil && strings.Contains(action, ".") {
 			alias, name, _ := strings.Cut(action, ".")
 			if mod := moduleAlias(p, alias); mod != nil && mod.Exports[name] {
 				fn = mod.Actions[name]
+				targetDefs, _ = visibleDefinitions(mod.Definitions, mod.scope(name))
 			}
 		}
 		if fn == nil && p.Modules != nil && p.Modules.vocab != nil {
 			if mod, name := sentTargetResolve(p.Modules.vocab, action); mod != nil && mod.Exports[name] {
 				fn = mod.Actions[name]
+				targetDefs, _ = visibleDefinitions(mod.Definitions, mod.scope(name))
 			}
 		}
 		if fn == nil {
@@ -68,11 +74,14 @@ func analyze(p *Program) []Diagnostic {
 		if err != nil {
 			return
 		}
+		if len(args) != len(decl.Params) {
+			add(s, fmt.Sprintf("%s expects %d argument(s)", action, len(decl.Params)))
+		}
 		for i, arg := range args {
 			if i >= len(decl.Params) {
 				break
 			}
-			if message := staticArgumentProblem(arg, decl.Params[i].Type, types, visibleDefs, action, decl.Params[i].Name); message != "" {
+			if message := staticArgumentProblem(arg, decl.Params[i].Type, types, targetDefs, action, decl.Params[i].Name); message != "" {
 				add(s, message)
 			}
 		}
