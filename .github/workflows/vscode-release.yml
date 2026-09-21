@@ -129,14 +129,14 @@ jobs:
           rm -rf vscode/bin release/cli
           mkdir -p vscode/bin release/cli
           version_ldflag="-buildid= -X github.com/DonaldMurillo/system-one-playground/sos.Version=$version -X github.com/DonaldMurillo/system-one-playground/sos.ReleaseMarker=SysOneScriptVersion=$version;SysOneScriptVersionEnd"
-          go build -trimpath -ldflags "$version_ldflag" -o "vscode/bin/${{ matrix.binary }}" ./cmd/sos
-          go build -trimpath -ldflags "$version_ldflag" -o "release/cli/${{ matrix.binary }}" ./cmd/sos
-          GOOS=linux GOARCH=amd64 go build -trimpath -o /tmp/sosverify ./cmd/sosverify
+          go build -trimpath -buildvcs=false -ldflags "$version_ldflag" -o "vscode/bin/${{ matrix.binary }}" ./cmd/sos
+          go build -trimpath -buildvcs=false -ldflags "$version_ldflag" -o "release/cli/${{ matrix.binary }}" ./cmd/sos
+          GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -o /tmp/sosverify ./cmd/sosverify
           if [ "${{ matrix.goos }}" = "windows" ]; then
-            go build -trimpath -ldflags "$version_ldflag" -o release/cli/sysone.exe ./cmd/sysone
+            go build -trimpath -buildvcs=false -ldflags "$version_ldflag" -o release/cli/sysone.exe ./cmd/sysone
             legacy_binary=release/cli/sysone.exe
           else
-            go build -trimpath -ldflags "$version_ldflag" -o release/cli/sysone ./cmd/sysone
+            go build -trimpath -buildvcs=false -ldflags "$version_ldflag" -o release/cli/sysone ./cmd/sysone
             legacy_binary=release/cli/sysone
           fi
           expected_marker="SysOneScriptVersion=${version};SysOneScriptVersionEnd"
@@ -147,8 +147,8 @@ jobs:
             grep -Fqx $'\tbuild\tGOOS=${{ matrix.goos }}' <<<"$metadata"
             grep -Fqx $'\tbuild\tGOARCH=${{ matrix.goarch }}' <<<"$metadata"
           done
-          go build -trimpath -ldflags "$version_ldflag" -o /tmp/sos-rebuild ./cmd/sos
-          go build -trimpath -ldflags "$version_ldflag" -o /tmp/sysone-rebuild ./cmd/sysone
+          go build -trimpath -buildvcs=false -ldflags "$version_ldflag" -o /tmp/sos-rebuild ./cmd/sos
+          go build -trimpath -buildvcs=false -ldflags "$version_ldflag" -o /tmp/sysone-rebuild ./cmd/sysone
           cmp "release/cli/${{ matrix.binary }}" /tmp/sos-rebuild
           cmp "$legacy_binary" /tmp/sysone-rebuild
           cp LICENSE release/cli/
