@@ -99,6 +99,13 @@ func (a *semanticAnalysis) replaySaved(source string, saved *Analysis) (*Analysi
 			return nil, []string{fmt.Sprintf("saved source map entry %d does not match the reconstruction", i+1)}
 		}
 	}
+	decisions := append([]Interpretation(nil), saved.Decisions...)
+	for i := range decisions {
+		decisions[i].InputTokens = 0
+		decisions[i].UsageKnown = false
+		decisions[i].BatchSize = 0
+		decisions[i].UsageShared = false
+	}
 	return &Analysis{
 		Version:         semanticAnalysisVersion,
 		RegistryVersion: semanticRegistryVersion,
@@ -107,7 +114,7 @@ func (a *semanticAnalysis) replaySaved(source string, saved *Analysis) (*Analysi
 		Model:           saved.Model,
 		Canonical:       canonical,
 		SourceMap:       sourceMap,
-		Decisions:       saved.Decisions,
+		Decisions:       decisions,
 		Diagnostics:     []Diagnostic{},
 	}, nil
 }

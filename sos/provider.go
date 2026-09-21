@@ -2,12 +2,15 @@ package sos
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"time"
 
 	"github.com/DonaldMurillo/system-one-playground/typesafe"
 )
+
+const providerMaxPayloadBytes = 256 << 10
 
 // EvaluationRequest is a constrained provider question made by the toolchain.
 // Budget is mandatory: compiler/editor callers cannot bypass request admission.
@@ -44,6 +47,13 @@ func Evaluate(ctx context.Context, req EvaluationRequest) (Evaluation, error) {
 		}
 	} else if err := validateQuestion(req.Question); err != nil {
 		return out, err
+	}
+	payload, err := json.Marshal(typesafe.Request{State: req.State, Questions: questions, Model: providerModel(ctx, req.Model)})
+	if err != nil {
+		return out, fmt.Errorf("encode provider request: %w", err)
+	}
+	if len(payload) > providerMaxPayloadBytes {
+		return out, fmt.Errorf("provider request payload exceeds %d bytes", providerMaxPayloadBytes)
 	}
 	reservation, err := req.Budget.Admit(ctx, req.Bucket)
 	if err != nil {

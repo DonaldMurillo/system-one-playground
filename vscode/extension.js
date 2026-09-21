@@ -398,17 +398,19 @@ async function canonicalizeActiveDocument() {
   if (!editor || !document || !isSysOneScript(document)) return
   const source = document.getText()
   const version = document.version
+  const serverGeneration = extensionState.serverGeneration
   try {
     await ensureDocument(document)
     let analyzed = extensionState.semanticAnalyses.get(document.uri.toString())
     if (!analyzed?.wholeSource || analyzed.version !== version) {
       const result = await request('sos/analyze', { textDocument: { uri: document.uri.toString() } })
+      if (extensionState.serverGeneration !== serverGeneration) throw new Error('language server restarted during analysis; run the command again')
       analyzed = {version, analysis: result?.analysis, wholeSource:true}
       extensionState.semanticAnalyses.set(document.uri.toString(), analyzed)
     }
     const canonical = analyzed.analysis?.canonical
     if (!canonical) throw new Error('analysis did not produce canonical source')
-    if (document.version !== version || document.getText() !== source) {
+    if (extensionState.serverGeneration !== serverGeneration || document.version !== version || document.getText() !== source) {
       throw new Error('document changed while canonicalization was running; run the command again')
     }
     const full = new vscode.Range(document.positionAt(0), document.positionAt(document.getText().length))
@@ -711,6 +713,7 @@ function publishDiagnostics(params) {
 
 async function startServer() {
   if (extensionState?.tokenReady) await extensionState.tokenReady
+  extensionState.serverGeneration++
   const previous = extensionState?.client
   if (previous) await previous.stop()
   clearDiagnostics()
@@ -745,6 +748,8 @@ async function startServer() {
   extensionState.client = client
   extensionState.ready = ready
   extensionState.opened = new Set()
+  extensionState.semanticAnalyses.clear()
+  extensionState.semanticLensEmitter?.fire()
 
   ready.then(() => {
     for (const document of vscode.workspace.textDocuments) syncDocument(document)
@@ -991,10 +996,11 @@ async function analyzeActiveDocument() {
   }
   const source = document.getText()
   const version = document.version
+  const serverGeneration = extensionState.serverGeneration
   try {
     await ensureDocument(document)
     const result = await request('sos/analyze', { textDocument: { uri: document.uri.toString() } })
-    if (document.version !== version || document.getText() !== source) {
+    if (extensionState.serverGeneration !== serverGeneration || document.version !== version || document.getText() !== source) {
       extensionState.output.appendLine('Analysis result discarded because the document changed while Jev was running.')
       return
     }
@@ -1093,6 +1099,7 @@ function activate(context) {
     tokenReady: context.secrets.get(JEV_SECRET_KEY).then(token => { extensionState.jevToken = token || undefined }),
     semanticAnalyses: new Map(),
     semanticLensEmitter: undefined,
+    serverGeneration: 0,
   }
   context.subscriptions.push(output, runOutput, diagnostics)
 

@@ -303,12 +303,6 @@
       }
     ],
     "menus": {
-      "commandPalette": [
-        {
-          "command": "sysonescript.canonicalizeLine",
-          "when": "false"
-        }
-      ],
       "editor/title": [
         {
           "command": "sysonescript.canonicalizeFile",
@@ -378,6 +372,10 @@
         }
       ],
       "commandPalette": [
+        {
+          "command": "sysonescript.canonicalizeLine",
+          "when": "false"
+        },
         {
           "command": "sysonescript.canonicalizeFile",
           "when": "editorLangId == sos"

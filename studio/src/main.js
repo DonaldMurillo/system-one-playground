@@ -402,6 +402,7 @@ async function runAnalyze() {
   document.querySelector('.tab[data-tab="interpretation"]')?.click()
   const model = editor.getModel()
   const version = model.getVersionId()
+  const epoch = documentEpoch
   const abort = new AbortController()
   state.analysisAbort = abort
   setAnalyzing(true)
@@ -418,7 +419,7 @@ async function runAnalyze() {
     }, 'POST', abort.signal)
     r.originalSource = originalSource
     if (abort.signal.aborted) return
-    if (model.getVersionId() !== version) { markInterpretationStale(); return }
+    if (epoch !== documentEpoch || model !== editor.getModel() || model.getVersionId() !== version) { markInterpretationStale(); return }
     diagnosticEpoch++
     setMarkers(r.analysis?.diagnostics || [])
     state.analysis = { version, result: r }

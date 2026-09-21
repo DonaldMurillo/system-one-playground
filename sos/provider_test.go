@@ -2,9 +2,25 @@ package sos
 
 import (
 	"context"
-	"testing"
 	"github.com/DonaldMurillo/system-one-playground/typesafe"
+	"strings"
+	"testing"
 )
+
+func TestGatewayRejectsOversizedPayloadBeforeAdmission(t *testing.T) {
+	b, err := NewRequestBudget(1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := typesafe.Choice("choose", map[string]any{"ok": "valid", "reject": "invalid"})
+	_, err = Evaluate(context.Background(), EvaluationRequest{State: map[string]any{"data": strings.Repeat("x", providerMaxPayloadBytes)}, Question: q, Budget: b, Bucket: BudgetRuntime})
+	if err == nil || !strings.Contains(err.Error(), "payload exceeds") {
+		t.Fatalf("oversized payload error = %v", err)
+	}
+	if b.Snapshot().TotalAdmitted != 0 {
+		t.Fatal("oversized payload consumed budget")
+	}
+}
 
 func TestGatewayRejectsMalformedCriteriaBeforeAdmission(t *testing.T) {
 	for _, q := range []typesafe.Question{
