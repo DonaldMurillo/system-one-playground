@@ -5,7 +5,7 @@ const { parseIdentity } = require('./vsix-identity')
 
 test('parses exactly one effective self-closing Identity element', () => {
   const identity = parseIdentity(`<?xml version="1.0"?>
-    <PackageManifest>
+    <PackageManifest xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011">
       <Metadata>
       <!-- <Identity Id="comment-decoy" /> -->
       <![CDATA[<Identity Id="cdata-decoy" />]]>
@@ -31,5 +31,13 @@ for (const [name, xml] of [
   ['undefined entity', '<PackageManifest><Metadata>&bogus;<Identity Id="one" /></Metadata></PackageManifest>'],
   ['unescaped attribute content', '<PackageManifest><Metadata><Identity Id="one&two" /></Metadata></PackageManifest>']
 ]) {
-  test(`rejects ${name}`, () => assert.throws(() => parseIdentity(xml)))
+  test(`rejects ${name}`, () => assert.throws(() => parseIdentity(xml.replace('<PackageManifest', '<PackageManifest xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011"'))))
 }
+
+test('rejects the wrong manifest namespace', () => {
+  assert.throws(() => parseIdentity('<PackageManifest xmlns="urn:wrong"><Metadata><Identity Id="one" /></Metadata></PackageManifest>'))
+})
+
+test('rejects duplicate Metadata elements', () => {
+  assert.throws(() => parseIdentity('<PackageManifest xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011"><Metadata><Identity Id="one" /></Metadata><Metadata /></PackageManifest>'))
+})

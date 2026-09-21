@@ -260,7 +260,7 @@ jobs:
               --generate-notes
           fi
           if [ "$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft)" = "true" ]; then
-            gh release upload "$GITHUB_REF_NAME" release/*.tar.gz release/*.zip release/checksums.txt release/install.sh release/install.ps1 --clobber
+            gh release upload "$GITHUB_REF_NAME" release/*.vsix release/*.tar.gz release/*.zip release/checksums.txt release/install.sh release/install.ps1 --clobber
             verify_release_guard
             gh release edit "$GITHUB_REF_NAME" --draft=false --verify-tag --target "$GITHUB_SHA" --title "SysOneScript v${version}"
           else
@@ -298,8 +298,26 @@ jobs:
           shopt -s nullglob
           packages=(release/*.vsix)
           test "${#packages[@]}" -eq 6
+          publisher="$(node -p "require('./vscode/package.json').publisher")"
+          extension_name="$(node -p "require('./vscode/package.json').name")"
+          version="$(node -p "require('./vscode/package.json').version")"
           for vsix in "${packages[@]}"; do
             package_path="$(realpath "$vsix")"
+            target="$(basename "$vsix")"
+            target="${target#"${extension_name}-"}"
+            target="${target%-"${version}.vsix"}"
+            marketplace_url="https://marketplace.visualstudio.com/_apis/public/gallery/publishers/${publisher}/vsextensions/${extension_name}/${version}/vspackage?targetPlatform=${target}"
+            existing="$(mktemp)"
+            if curl -fsSL "$marketplace_url" -o "$existing"; then
+              cmp "$package_path" "$existing" || {
+                echo "Marketplace already contains different bytes for $(basename "$vsix")." >&2
+                exit 1
+              }
+              rm -f "$existing"
+              echo "Marketplace already contains the verified package $(basename "$vsix")."
+              continue
+            fi
+            rm -f "$existing"
             published=false
             for attempt in 1 2 3 4 5; do
               if pnpm --dir vscode exec vsce publish --no-dependencies --packagePath "$package_path"; then
@@ -310,4 +328,16 @@ jobs:
               sleep "$((attempt * 10))"
             done
             test "$published" = true
+            downloaded=false
+            for attempt in 1 2 3 4 5; do
+              existing="$(mktemp)"
+              if curl -fsSL "$marketplace_url" -o "$existing" && cmp "$package_path" "$existing"; then
+                downloaded=true
+                rm -f "$existing"
+                break
+              fi
+              rm -f "$existing"
+              sleep "$((attempt * 10))"
+            done
+            test "$downloaded" = true
           done

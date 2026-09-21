@@ -12,7 +12,9 @@ assert.match(changelog, new RegExp(`^## ${manifest.version.replaceAll('.', '\\.'
 const releaseReferenceFiles = ['README.md', 'vscode/README.md', 'docs/sysonescript-editor.md', 'docs-site/content/editor.md', 'vscode/walkthrough/cli.md']
 for (const relative of releaseReferenceFiles) {
   const text = fs.readFileSync(path.join(root, relative), 'utf8')
-  assert.ok(!text.includes('sysonescript-vscode-0.2.0.vsix'), `${relative} contains a stale VSIX version`)
+  const vsixVersions = [...text.matchAll(/sysonescript-vscode(?:-[a-z0-9-]+)?-(\d+\.\d+\.\d+)\.vsix/g)].map(match => match[1])
+  assert.ok(vsixVersions.every(version => version === manifest.version), `${relative} VSIX filenames must match the extension version`)
   const releaseVersions = [...text.matchAll(/vscode-v(\d+\.\d+\.\d+)/g)].map(match => match[1])
+  assert.ok(releaseVersions.length > 0, `${relative} must contain at least one versioned release reference`)
   assert.ok(releaseVersions.every(version => version === manifest.version), `${relative} release references must match the extension version`)
 }
