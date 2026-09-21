@@ -27,7 +27,7 @@ func TestSysoneUpdateCheckUsesPublishedCLIReleases(t *testing.T) {
 		t.Fatalf("update --check: %v %s", err, output)
 	}
 	text := string(output)
-	if !strings.Contains(text, "0.6.1 is available") || !strings.Contains(text, "you have 0.6.0") {
+	if !strings.Contains(text, "0.6.1 is available") || !strings.Contains(text, "you have 0.3.0") {
 		t.Fatalf("unexpected update output: %s", text)
 	}
 }

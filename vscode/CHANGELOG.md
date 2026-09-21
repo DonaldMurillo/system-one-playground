@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.6.0
+## 0.3.0
 
 - Adds semantic interpretation batching, memoization, and canonicalization.
 - Adds named records, typed failures, richer language tooling, and debugger hardening.

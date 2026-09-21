@@ -2,7 +2,7 @@
   "name": "sysonescript-vscode",
   "displayName": "SysOneScript",
   "description": "Language support for SysOneScript (.sos) with the native SysOneScript language server.",
-  "version": "0.6.0",
+  "version": "0.3.0",
   "publisher": "donaldmurillo",
   "packageManager": "pnpm@9.15.9",
   "icon": "icon.png",

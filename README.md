@@ -14,13 +14,13 @@ CLI or VS Code extension.
 Install the latest standalone CLI on macOS or Linux:
 
 ```sh
-curl -fsSL https://github.com/DonaldMurillo/system-one-playground/releases/download/vscode-v0.6.0/install.sh | sh
+curl -fsSL https://github.com/DonaldMurillo/system-one-playground/releases/download/vscode-v0.3.0/install.sh | sh
 ```
 
 On Windows PowerShell:
 
 ```powershell
-irm https://github.com/DonaldMurillo/system-one-playground/releases/download/vscode-v0.6.0/install.ps1 | iex
+irm https://github.com/DonaldMurillo/system-one-playground/releases/download/vscode-v0.3.0/install.ps1 | iex
 ```
 
 Both installers detect the platform, verify the release checksum, and install
@@ -148,7 +148,7 @@ go build -o vscode/bin/sos ./cmd/sos
 pnpm --dir vscode check
 pnpm --dir vscode test
 pnpm --dir vscode package
-code --install-extension vscode/sysonescript-vscode-0.6.0.vsix
+code --install-extension vscode/sysonescript-vscode-0.3.0.vsix
 ```
 
 Development checkouts can set `sysonescript.server.command` to an absolute path
