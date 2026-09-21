@@ -2,6 +2,7 @@ package sos
 
 import (
 	"container/list"
+	"context"
 	"sync"
 	"time"
 )
@@ -22,12 +23,15 @@ type memoEntry struct {
 // InterpretationCache is a bounded, concurrency-safe cache for high-confidence
 // structural interpretation decisions. Keys contain masked syntax, never literal values.
 type InterpretationCache struct {
-	mu    sync.Mutex
-	max   int
-	ttl   time.Duration
-	items map[string]*list.Element
-	lru   *list.List
+	mu      sync.Mutex
+	max     int
+	ttl     time.Duration
+	items   map[string]*list.Element
+	lru     *list.List
+	flights map[string]*cacheFlight
 }
+
+type cacheFlight struct{ done chan struct{} }
 
 func NewInterpretationCache(max int, ttl time.Duration) *InterpretationCache {
 	if max <= 0 {
@@ -36,7 +40,37 @@ func NewInterpretationCache(max int, ttl time.Duration) *InterpretationCache {
 	if ttl <= 0 {
 		ttl = 24 * time.Hour
 	}
-	return &InterpretationCache{max: max, ttl: ttl, items: map[string]*list.Element{}, lru: list.New()}
+	return &InterpretationCache{max: max, ttl: ttl, items: map[string]*list.Element{}, lru: list.New(), flights: map[string]*cacheFlight{}}
+}
+
+// begin joins identical in-flight analyses without blocking unrelated keys.
+// Staged entries become visible only after the owner validates the complete
+// canonical program and releases the transaction.
+func (c *InterpretationCache) begin(ctx context.Context, key string) (func(), error) {
+	if c == nil {
+		return func() {}, nil
+	}
+	for {
+		c.mu.Lock()
+		flight := c.flights[key]
+		if flight == nil {
+			flight = &cacheFlight{done: make(chan struct{})}
+			c.flights[key] = flight
+			c.mu.Unlock()
+			return func() {
+				c.mu.Lock()
+				delete(c.flights, key)
+				close(flight.done)
+				c.mu.Unlock()
+			}, nil
+		}
+		c.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-flight.done:
+		}
+	}
 }
 
 func (c *InterpretationCache) get(key string) (memoizedInterpretation, bool) {
@@ -77,5 +111,17 @@ func (c *InterpretationCache) put(key, candidate string, confidence float64) {
 		last := c.lru.Back()
 		delete(c.items, last.Value.(memoEntry).key)
 		c.lru.Remove(last)
+	}
+}
+
+func (c *InterpretationCache) remove(key string) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if el := c.items[key]; el != nil {
+		c.lru.Remove(el)
+		delete(c.items, key)
 	}
 }

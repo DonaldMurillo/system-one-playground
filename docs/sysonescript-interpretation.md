@@ -83,6 +83,8 @@ validated lowering used by execution:
 
 ```sh
 sos canonicalize report.sos          # preview on stdout
+sos canonicalize report.sos --diff   # review a unified patch
+sos canonicalize report.sos --line 8 # canonicalize one interpreted sentence
 sos canonicalize report.sos --write  # atomic in-place rewrite
 ```
 

@@ -61,8 +61,9 @@ type Server struct {
 	mu        sync.Mutex
 	cancel    context.CancelFunc // non-nil while a run is active
 	// On-demand semantic analysis state, guarded by mu. Independent of a run.
-	analysisCancel context.CancelFunc // non-nil while an analysis is active
-	analysisCache  *analysisEntry     // last successful analysis, one source
+	analysisCancel      context.CancelFunc // non-nil while an analysis is active
+	analysisCache       *analysisEntry     // last successful analysis, one source
+	interpretationCache *sos.InterpretationCache
 }
 
 // New creates a session. The token is unpredictable and exposed only to the
@@ -73,8 +74,9 @@ func New(opts Options) (*Server, error) {
 		return nil, err
 	}
 	s := &Server{
-		dir:   opts.Dir,
-		token: hex.EncodeToString(raw),
+		dir:                 opts.Dir,
+		token:               hex.EncodeToString(raw),
+		interpretationCache: sos.NewInterpretationCache(1024, 24*time.Hour),
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/project", s.guard(s.handleProject))

@@ -2,9 +2,23 @@ package sos
 
 import (
 	"context"
-	"os"
+	"crypto/sha256"
+	"encoding/hex"
 	"github.com/DonaldMurillo/system-one-playground/typesafe"
+	"os"
 )
+
+func semanticProviderFingerprint(ctx context.Context) string {
+	values, _ := ctx.Value(environmentContextKey{}).(map[string]string)
+	get := func(name string) string {
+		if value, ok := values[name]; ok {
+			return value
+		}
+		return os.Getenv(name)
+	}
+	sum := sha256.Sum256([]byte(get("TYPESAFE_BASE_URL") + "\x00" + get("TYPESAFE_API_KEY")))
+	return hex.EncodeToString(sum[:])
+}
 
 type environmentContextKey struct{}
 

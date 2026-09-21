@@ -152,8 +152,12 @@ func (a *semanticAnalysis) replayDecisionDetail(n *semNode, cands []semCandidate
 		return Interpretation{}, false
 	}
 	if method == "jev" {
-		if decision.Confidence < semanticMinConfidence || decision.Confidence > 1 {
-			a.savedProblem("decision confidence for line %d is below the policy minimum %g or invalid", n.line.num, semanticMinConfidence)
+		minimum := semanticMinConfidence
+		if decision.Method == "memoized" {
+			minimum = semanticMemoMinConfidence
+		}
+		if decision.Confidence < minimum || decision.Confidence > 1 {
+			a.savedProblem("decision confidence for line %d is below the policy minimum %g or invalid", n.line.num, minimum)
 			return Interpretation{}, false
 		}
 	} else if decision.Confidence != 1 {

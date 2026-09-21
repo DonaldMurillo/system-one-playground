@@ -11,6 +11,8 @@ import (
 	"net/http/httptest"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -319,6 +321,87 @@ func TestSemanticGauntletMemoizesOnlyHighConfidenceStructuralAnswers(t *testing.
 		if decision.Method != "memoized" || decision.InputTokens != 0 {
 			t.Fatalf("unexpected memoized decision: %+v", decision)
 		}
+	}
+}
+
+func TestSemanticCacheDoesNotPublishPartialFailedBatch(t *testing.T) {
+	var request atomic.Int32
+	srv := semanticChoiceServer(t, func(req fixtureReq) (string, float64) {
+		current := request.Load()
+		for _, label := range req.Labels {
+			if label != "reject" {
+				if current == 1 && strings.Contains(fmt.Sprint(req.Sentence), "score") {
+					return label, .64
+				}
+				return label, .98
+			}
+		}
+		return "reject", 1
+	})
+	// Count provider requests outside the per-answer callback.
+	original := srv.Config.Handler
+	srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		request.Add(1)
+		original.ServeHTTP(w, r)
+	})
+	semanticTestEnv(t, srv.URL)
+	cache := NewInterpretationCache(32, time.Hour)
+	source := "make age 21\nmake score 92\nonly show \"adult\" once age has gone beyond 18\nonly show \"excellent\" once score has gone beyond 90\n"
+	opts := AnalyzeOptions{Config: semanticConfig("semantic", "semantic"), Cache: cache, CacheScope: t.Name()}
+	if _, err := Analyze(context.Background(), source, opts); err == nil {
+		t.Fatal("low-confidence batch unexpectedly succeeded")
+	}
+	out, err := Analyze(context.Background(), source, opts)
+	requireSuccess(t, out, err)
+	if request.Load() != 2 || out.Usage.TotalAdmitted != 1 {
+		t.Fatalf("failed batch leaked cache entries: requests=%d usage=%+v", request.Load(), out.Usage)
+	}
+}
+
+func TestSemanticCacheSingleflightsConcurrentAnalyses(t *testing.T) {
+	var requests atomic.Int32
+	srv := semanticChoiceServer(t, func(req fixtureReq) (string, float64) {
+		for _, label := range req.Labels {
+			if label != "reject" {
+				return label, .98
+			}
+		}
+		return "reject", 1
+	})
+	original := srv.Config.Handler
+	srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		time.Sleep(30 * time.Millisecond)
+		original.ServeHTTP(w, r)
+	})
+	semanticTestEnv(t, srv.URL)
+	cache := NewInterpretationCache(32, time.Hour)
+	source := "make age 21\nonly show \"adult\" once age has gone beyond 18\n"
+	opts := AnalyzeOptions{Config: semanticConfig("semantic", "semantic"), Cache: cache, CacheScope: t.Name()}
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for range 2 {
+		wg.Add(1)
+		go func() { defer wg.Done(); _, err := Analyze(context.Background(), source, opts); errs <- err }()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if requests.Load() != 1 {
+		t.Fatalf("concurrent cold analyses made %d provider requests, want 1", requests.Load())
+	}
+}
+
+func TestSemanticCanonicalizationPreservesCRLF(t *testing.T) {
+	source := "make age 21\r\nif age bigger 18 show \"adult\"\r\n"
+	out, err := Analyze(context.Background(), source, AnalyzeOptions{Config: semanticConfig("semantic", "semantic")})
+	requireSuccess(t, out, err)
+	if strings.Contains(strings.ReplaceAll(out.Canonical, "\r\n", ""), "\n") || !strings.Contains(out.Canonical, "\r\n") {
+		t.Fatalf("canonicalization produced mixed line endings: %q", out.Canonical)
 	}
 }
 

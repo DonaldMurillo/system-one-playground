@@ -36,6 +36,7 @@
     "onCommand:sysonescript.buildProject",
     "onCommand:sysonescript.explainFile",
     "onCommand:sysonescript.canonicalizeFile",
+    "onCommand:sysonescript.canonicalizeLine",
     "onCommand:sysonescript.stop",
     "onCommand:sysonescript.setJevToken",
     "onCommand:sysonescript.clearJevToken",
@@ -226,6 +227,11 @@
         "category": "SysOneScript"
       },
       {
+        "command": "sysonescript.canonicalizeLine",
+        "title": "SysOneScript: Make Interpreted Line Canonical",
+        "category": "SysOneScript"
+      },
+      {
         "command": "sysonescript.debugProject",
         "title": "SysOneScript: Debug Project",
         "category": "SysOneScript"
@@ -297,6 +303,12 @@
       }
     ],
     "menus": {
+      "commandPalette": [
+        {
+          "command": "sysonescript.canonicalizeLine",
+          "when": "false"
+        }
+      ],
       "editor/title": [
         {
           "command": "sysonescript.canonicalizeFile",

@@ -27,7 +27,8 @@ const cliUsage = `usage: sos COMMAND [arguments]
 commands:
   run FILE [flags] [-- SCRIPT_ARGS]   load .env, check, and run FILE
   explain FILE [--save PATH] [--locked PATH]  inspect semantic interpretation
-  canonicalize FILE [--write]         resolve and print canonical source
+  canonicalize FILE [--write|--diff] [--line N]
+                                      resolve canonical source or one line
   config FILE                         show effective configuration as JSON
   check FILE                          report diagnostics for FILE
   fmt FILE [--write]                  print formatted FILE, or rewrite it

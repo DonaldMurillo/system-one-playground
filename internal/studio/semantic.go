@@ -85,6 +85,7 @@ func (s *Server) handleAnalyze(w http.ResponseWriter, r *http.Request) {
 		Args:        req.Args,
 		Dir:         runDir,
 		Saved:       saved,
+		Cache:       s.interpretationCache,
 	})
 	if err != nil {
 		writeAnalysisError(w, err)

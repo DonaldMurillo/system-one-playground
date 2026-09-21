@@ -65,8 +65,9 @@ type server struct {
 	docs          map[string]*document
 	// vocabCache shares one core vocabulary resolution per document text
 	// across completion, hover, tokens, hints, and sos/vocabulary.
-	vocabCache map[string]*vocabCacheEntry
-	index      *packageIndex
+	vocabCache          map[string]*vocabCacheEntry
+	index               *packageIndex
+	interpretationCache *sos.InterpretationCache
 }
 
 // pkgIndex lazily builds the bounded local package index for the workspace.

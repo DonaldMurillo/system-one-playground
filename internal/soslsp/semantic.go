@@ -5,13 +5,20 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/DonaldMurillo/system-one-playground/sos"
 )
 
-var processInterpretationCache = sos.NewInterpretationCache(1024, 24*time.Hour)
+func interpretationScope(dir string) string {
+	scope, err := filepath.Abs(dir)
+	if err != nil || dir == "" {
+		scope = filepath.Clean(dir)
+	}
+	return scope
+}
 
 // On-demand semantic analysis, shared by the custom `sos/analyze` stdio
 // method and the Studio /api/analyze route. Nothing here runs automatically:
@@ -95,9 +102,11 @@ type AnalyzeResult struct {
 // Analyze runs one explicit on-demand analysis under the effective editor
 // policy. It returns before any provider request when assistance is off.
 func Analyze(ctx context.Context, req AnalyzeRequest) (*AnalyzeResult, error) {
+	cacheScope := req.Dir
 	if req.Cache == nil {
-		req.Cache = processInterpretationCache
+		req.Cache = sos.NewInterpretationCache(1024, 24*time.Hour)
 	}
+	cacheScope = interpretationScope(cacheScope)
 	if len(req.Source) > maxAnalyzeBytes {
 		return nil, &AnalyzeError{Kind: KindConfig, Message: "source exceeds 1 MiB limit"}
 	}
@@ -167,13 +176,14 @@ func Analyze(ctx context.Context, req AnalyzeRequest) (*AnalyzeResult, error) {
 	// error falls through to fresh work, and only while budget remains.
 	if req.Saved != nil {
 		reused, err := sos.Analyze(ctx, req.Source, sos.AnalyzeOptions{
-			Modules: program.Modules,
-			Config:  cfg,
-			Budget:  budget,
-			Bucket:  sos.BudgetEditor,
-			Saved:   req.Saved,
-			Locked:  true,
-			Cache:   req.Cache,
+			Modules:    program.Modules,
+			Config:     cfg,
+			Budget:     budget,
+			Bucket:     sos.BudgetEditor,
+			Saved:      req.Saved,
+			Locked:     true,
+			Cache:      req.Cache,
+			CacheScope: cacheScope,
 		})
 		if err == nil {
 			return &AnalyzeResult{Analysis: reused, Promoted: promoted, Reused: true}, nil
@@ -185,11 +195,12 @@ func Analyze(ctx context.Context, req AnalyzeRequest) (*AnalyzeResult, error) {
 	}
 
 	analysis, err := sos.Analyze(ctx, req.Source, sos.AnalyzeOptions{
-		Modules: program.Modules,
-		Config:  cfg,
-		Budget:  budget,
-		Bucket:  sos.BudgetEditor,
-		Cache:   req.Cache,
+		Modules:    program.Modules,
+		Config:     cfg,
+		Budget:     budget,
+		Bucket:     sos.BudgetEditor,
+		Cache:      req.Cache,
+		CacheScope: cacheScope,
 	})
 	if err != nil {
 		return &AnalyzeResult{Analysis: analysis, Promoted: promoted}, &AnalyzeError{Kind: classifyAnalyzeError(ctx, err), Err: err, Analysis: analysis}
@@ -262,7 +273,17 @@ func (s *server) sosAnalyze(id json.RawMessage, params json.RawMessage) {
 	// Configuration roots at the server's working directory.
 	ctx, cancel := context.WithTimeout(context.Background(), analyzeTimeout)
 	defer cancel()
-	result, err := Analyze(ctx, AnalyzeRequest{Source: source, CommandPath: p.CommandPath, Args: p.Args})
+	filename, dir := "", s.workspaceRoot
+	if p.TextDocument != nil {
+		filename = uriToPath(p.TextDocument.URI)
+		if filename != "" {
+			dir = semanticProjectDir(filename)
+		}
+	}
+	if s.interpretationCache == nil {
+		s.interpretationCache = sos.NewInterpretationCache(1024, 24*time.Hour)
+	}
+	result, err := Analyze(ctx, AnalyzeRequest{Filename: filename, Dir: dir, Source: source, CommandPath: p.CommandPath, Args: p.Args, Cache: s.interpretationCache})
 	if err != nil {
 		var ae *AnalyzeError
 		var data any
@@ -273,6 +294,19 @@ func (s *server) sosAnalyze(id json.RawMessage, params json.RawMessage) {
 		return
 	}
 	s.writeResult(id, analyzeResultJSON(result))
+}
+
+func semanticProjectDir(filename string) string {
+	dir := filepath.Dir(filename)
+	for current := dir; ; current = filepath.Dir(current) {
+		if _, err := os.Stat(filepath.Join(current, "sos.toml")); err == nil {
+			return current
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return dir
+		}
+	}
 }
 
 func analyzeErrorKind(err error) string {

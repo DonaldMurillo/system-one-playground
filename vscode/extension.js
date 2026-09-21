@@ -352,10 +352,17 @@ async function canonicalizeActiveDocument() {
   if (!editor || !document || !isSysOneScript(document)) return
   if (!await document.save()) return
   const root = projectFor(document.uri.fsPath)
+  if (!root) return
+  const source = document.getText()
+  const version = document.version
   try {
     const canonical = await captureRunner(['canonicalize', relativeScript(root, document.uri.fsPath)], root)
+    if (document.version !== version || document.getText() !== source) {
+      throw new Error('document changed while canonicalization was running; run the command again')
+    }
     const full = new vscode.Range(document.positionAt(0), document.positionAt(document.getText().length))
-    await editor.edit(builder => builder.replace(full, canonical), {undoStopBefore:true, undoStopAfter:true})
+    const applied = await editor.edit(builder => builder.replace(full, canonical), {undoStopBefore:true, undoStopAfter:true})
+    if (!applied) throw new Error('VS Code rejected the canonical edit')
     vscode.window.showInformationMessage('SysOneScript source is now canonical and deterministic.')
   } catch (error) {
     vscode.window.showErrorMessage(`Canonicalization failed: ${error.message}`)
@@ -738,6 +745,8 @@ function registerDocumentSync(context) {
   context.subscriptions.push(vscode.workspace.onDidChangeTextDocument(event => {
     const state = extensionState
     if (!state || !isSysOneScript(event.document)) return
+    state.semanticAnalyses.delete(event.document.uri.toString())
+    state.semanticLensEmitter?.fire()
     state.ready.then(() => {
       if (!state.opened.has(event.document.uri.toString())) syncDocument(event.document)
       else state.client.notify('textDocument/didChange', {
@@ -859,11 +868,28 @@ function registerLanguageProviders(context) {
     },
   }))
 
+  const semanticLensEmitter = new vscode.EventEmitter()
+  extensionState.semanticLensEmitter = semanticLensEmitter
+  context.subscriptions.push(semanticLensEmitter)
   context.subscriptions.push(vscode.languages.registerCodeLensProvider(DOCUMENT_SELECTOR, {
+    onDidChangeCodeLenses: semanticLensEmitter.event,
     async provideCodeLenses(document) {
       if (!await ensureDocument(document)) return []
       const result = await request('textDocument/codeLens', { textDocument: { uri: document.uri.toString() } })
-      return (result || []).map(item => new vscode.CodeLens(range(item.range), command(item.command)))
+      const lenses = (result || []).map(item => new vscode.CodeLens(range(item.range), command(item.command)))
+      const analyzed = extensionState.semanticAnalyses.get(document.uri.toString())
+      if (analyzed?.version === document.version) {
+        for (const decision of analyzed.analysis?.decisions || []) {
+          if (!decision.canonical || decision.method === 'criterion' || decision.canonical === decision.source) continue
+          const line = decision.line - 1
+          lenses.push(new vscode.CodeLens(new vscode.Range(line, 0, line, 0), {
+            title: `Make canonical · ${Math.round((decision.confidence || 0) * 100)}% ${decision.method}`,
+            command: 'sysonescript.canonicalizeLine',
+            arguments: [document.uri.toString(), decision.line, decision.source, decision.canonical, analyzed.version],
+          }))
+        }
+      }
+      return lenses
     },
   }))
 
@@ -902,9 +928,17 @@ async function analyzeActiveDocument() {
     vscode.window.showInformationMessage('Open a .sos file before asking SysOneScript to analyze it.')
     return
   }
+  const source = document.getText()
+  const version = document.version
   try {
     await ensureDocument(document)
     const result = await request('sos/analyze', { textDocument: { uri: document.uri.toString() } })
+    if (document.version !== version || document.getText() !== source) {
+      extensionState.output.appendLine('Analysis result discarded because the document changed while Jev was running.')
+      return
+    }
+    extensionState.semanticAnalyses.set(document.uri.toString(), {version, analysis: result?.analysis})
+    extensionState.semanticLensEmitter?.fire()
     extensionState.output.appendLine(`Analysis for ${document.uri.fsPath}`)
     extensionState.output.appendLine(JSON.stringify(result, null, 2))
     extensionState.output.show(true)
@@ -914,6 +948,20 @@ async function analyzeActiveDocument() {
     extensionState.output.show(true)
     vscode.window.showErrorMessage(`SysOneScript analysis failed: ${error.message}`)
   }
+}
+
+async function canonicalizeAnalyzedLine(uriString, oneBasedLine, source, canonical, analyzedVersion) {
+  const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(uriString))
+  const editor = await vscode.window.showTextDocument(document)
+  const line = oneBasedLine - 1
+  if (document.version !== analyzedVersion || line < 0 || line >= document.lineCount || document.lineAt(line).text.trim() !== source.trim()) {
+    vscode.window.showWarningMessage('That interpretation is stale. Analyze the document again before making it canonical.')
+    return
+  }
+  const applied = await editor.edit(builder => builder.replace(document.lineAt(line).range, canonical), {undoStopBefore:true, undoStopAfter:true})
+  if (!applied) { vscode.window.showErrorMessage('VS Code rejected the canonical edit.'); return }
+  extensionState.semanticAnalyses.delete(uriString)
+  extensionState.semanticLensEmitter?.fire()
 }
 
 async function restartServer() {
@@ -982,6 +1030,8 @@ function activate(context) {
     secrets: context.secrets,
     jevToken: undefined,
     tokenReady: context.secrets.get(JEV_SECRET_KEY).then(token => { extensionState.jevToken = token || undefined }),
+    semanticAnalyses: new Map(),
+    semanticLensEmitter: undefined,
   }
   context.subscriptions.push(output, runOutput, diagnostics)
 
@@ -1007,6 +1057,7 @@ function activate(context) {
   context.subscriptions.push(vscode.commands.registerCommand('sysonescript.buildProject', buildProject))
   context.subscriptions.push(vscode.commands.registerCommand('sysonescript.explainFile', explainFile))
   context.subscriptions.push(vscode.commands.registerCommand('sysonescript.canonicalizeFile', canonicalizeActiveDocument))
+  context.subscriptions.push(vscode.commands.registerCommand('sysonescript.canonicalizeLine', canonicalizeAnalyzedLine))
   context.subscriptions.push(vscode.commands.registerCommand('sysonescript.debugFile', debugFile))
   context.subscriptions.push(vscode.commands.registerCommand('sysonescript.debugProject', debugProject))
   context.subscriptions.push(vscode.commands.registerCommand('sysonescript.stop', stopProcesses))

@@ -149,11 +149,12 @@ func cmdExplain(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "source exceeds 1 MiB limit")
 		return 1
 	}
-	dir, err := os.Getwd()
+	absPath, err := filepath.Abs(path)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
+	dir := filepath.Dir(absPath)
 	if err = sos.LoadEnv(filepath.Join(dir, ".env")); err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -212,7 +213,7 @@ func cmdExplain(args []string, stdout, stderr io.Writer) int {
 }
 
 func cmdCanonicalize(args []string, stdout, stderr io.Writer) int {
-	const usage = "usage: sos canonicalize FILE [--write] [--model M] [--max-calls N]\n"
+	const usage = "usage: sos canonicalize FILE [--write] [--diff] [--line N] [--model M] [--max-calls N]\n"
 	if len(args) == 0 {
 		fmt.Fprint(stderr, usage)
 		return 2
@@ -221,6 +222,8 @@ func cmdCanonicalize(args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("canonicalize", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	write := flags.Bool("write", false, "rewrite FILE atomically")
+	diff := flags.Bool("diff", false, "preview a unified diff")
+	line := flags.Int("line", 0, "canonicalize only the interpretation at one source line")
 	model := flags.String("model", "", "interpretation model")
 	maxCalls := flags.Int("max-calls", -1, "further request ceiling")
 	if err := flags.Parse(args[1:]); err != nil {
@@ -230,12 +233,29 @@ func cmdCanonicalize(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stderr, usage)
 		return 2
 	}
+	if *diff && *write {
+		fmt.Fprintln(stderr, "--diff and --write cannot be used together")
+		return 2
+	}
+	if *line < 0 {
+		fmt.Fprintln(stderr, "--line must be positive")
+		return 2
+	}
 	source, err := os.ReadFile(path)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	dir, err := os.Getwd()
+	initialInfo, err := os.Stat(path)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if linkInfo, linkErr := os.Lstat(path); linkErr == nil && linkInfo.Mode()&os.ModeSymlink != 0 && *write {
+		fmt.Fprintln(stderr, "refusing to replace a symbolic link; canonicalize its target explicitly")
+		return 1
+	}
+	dir, err := canonicalizeProjectDir(path)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -264,18 +284,38 @@ func cmdCanonicalize(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	canonical, err := sos.Canonicalize(string(source), a)
+	canonical, err := sos.Canonicalize(string(source), a, program.Modules)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
+	}
+	if *line > 0 {
+		canonical, err = canonicalizeOneLine(string(source), a, *line)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+	}
+	if *diff {
+		fmt.Fprint(stdout, canonicalDiff(path, string(source), canonical))
+		return 0
 	}
 	if !*write {
 		fmt.Fprint(stdout, canonical)
 		return 0
 	}
+	currentSource, err := os.ReadFile(path)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
 	info, err := os.Stat(path)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if !bytes.Equal(currentSource, source) || !os.SameFile(initialInfo, info) {
+		fmt.Fprintln(stderr, "source changed while canonicalization was running; refusing to overwrite it")
 		return 1
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".sos-canonical-*")
@@ -295,7 +335,7 @@ func cmdCanonicalize(args []string, stdout, stderr io.Writer) int {
 		err = closeErr
 	}
 	if err == nil {
-		err = os.Rename(tmpName, path)
+		err = replaceFile(tmpName, path)
 	}
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -303,4 +343,79 @@ func cmdCanonicalize(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stdout, "canonicalized %s\n", path)
 	return 0
+}
+
+func canonicalizeProjectDir(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Dir(abs)
+	for current := dir; ; current = filepath.Dir(current) {
+		if _, err := os.Stat(filepath.Join(current, "sos.toml")); err == nil {
+			return current, nil
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return dir, nil
+		}
+	}
+}
+
+func canonicalizeOneLine(source string, analysis *sos.Analysis, line int) (string, error) {
+	var replacement string
+	for _, decision := range analysis.Decisions {
+		if decision.Line == line && decision.Method != "criterion" {
+			replacement = decision.Canonical
+			break
+		}
+	}
+	if replacement == "" {
+		return "", fmt.Errorf("line %d has no canonicalizable interpretation", line)
+	}
+	newline := "\n"
+	if strings.Contains(source, "\r\n") {
+		newline = "\r\n"
+		replacement = strings.ReplaceAll(replacement, "\n", newline)
+	}
+	trailing := strings.HasSuffix(source, newline)
+	lines := strings.Split(strings.TrimSuffix(source, newline), newline)
+	if line > len(lines) {
+		return "", fmt.Errorf("line %d is outside the source", line)
+	}
+	lines[line-1] = replacement
+	result := strings.Join(lines, newline)
+	if trailing {
+		result += newline
+	}
+	return result, nil
+}
+
+func canonicalDiff(path, before, after string) string {
+	if before == after {
+		return ""
+	}
+	oldLines, newLines := diffLines(before), diffLines(after)
+	var out strings.Builder
+	fmt.Fprintf(&out, "--- %s\n+++ %s\n@@ -1,%d +1,%d @@\n", path, path, len(oldLines), len(newLines))
+	for _, line := range oldLines {
+		fmt.Fprintf(&out, "-%s\n", strings.TrimSuffix(line, "\r"))
+	}
+	if before != "" && !strings.HasSuffix(before, "\n") {
+		out.WriteString("\\ No newline at end of file\n")
+	}
+	for _, line := range newLines {
+		fmt.Fprintf(&out, "+%s\n", strings.TrimSuffix(line, "\r"))
+	}
+	if after != "" && !strings.HasSuffix(after, "\n") {
+		out.WriteString("\\ No newline at end of file\n")
+	}
+	return out.String()
+}
+
+func diffLines(source string) []string {
+	if source == "" {
+		return nil
+	}
+	return strings.Split(strings.TrimSuffix(source, "\n"), "\n")
 }

@@ -16,4 +16,8 @@ func TestCanonicalizeUsesValidatedAnalysisAndRejectsStaleSource(t *testing.T) {
 	if _, err := Canonicalize(source+"# changed\n", a); err == nil {
 		t.Fatal("stale analysis was accepted")
 	}
+	a.Canonical = "definitely not canonical\n"
+	if _, err := Canonicalize(source, a); err == nil {
+		t.Fatal("mutated invalid canonical source was accepted")
+	}
 }
