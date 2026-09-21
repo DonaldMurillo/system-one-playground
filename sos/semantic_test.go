@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/DonaldMurillo/system-one-playground/sosconfig"
 )
@@ -285,6 +286,39 @@ only emit "high score" once score above 80
 	}
 	if !strings.Contains(out.Canonical, `show "adult — not: print child once age under 2"`) {
 		t.Fatalf("quoted decoy grammar was not preserved: %s", out.Canonical)
+	}
+}
+
+func TestSemanticGauntletMemoizesOnlyHighConfidenceStructuralAnswers(t *testing.T) {
+	answers := 0
+	srv := semanticChoiceServer(t, func(req fixtureReq) (string, float64) {
+		answers++
+		for _, label := range req.Labels {
+			if label != "reject" {
+				return label, .97
+			}
+		}
+		return "reject", 1
+	})
+	semanticTestEnv(t, srv.URL)
+	cache := NewInterpretationCache(32, time.Hour)
+	source := "make age 21\nonly show \"first literal\" once age has gone beyond 18\nonly print \"second literal\" once age under 30\n"
+	opts := AnalyzeOptions{Config: semanticConfig("semantic", "semantic"), Cache: cache}
+	first, err := Analyze(context.Background(), source, opts)
+	requireSuccess(t, first, err)
+	if first.Usage.TotalAdmitted != 1 || answers != 2 {
+		t.Fatalf("first analysis was not one two-question batch: %+v answers=%d", first.Usage, answers)
+	}
+	secondSource := strings.ReplaceAll(source, "first literal", "changed literal")
+	second, err := Analyze(context.Background(), secondSource, opts)
+	requireSuccess(t, second, err)
+	if second.Usage.TotalAdmitted != 0 || answers != 2 {
+		t.Fatalf("memoized analysis spent provider budget: %+v answers=%d", second.Usage, answers)
+	}
+	for _, decision := range second.Decisions {
+		if decision.Method != "memoized" || decision.InputTokens != 0 {
+			t.Fatalf("unexpected memoized decision: %+v", decision)
+		}
 	}
 }
 

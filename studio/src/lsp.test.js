@@ -31,6 +31,13 @@ test('batched code lenses label shared usage instead of implying per-line spend'
   assert.equal(result.lenses[0].command.title,'Jev · 91% confidence · 2400 tokens · ~$0.00010080 shared across 8 lines')
 })
 
+test('memoized code lenses report zero new requests and cost',async()=>{
+  const decision={line:2,method:'memoized',confidence:.97}
+  const {providers,model}=setup(async()=>({result:[{range:{start:{line:1,character:0},end:{line:1,character:1}},command:{command:'sos.analyze',title:'Analyze'}}]}),()=>({decisions:[decision]}))
+  const result=await providers.CodeLens.provideCodeLenses(model)
+  assert.equal(result.lenses[0].command.title,'Jev memoized · 97% confidence · 0 new requests · $0.00000000')
+})
+
 test('completion preserves replacement ranges and atomic import edits',async()=>{
   const {providers,model}=setup(async()=>({result:[{label:'text.trim',kind:3,detail:'std/text',textEdit:{range:{start:{line:1,character:5},end:{line:1,character:14}},newText:'text.trim'},additionalTextEdits:[{range:{start:{line:0,character:0},end:{line:0,character:0}},newText:'import "std/text"\n'}]}]}))
   const r=await providers.CompletionItem.provideCompletionItems(model,{lineNumber:2,column:10})

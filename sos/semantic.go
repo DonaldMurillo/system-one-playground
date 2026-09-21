@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -38,7 +39,8 @@ type AnalyzeOptions struct {
 	Locked bool                `json:"locked"`
 	// Modules supplies the import graph resolved by LoadProgram so the
 	// canonical checker can validate qualified calls. Nil rejects them.
-	Modules *ModuleTable `json:"-"`
+	Modules *ModuleTable         `json:"-"`
+	Cache   *InterpretationCache `json:"-"`
 }
 
 // Interpretation is one resolved noncanonical sentence (or criterion
@@ -234,6 +236,7 @@ type semanticAnalysis struct {
 	diagnostics  []Diagnostic
 	stopped      bool
 	failureCause error
+	lastMemoized bool
 	// replay state
 	replay        bool
 	savedIdx      map[int]Interpretation
@@ -279,6 +282,7 @@ func (a *semanticAnalysis) resolve(nodes []*semNode, scope *semScope) {
 type semanticBatchItem struct {
 	n     *semNode
 	cands []semCandidate
+	key   string
 }
 
 // doLexicalBatch groups adjacent, scope-neutral dictionary compositions into
@@ -308,32 +312,68 @@ func (a *semanticAnalysis) doLexicalBatch(nodes []*semNode, scope *semScope) int
 	}
 	questions := typesafe.Questions{}
 	states := map[string]any{}
-	for _, item := range items {
+	resolved := map[int]memoizedInterpretation{}
+	for i := range items {
+		item := &items[i]
 		id := fmt.Sprintf("line_%d", item.n.line.num)
 		labels, state := a.interpretationRequest(item.n, item.cands, scope)
+		item.key = semanticMemoKey(a.model, labels, state)
+		if hit, ok := a.opts.Cache.get(item.key); ok {
+			resolved[item.n.line.num] = hit
+			continue
+		}
 		questions[id] = typesafe.Choice(semanticChoiceInstructions()+" Use the interpretation state named "+id+".", labels)
 		states[id] = state
 	}
-	before := a.budget.Snapshot().Buckets[a.bucket]
-	evaluation, err := Evaluate(a.ctx, EvaluationRequest{State: map[string]any{"role": "SysOneScript batched source interpretation", "interpretations": states}, Question: typesafe.Question{Type: questionBatch, Criteria: questions}, Model: a.model, Budget: a.budget, Bucket: a.bucket, Line: items[0].n.line.num, Description: fmt.Sprintf("interpret %d independent SysOneScript lines", len(items))})
-	if err != nil {
-		a.diagAt(items[0].n.line.num, "batched interpretation provider failed: %s", err.Error())
-		a.stopped = true
-		return len(items)
+	tokens, known := 0, true
+	var evaluation Evaluation
+	if len(questions) > 0 {
+		before := a.budget.Snapshot().Buckets[a.bucket]
+		var err error
+		evaluation, err = Evaluate(a.ctx, EvaluationRequest{State: map[string]any{"role": "SysOneScript batched source interpretation", "interpretations": states}, Question: typesafe.Question{Type: questionBatch, Criteria: questions}, Model: a.model, Budget: a.budget, Bucket: a.bucket, Line: items[0].n.line.num, Description: fmt.Sprintf("interpret %d independent SysOneScript lines", len(questions))})
+		if err != nil {
+			a.diagAt(items[0].n.line.num, "batched interpretation provider failed: %s", err.Error())
+			a.stopped = true
+			return len(items)
+		}
+		after := a.budget.Snapshot().Buckets[a.bucket]
+		tokens = after.ReportedInputTokens - before.ReportedInputTokens
+		known = after.Unresolved == before.Unresolved && after.Requests == before.Requests+1
 	}
-	after := a.budget.Snapshot().Buckets[a.bucket]
-	tokens := after.ReportedInputTokens - before.ReportedInputTokens
-	known := after.Unresolved == before.Unresolved && after.Requests == before.Requests+1
 	for _, item := range items {
+		if hit, ok := resolved[item.n.line.num]; ok {
+			cand, ok := candidateByID(item.cands, hit.Candidate)
+			if !ok {
+				continue
+			}
+			a.finishSemantic(item.n, cand, hit.Confidence, "memoized", "high-confidence structural interpretation reused from the workspace cache", scope, 0, true, 0, false)
+			continue
+		}
 		id := fmt.Sprintf("line_%d", item.n.line.num)
 		answer, _ := evaluation.Answer[id].(map[string]any)
 		cand, conf, ok := a.validateInterpretationAnswer(item.n, item.cands, questions[id], answer)
 		if !ok {
 			return len(items)
 		}
-		a.finishSemantic(item.n, cand, conf, "jev", "", scope, tokens, known, len(items), true)
+		a.opts.Cache.put(item.key, cand.id, conf)
+		a.finishSemantic(item.n, cand, conf, "jev", "", scope, tokens, known, len(questions), len(questions) > 1)
 	}
 	return len(items)
+}
+
+func candidateByID(cands []semCandidate, id string) (semCandidate, bool) {
+	for _, c := range cands {
+		if c.id == id {
+			return c, true
+		}
+	}
+	return semCandidate{}, false
+}
+
+func semanticMemoKey(model string, labels, state map[string]any) string {
+	b, _ := json.Marshal(map[string]any{"model": model, "registry": semanticRegistryVersion, "prompt": semanticPromptVersion, "minimum": semanticMinConfidence, "labels": labels, "state": state})
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
 }
 
 func (a *semanticAnalysis) doCriterion(n *semNode, scope *semScope) {
@@ -452,6 +492,11 @@ func (a *semanticAnalysis) doSemantic(n *semNode, scope *semScope) {
 		inputTokens = after.ReportedInputTokens - before.ReportedInputTokens
 		usageKnown = after.Unresolved == before.Unresolved && after.Requests == before.Requests+1
 		method = "jev"
+		if a.lastMemoized {
+			method = "memoized"
+			inputTokens = 0
+			usageKnown = true
+		}
 	}
 	a.finishSemantic(n, cand, conf, method, explanation, scope, inputTokens, usageKnown, 0, false)
 }
@@ -511,6 +556,14 @@ func (a *semanticAnalysis) childrenSupported(n *semNode) bool {
 // conservative confidence policy is refused.
 func (a *semanticAnalysis) chooseInterpretation(n *semNode, cands []semCandidate, scope *semScope) (semCandidate, float64, bool) {
 	labels, state := a.interpretationRequest(n, cands, scope)
+	a.lastMemoized = false
+	key := semanticMemoKey(a.model, labels, state)
+	if hit, ok := a.opts.Cache.get(key); ok {
+		if cand, found := candidateByID(cands, hit.Candidate); found {
+			a.lastMemoized = true
+			return cand, hit.Confidence, true
+		}
+	}
 	question := typesafe.Choice(semanticChoiceInstructions(), labels)
 	description := fmt.Sprintf("interpret SysOneScript line %d: %s", n.line.num, n.text)
 	evaluation, err := Evaluate(a.ctx, EvaluationRequest{
@@ -534,7 +587,11 @@ func (a *semanticAnalysis) chooseInterpretation(n *semNode, cands []semCandidate
 		a.stopped = true
 		return semCandidate{}, 0, false
 	}
-	return a.validateInterpretationAnswer(n, cands, question, evaluation.Answer)
+	cand, conf, ok := a.validateInterpretationAnswer(n, cands, question, evaluation.Answer)
+	if ok {
+		a.opts.Cache.put(key, cand.id, conf)
+	}
+	return cand, conf, ok
 }
 
 func (a *semanticAnalysis) interpretationRequest(n *semNode, cands []semCandidate, scope *semScope) (map[string]any, map[string]any) {

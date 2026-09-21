@@ -11,6 +11,8 @@ import (
 	"github.com/DonaldMurillo/system-one-playground/sos"
 )
 
+var processInterpretationCache = sos.NewInterpretationCache(1024, 24*time.Hour)
+
 // On-demand semantic analysis, shared by the custom `sos/analyze` stdio
 // method and the Studio /api/analyze route. Nothing here runs automatically:
 // every provider request is behind an explicit user action, the editor
@@ -76,6 +78,7 @@ type AnalyzeRequest struct {
 	Dir         string
 	Budget      *sos.RequestBudget
 	Saved       *sos.Analysis
+	Cache       *sos.InterpretationCache
 }
 
 // AnalyzeResult reports the analysis plus how it was obtained. Promoted is
@@ -92,6 +95,9 @@ type AnalyzeResult struct {
 // Analyze runs one explicit on-demand analysis under the effective editor
 // policy. It returns before any provider request when assistance is off.
 func Analyze(ctx context.Context, req AnalyzeRequest) (*AnalyzeResult, error) {
+	if req.Cache == nil {
+		req.Cache = processInterpretationCache
+	}
 	if len(req.Source) > maxAnalyzeBytes {
 		return nil, &AnalyzeError{Kind: KindConfig, Message: "source exceeds 1 MiB limit"}
 	}
@@ -167,6 +173,7 @@ func Analyze(ctx context.Context, req AnalyzeRequest) (*AnalyzeResult, error) {
 			Bucket:  sos.BudgetEditor,
 			Saved:   req.Saved,
 			Locked:  true,
+			Cache:   req.Cache,
 		})
 		if err == nil {
 			return &AnalyzeResult{Analysis: reused, Promoted: promoted, Reused: true}, nil
@@ -182,6 +189,7 @@ func Analyze(ctx context.Context, req AnalyzeRequest) (*AnalyzeResult, error) {
 		Config:  cfg,
 		Budget:  budget,
 		Bucket:  sos.BudgetEditor,
+		Cache:   req.Cache,
 	})
 	if err != nil {
 		return &AnalyzeResult{Analysis: analysis, Promoted: promoted}, &AnalyzeError{Kind: classifyAnalyzeError(ctx, err), Err: err, Analysis: analysis}

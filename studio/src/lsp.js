@@ -36,7 +36,9 @@ export function installLanguageServices(monaco, api, context = () => ({}), analy
           const range = toEditorRange(item.range)
           const decision = decisions.get(range.startLineNumber)
           let title = item.command.title
-          if (decision?.method === 'jev') {
+          if (decision?.method === 'memoized') {
+            title = `Jev memoized · ${Math.round(decision.confidence * 100)}% confidence · 0 new requests · $0.00000000`
+          } else if (decision?.method === 'jev') {
             const confidence = `${Math.round(decision.confidence * 100)}% confidence`
             const usage = decision.usage_known
               ? `${decision.input_tokens} tokens · ~${usageCost(decision.input_tokens)}${decision.usage_shared ? ` shared across ${decision.batch_size} lines` : ''}`

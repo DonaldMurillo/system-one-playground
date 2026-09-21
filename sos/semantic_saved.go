@@ -131,7 +131,8 @@ func (a *semanticAnalysis) replayDecisionDetail(n *semNode, cands []semCandidate
 		a.savedProblem("decision source text for line %d does not match the source", n.line.num)
 		return Interpretation{}, false
 	}
-	if decision.Method != method {
+	methodMatches := decision.Method == method || (method == "jev" && decision.Method == "memoized")
+	if !methodMatches {
 		a.savedProblem("decision method %q for line %d must be %q", decision.Method, n.line.num, method)
 		return Interpretation{}, false
 	}

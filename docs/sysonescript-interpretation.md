@@ -103,6 +103,12 @@ Adjacent scope-neutral dictionary compositions are sent as up to 128 questions
 in one provider request. Scope-changing or dependent statements form ordering
 barriers. Batched lenses label the request tokens and estimate as shared across
 the participating lines rather than presenting the batch total as per-line cost.
+The editor process memoizes successful structural choices at confidence 0.95 or
+higher in a bounded 1024-entry, 24-hour LRU. Keys include the model, semantic
+versions, confidence policy, masked sentence, candidates, and visible type
+context; literal contents are excluded. Rejects, failures, and lower-confidence
+answers are never cached. Cache hits spend no request and are labeled
+`memoized`; canonicalizing remains the durable, deterministic workflow.
 Saving is explicit and only succeeds after analysis succeeds. Saving a resolution
 writes that JSON file; it does not run the program. A resolution can contain
 source text and judgment questions, so handle it like the source itself.

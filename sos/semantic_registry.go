@@ -308,6 +308,9 @@ func (a *semanticAnalysis) explain(n *semNode, cand semCandidate, conf float64, 
 	}
 	switch {
 	case strings.HasPrefix(cand.id, "lexical-"):
+		if method == "memoized" {
+			return fmt.Sprintf("high-confidence Jev interpretation reused from the structural cache (confidence %g, cache minimum %g); no provider request was made", conf, semanticMemoMinConfidence)
+		}
 		if method == "jev" {
 			return fmt.Sprintf("dictionary meanings retrieved known language definitions; type context pruned invalid meanings and Jev selected the remaining interpretation (confidence %g, policy minimum %g)", conf, semanticMinConfidence)
 		}
