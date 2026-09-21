@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 )
 
 const markerSymbol = "github.com/DonaldMurillo/system-one-playground/sos.ReleaseMarker"
@@ -59,13 +58,16 @@ func openExecutable(path string) (*executable, error) {
 		if err != nil {
 			return nil, err
 		}
-		var addr uint64
+		var matches []elf.Symbol
 		for _, symbol := range symbols {
 			if symbol.Name == markerSymbol {
-				addr = symbol.Value
-				break
+				matches = append(matches, symbol)
 			}
 		}
+		if len(matches) != 1 || elf.ST_TYPE(matches[0].Info) != elf.STT_OBJECT || matches[0].Section == elf.SHN_UNDEF {
+			return nil, fmt.Errorf("release marker must have exactly one defined ELF object symbol")
+		}
+		addr := matches[0].Value
 		return &executable{order: f.ByteOrder, addr: addr, reader: func(address, size uint64) ([]byte, error) {
 			for _, section := range f.Sections {
 				if address >= section.Addr && address+size <= section.Addr+section.Size {
@@ -76,15 +78,18 @@ func openExecutable(path string) (*executable, error) {
 		}}, requireSymbol(addr)
 	}
 	if f, err := macho.Open(path); err == nil {
-		var addr uint64
+		var matches []macho.Symbol
 		if f.Symtab != nil {
 			for _, symbol := range f.Symtab.Syms {
-				if strings.TrimPrefix(symbol.Name, "_") == markerSymbol {
-					addr = symbol.Value
-					break
+				if symbol.Name == markerSymbol {
+					matches = append(matches, symbol)
 				}
 			}
 		}
+		if len(matches) != 1 || matches[0].Type&0x0e != 0x0e || matches[0].Sect == 0 || int(matches[0].Sect) > len(f.Sections) {
+			return nil, fmt.Errorf("release marker must have exactly one defined Mach-O section symbol")
+		}
+		addr := matches[0].Value
 		return &executable{order: f.ByteOrder, addr: addr, reader: func(address, size uint64) ([]byte, error) {
 			for _, section := range f.Sections {
 				if address >= section.Addr && address+size <= section.Addr+section.Size {
@@ -102,14 +107,17 @@ func openExecutable(path string) (*executable, error) {
 		default:
 			return nil, fmt.Errorf("unsupported 32-bit PE executable")
 		}
-		var addr uint64
+		var matches []*pe.Symbol
 		for _, symbol := range f.Symbols {
-			if symbol.Name == markerSymbol && symbol.SectionNumber > 0 {
-				section := f.Sections[symbol.SectionNumber-1]
-				addr = imageBase + uint64(section.VirtualAddress) + uint64(symbol.Value)
-				break
+			if symbol.Name == markerSymbol {
+				matches = append(matches, symbol)
 			}
 		}
+		if len(matches) != 1 || matches[0].SectionNumber <= 0 || int(matches[0].SectionNumber) > len(f.Sections) || matches[0].Type != 0 || matches[0].StorageClass != 2 {
+			return nil, fmt.Errorf("release marker must have exactly one defined external PE data symbol")
+		}
+		section := f.Sections[matches[0].SectionNumber-1]
+		addr := imageBase + uint64(section.VirtualAddress) + uint64(matches[0].Value)
 		return &executable{order: binary.LittleEndian, addr: addr, reader: func(address, size uint64) ([]byte, error) {
 			for _, section := range f.Sections {
 				start := imageBase + uint64(section.VirtualAddress)

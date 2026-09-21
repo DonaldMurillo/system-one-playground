@@ -6,7 +6,14 @@ const path = require('node:path')
 const packageRoot = path.resolve(__dirname, '..')
 const manifest = require('../package.json')
 const defaultVsix = `${manifest.name}-${manifest.version}.vsix`
-const vsix = process.argv.slice(2).find(name => name.endsWith(`-${manifest.version}.vsix`)) || defaultVsix
+const supplied = process.argv.slice(2).filter(name => name !== '--')
+const candidates = supplied.filter(name => name.endsWith('.vsix'))
+assert.ok(candidates.length <= 1, `expected exactly one VSIX argument, received: ${candidates.join(', ')}`)
+assert.ok(supplied.length === 0 || candidates.length === 1, 'supplied arguments did not identify a VSIX')
+const vsix = candidates[0] || defaultVsix
+const escapedVersion = manifest.version.replaceAll('.', '\\.')
+const allowedName = new RegExp(`^${manifest.name}(?:-[a-z0-9]+-[a-z0-9]+)?-${escapedVersion}\\.vsix$`)
+assert.match(path.basename(vsix), allowedName, 'VSIX filename does not match the current extension version and target format')
 assert.ok(vsix, 'a VSIX path is required')
 const vsixPath = path.isAbsolute(vsix) ? vsix : path.resolve(packageRoot, vsix)
 execFileSync('unzip', ['-tq', vsixPath], { stdio: 'pipe' })
