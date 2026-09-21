@@ -15,6 +15,7 @@ function parseIdentity (xml) {
       continue
     }
     if (xml.startsWith('<![CDATA[', open)) {
+      assert.ok(stack.length > 0, 'CDATA is not allowed outside the XML root')
       cursor = skipDelimited(xml, open + 9, ']]>', 'CDATA section')
       continue
     }
@@ -49,6 +50,7 @@ function parseIdentity (xml) {
     const name = tag.match(/^([A-Za-z_:][\w:.-]*)/)
     assert.ok(name, 'malformed XML tag in VSIX manifest')
     const selfClosing = tag.endsWith('/')
+    const attributes = parseAttributes(tag.slice(name[0].length))
     if (stack.length === 0) {
       roots++
       assert.equal(name[1], 'PackageManifest', 'VSIX manifest root must be PackageManifest')
@@ -56,7 +58,7 @@ function parseIdentity (xml) {
     if (name[1] === 'Identity') {
       assert.deepEqual(stack, ['PackageManifest', 'Metadata'], 'VSIX Identity must be a direct child of PackageManifest/Metadata')
       assert.ok(selfClosing, 'VSIX Identity element must be self-closing')
-      identities.push(parseAttributes(tag.slice(name[0].length)))
+      identities.push(attributes)
     }
     if (!selfClosing) stack.push(name[1])
   }

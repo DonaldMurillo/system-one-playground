@@ -24,7 +24,9 @@ for (const [name, xml] of [
   ['mismatched closing element', '<PackageManifest><Metadata><Identity Id="one" /></Wrong></PackageManifest>'],
   ['unclosed root', '<PackageManifest><Metadata><Identity Id="one" /></Metadata>'],
   ['identity outside metadata', '<PackageManifest><Identity Id="one" /></PackageManifest>'],
-  ['multiple roots', '<PackageManifest><Metadata><Identity Id="one" /></Metadata></PackageManifest><PackageManifest />']
+  ['multiple roots', '<PackageManifest><Metadata><Identity Id="one" /></Metadata></PackageManifest><PackageManifest />'],
+  ['CDATA outside root', '<![CDATA[bad]]><PackageManifest><Metadata><Identity Id="one" /></Metadata></PackageManifest>'],
+  ['malformed parent attribute', '<PackageManifest bogus><Metadata><Identity Id="one" /></Metadata></PackageManifest>']
 ]) {
   test(`rejects ${name}`, () => assert.throws(() => parseIdentity(xml)))
 }

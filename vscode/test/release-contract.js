@@ -13,3 +13,7 @@ for (const relative of ['README.md', 'vscode/README.md', 'docs/sysonescript-edit
   const text = fs.readFileSync(path.join(root, relative), 'utf8')
   assert.ok(!text.includes('sysonescript-vscode-0.2.0.vsix'), `${relative} contains a stale VSIX version`)
 }
+const walkthrough = fs.readFileSync(path.join(root, 'vscode', 'walkthrough', 'cli.md'), 'utf8')
+const releaseVersions = [...walkthrough.matchAll(/vscode-v(\d+\.\d+\.\d+)/g)].map(match => match[1])
+assert.ok(releaseVersions.length > 0, 'CLI walkthrough must link to a versioned release')
+assert.ok(releaseVersions.every(version => version === manifest.version), 'CLI walkthrough release links must match the extension version')
