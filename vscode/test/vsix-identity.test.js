@@ -41,3 +41,7 @@ test('rejects the wrong manifest namespace', () => {
 test('rejects duplicate Metadata elements', () => {
   assert.throws(() => parseIdentity('<PackageManifest xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011"><Metadata><Identity Id="one" /></Metadata><Metadata /></PackageManifest>'))
 })
+
+test('rejects Metadata in a foreign namespace', () => {
+  assert.throws(() => parseIdentity('<PackageManifest xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011"><x:Metadata xmlns:x="urn:wrong"><Identity Id="one" /></x:Metadata></PackageManifest>'))
+})

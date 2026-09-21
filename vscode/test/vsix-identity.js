@@ -13,7 +13,10 @@ function parseIdentity (xml) {
       assert.equal(tag.local, 'PackageManifest', 'VSIX manifest root must be PackageManifest')
       assert.equal(tag.uri, manifestNamespace, 'VSIX manifest root must use the VSX 2011 namespace')
     }
-    if (tag.local === 'Metadata' && stack.length === 1 && stack[0] === 'PackageManifest') metadataElements++
+    if (tag.local === 'Metadata' && stack.length === 1 && stack[0] === 'PackageManifest') {
+      assert.equal(tag.uri, manifestNamespace, 'VSIX Metadata must use the VSX 2011 namespace')
+      metadataElements++
+    }
     if (tag.local === 'Identity') {
       assert.deepEqual(stack, ['PackageManifest', 'Metadata'], 'VSIX Identity must be a direct child of PackageManifest/Metadata')
       assert.equal(tag.uri, manifestNamespace, 'VSIX Identity must use the VSX 2011 namespace')
