@@ -61,4 +61,5 @@ eight unfamiliar action-first sentences with varied output verbs, clause
 markers, comparison vocabulary, and a quoted grammar decoy. Deterministic
 preanalysis replaces string contents with typed placeholders in the Jev request;
 the host-owned lowering retains the original literal. Analysis can spend up to
-eight bounded requests and stops if any choice misses the strict confidence policy.
+one bounded batch request for the eight independent choices and stops if any
+choice misses the strict confidence policy.

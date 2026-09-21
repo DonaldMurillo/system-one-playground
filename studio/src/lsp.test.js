@@ -24,6 +24,13 @@ test('code lenses show attributed Jev confidence and cost after analysis',async(
   assert.equal(result.lenses[0].command.title,'Jev · 94% confidence · 721 tokens · ~$0.00003028')
 })
 
+test('batched code lenses label shared usage instead of implying per-line spend',async()=>{
+  const decision={line:2,method:'jev',confidence:.91,input_tokens:2400,usage_known:true,usage_shared:true,batch_size:8}
+  const {providers,model}=setup(async()=>({result:[{range:{start:{line:1,character:0},end:{line:1,character:1}},command:{command:'sos.analyze',title:'Analyze'}}]}),()=>({decisions:[decision]}))
+  const result=await providers.CodeLens.provideCodeLenses(model)
+  assert.equal(result.lenses[0].command.title,'Jev · 91% confidence · 2400 tokens · ~$0.00010080 shared across 8 lines')
+})
+
 test('completion preserves replacement ranges and atomic import edits',async()=>{
   const {providers,model}=setup(async()=>({result:[{label:'text.trim',kind:3,detail:'std/text',textEdit:{range:{start:{line:1,character:5},end:{line:1,character:14}},newText:'text.trim'},additionalTextEdits:[{range:{start:{line:0,character:0},end:{line:0,character:0}},newText:'import "std/text"\n'}]}]}))
   const r=await providers.CompletionItem.provideCompletionItems(model,{lineNumber:2,column:10})

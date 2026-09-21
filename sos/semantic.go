@@ -18,9 +18,9 @@ import (
 // construction changes; the prompt version changes when the discrimination
 // question or state shape changes. Both participate in the policy hash.
 const (
-	semanticAnalysisVersion = 5
-	semanticRegistryVersion = "4"
-	semanticPromptVersion   = "3"
+	semanticAnalysisVersion = 6
+	semanticRegistryVersion = "5"
+	semanticPromptVersion   = "4"
 	// semanticMinConfidence is the conservative acceptance policy for model
 	// selections. It is evidence, not a correctness guarantee.
 	semanticMinConfidence   = 0.8
@@ -54,6 +54,8 @@ type Interpretation struct {
 	Matches     []SemanticMatch `json:"matches,omitempty"`
 	InputTokens int             `json:"input_tokens,omitempty"`
 	UsageKnown  bool            `json:"usage_known,omitempty"`
+	BatchSize   int             `json:"batch_size,omitempty"`
+	UsageShared bool            `json:"usage_shared,omitempty"`
 }
 
 // Analysis is a complete resolution: the canonical program, its map back to
@@ -251,9 +253,16 @@ func (a *semanticAnalysis) savedProblem(format string, args ...any) {
 // tracking collection and criterion scope conservatively: bindings made in
 // actions, loops, and branches never leak to following siblings.
 func (a *semanticAnalysis) resolve(nodes []*semNode, scope *semScope) {
-	for _, n := range nodes {
+	for i := 0; i < len(nodes); i++ {
+		n := nodes[i]
 		if a.stopped {
 			return
+		}
+		if !a.replay && n.role == "semantic" {
+			if used := a.doLexicalBatch(nodes[i:], scope); used > 0 {
+				i += used - 1
+				continue
+			}
 		}
 		switch n.role {
 		case "criterion":
@@ -265,6 +274,66 @@ func (a *semanticAnalysis) resolve(nodes []*semNode, scope *semScope) {
 			a.resolve(n.children, scopeForChildren(n.form, scope))
 		}
 	}
+}
+
+type semanticBatchItem struct {
+	n     *semNode
+	cands []semCandidate
+}
+
+// doLexicalBatch groups adjacent, scope-neutral dictionary compositions into
+// one provider request. Scope-changing statements remain sequential barriers.
+func (a *semanticAnalysis) doLexicalBatch(nodes []*semNode, scope *semScope) int {
+	var items []semanticBatchItem
+	for _, n := range nodes {
+		if len(items) == 128 {
+			break
+		}
+		if n.role != "semantic" || len(n.children) != 0 {
+			break
+		}
+		cands, problems := a.candidatesFor(n, scope)
+		if len(problems) != 0 || len(cands) == 0 || (len(cands) == 1 && !cands[0].requiresJev) {
+			break
+		}
+		for _, c := range cands {
+			if !strings.HasPrefix(c.id, "lexical-") {
+				return 0
+			}
+		}
+		items = append(items, semanticBatchItem{n: n, cands: cands})
+	}
+	if len(items) < 2 {
+		return 0
+	}
+	questions := typesafe.Questions{}
+	states := map[string]any{}
+	for _, item := range items {
+		id := fmt.Sprintf("line_%d", item.n.line.num)
+		labels, state := a.interpretationRequest(item.n, item.cands, scope)
+		questions[id] = typesafe.Choice(semanticChoiceInstructions()+" Use the interpretation state named "+id+".", labels)
+		states[id] = state
+	}
+	before := a.budget.Snapshot().Buckets[a.bucket]
+	evaluation, err := Evaluate(a.ctx, EvaluationRequest{State: map[string]any{"role": "SysOneScript batched source interpretation", "interpretations": states}, Question: typesafe.Question{Type: questionBatch, Criteria: questions}, Model: a.model, Budget: a.budget, Bucket: a.bucket, Line: items[0].n.line.num, Description: fmt.Sprintf("interpret %d independent SysOneScript lines", len(items))})
+	if err != nil {
+		a.diagAt(items[0].n.line.num, "batched interpretation provider failed: %s", err.Error())
+		a.stopped = true
+		return len(items)
+	}
+	after := a.budget.Snapshot().Buckets[a.bucket]
+	tokens := after.ReportedInputTokens - before.ReportedInputTokens
+	known := after.Unresolved == before.Unresolved && after.Requests == before.Requests+1
+	for _, item := range items {
+		id := fmt.Sprintf("line_%d", item.n.line.num)
+		answer, _ := evaluation.Answer[id].(map[string]any)
+		cand, conf, ok := a.validateInterpretationAnswer(item.n, item.cands, questions[id], answer)
+		if !ok {
+			return len(items)
+		}
+		a.finishSemantic(item.n, cand, conf, "jev", "", scope, tokens, known, len(items), true)
+	}
+	return len(items)
 }
 
 func (a *semanticAnalysis) doCriterion(n *semNode, scope *semScope) {
@@ -384,6 +453,10 @@ func (a *semanticAnalysis) doSemantic(n *semNode, scope *semScope) {
 		usageKnown = after.Unresolved == before.Unresolved && after.Requests == before.Requests+1
 		method = "jev"
 	}
+	a.finishSemantic(n, cand, conf, method, explanation, scope, inputTokens, usageKnown, 0, false)
+}
+
+func (a *semanticAnalysis) finishSemantic(n *semNode, cand semCandidate, conf float64, method, explanation string, scope *semScope, inputTokens int, usageKnown bool, batchSize int, usageShared bool) {
 	repl := indentApply(n.line.indent, cand.lines)
 	if len(cand.lines) == 1 && cand.lines[0] == n.text {
 		// The sentence is already canonical in effect (for example a
@@ -409,6 +482,8 @@ func (a *semanticAnalysis) doSemantic(n *semNode, scope *semScope) {
 		Matches:     cand.matches,
 		InputTokens: inputTokens,
 		UsageKnown:  usageKnown,
+		BatchSize:   batchSize,
+		UsageShared: usageShared,
 	})
 	applySemanticEffects(scope, n, cand)
 }
@@ -435,6 +510,34 @@ func (a *semanticAnalysis) childrenSupported(n *semNode) bool {
 // constrained candidates, or to reject them all. A selection below the
 // conservative confidence policy is refused.
 func (a *semanticAnalysis) chooseInterpretation(n *semNode, cands []semCandidate, scope *semScope) (semCandidate, float64, bool) {
+	labels, state := a.interpretationRequest(n, cands, scope)
+	question := typesafe.Choice(semanticChoiceInstructions(), labels)
+	description := fmt.Sprintf("interpret SysOneScript line %d: %s", n.line.num, n.text)
+	evaluation, err := Evaluate(a.ctx, EvaluationRequest{
+		State: state, Question: question, Model: a.model, Budget: a.budget,
+		Bucket: a.bucket, Line: n.line.num, Description: description,
+	})
+	if err != nil {
+		var budgetErr *BudgetError
+		switch {
+		case errors.As(err, &budgetErr):
+			a.failureCause = budgetErr
+			a.diagAt(n.line.num, "interpretation not resolved: request budget is exhausted")
+		case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+			a.failureCause = err
+			a.stopped = true
+			a.diagAt(n.line.num, "interpretation canceled: %s", err.Error())
+			return semCandidate{}, 0, false
+		default:
+			a.diagAt(n.line.num, "interpretation provider failed: %s", err.Error())
+		}
+		a.stopped = true
+		return semCandidate{}, 0, false
+	}
+	return a.validateInterpretationAnswer(n, cands, question, evaluation.Answer)
+}
+
+func (a *semanticAnalysis) interpretationRequest(n *semNode, cands []semCandidate, scope *semScope) (map[string]any, map[string]any) {
 	labels := map[string]any{"reject": "None of the listed meanings matches the sentence."}
 	views := make([]map[string]any, 0, len(cands))
 	for _, c := range cands {
@@ -453,42 +556,17 @@ func (a *semanticAnalysis) chooseInterpretation(n *semNode, cands []semCandidate
 		"visible_bindings":    scope.bindings,
 		"candidates":          views,
 	}
-	question := typesafe.Choice(semanticChoiceInstructions(), labels)
-	description := fmt.Sprintf("interpret SysOneScript line %d: %s", n.line.num, n.text)
-	evaluation, err := Evaluate(a.ctx, EvaluationRequest{
-		State:       state,
-		Question:    question,
-		Model:       a.model,
-		Budget:      a.budget,
-		Bucket:      a.bucket,
-		Line:        n.line.num,
-		Description: description,
-	})
-	if err != nil {
-		var budgetErr *BudgetError
-		switch {
-		case errors.As(err, &budgetErr):
-			// Keep the typed cause so callers can distinguish refusal.
-			a.failureCause = budgetErr
-			a.diagAt(n.line.num, "interpretation not resolved: request budget is exhausted")
-		case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
-			a.failureCause = err
-			a.stopped = true
-			a.diagAt(n.line.num, "interpretation canceled: %s", err.Error())
-			return semCandidate{}, 0, false
-		default:
-			a.diagAt(n.line.num, "interpretation provider failed: %s", err.Error())
-		}
-		a.stopped = true
-		return semCandidate{}, 0, false
-	}
-	if err := validateAnswerMap(evaluation.Answer, question); err != nil {
+	return labels, state
+}
+
+func (a *semanticAnalysis) validateInterpretationAnswer(n *semNode, cands []semCandidate, question typesafe.Question, answer map[string]any) (semCandidate, float64, bool) {
+	if err := validateAnswerMap(answer, question); err != nil {
 		a.diagAt(n.line.num, "interpretation answer invalid: %s", err.Error())
 		a.stopped = true
 		return semCandidate{}, 0, false
 	}
-	value, _ := evaluation.Answer["value"].(string)
-	conf, confOK := number(evaluation.Answer["confidence"])
+	value, _ := answer["value"].(string)
+	conf, confOK := number(answer["confidence"])
 	if value == "reject" {
 		a.diagAt(n.line.num, "Jev rejected every listed meaning of the sentence")
 		a.stopped = true

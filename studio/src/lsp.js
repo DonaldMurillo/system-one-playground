@@ -39,7 +39,7 @@ export function installLanguageServices(monaco, api, context = () => ({}), analy
           if (decision?.method === 'jev') {
             const confidence = `${Math.round(decision.confidence * 100)}% confidence`
             const usage = decision.usage_known
-              ? `${decision.input_tokens} tokens · ~${usageCost(decision.input_tokens)}`
+              ? `${decision.input_tokens} tokens · ~${usageCost(decision.input_tokens)}${decision.usage_shared ? ` shared across ${decision.batch_size} lines` : ''}`
               : 'usage unavailable'
             title = `Jev · ${confidence} · ${usage}`
           } else if (decision?.method === 'deterministic') title = 'Deterministic · no Jev cost'

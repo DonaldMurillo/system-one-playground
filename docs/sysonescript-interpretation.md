@@ -87,6 +87,10 @@ shows its confidence, provider-reported input tokens, and the corresponding
 published-rate estimate; deterministic resolutions explicitly show that they
 used no Jev request. Per-line cost remains an estimate rather than account
 billing, and unreported provider usage is labeled unavailable instead of zero.
+Adjacent scope-neutral dictionary compositions are sent as up to 128 questions
+in one provider request. Scope-changing or dependent statements form ordering
+barriers. Batched lenses label the request tokens and estimate as shared across
+the participating lines rather than presenting the batch total as per-line cost.
 Saving is explicit and only succeeds after analysis succeeds. Saving a resolution
 writes that JSON file; it does not run the program. A resolution can contain
 source text and judgment questions, so handle it like the source itself.

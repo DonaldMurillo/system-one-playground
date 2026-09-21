@@ -59,47 +59,46 @@ func semanticChoiceServer(t *testing.T, pick func(req fixtureReq) (string, float
 			w.WriteHeader(http.StatusUnprocessableEntity)
 			return
 		}
-		if len(req.Questions) != 1 {
-			t.Errorf("fixture: want exactly one question, got %d", len(req.Questions))
-			w.WriteHeader(http.StatusUnprocessableEntity)
-			return
+		answers := map[string]any{}
+		ids := make([]string, 0, len(req.Questions))
+		for id := range req.Questions {
+			ids = append(ids, id)
 		}
-		var question fixtureQuestion
-		for _, q := range req.Questions {
-			question = q
+		sort.Strings(ids)
+		for _, id := range ids {
+			question := req.Questions[id]
+			if question.Type != "choice" {
+				t.Errorf("fixture: want choice question, got %q", question.Type)
+				w.WriteHeader(http.StatusUnprocessableEntity)
+				return
+			}
+			labels := make([]string, 0, len(question.Criteria))
+			for label := range question.Criteria {
+				labels = append(labels, label)
+			}
+			sort.Strings(labels)
+			state := req.State
+			if all, ok := req.State["interpretations"].(map[string]any); ok {
+				if one, ok := all[id].(map[string]any); ok {
+					state = one
+				}
+			}
+			label, confidence := pick(fixtureReq{State: state, Model: req.Model, Labels: labels, Sentence: state["sentence"]})
+			rest := 0.0
+			if n := len(labels) - 1; n > 0 {
+				rest = (1 - confidence) / float64(n)
+			}
+			dist := map[string]float64{}
+			for _, l := range labels {
+				dist[l] = rest
+			}
+			dist[label] = confidence
+			answers[id] = map[string]any{"type": "choice", "choice": label, "confidence": confidence, "probabilities": dist}
 		}
-		if question.Type != "choice" {
-			t.Errorf("fixture: want choice question, got %q", question.Type)
-			w.WriteHeader(http.StatusUnprocessableEntity)
-			return
-		}
-		labels := make([]string, 0, len(question.Criteria))
-		for label := range question.Criteria {
-			labels = append(labels, label)
-		}
-		sort.Strings(labels)
-		freq := fixtureReq{State: req.State, Model: req.Model, Labels: labels, Sentence: req.State["sentence"]}
-		label, confidence := pick(freq)
-		rest := 0.0
-		if n := len(labels) - 1; n > 0 {
-			rest = (1 - confidence) / float64(n)
-		}
-		dist := map[string]float64{}
-		for _, l := range labels {
-			dist[l] = rest
-		}
-		dist[label] = confidence
 		resp := map[string]any{
-			"model": "jev-fixture",
-			"answers": map[string]any{
-				"answer": map[string]any{
-					"type":          "choice",
-					"choice":        label,
-					"confidence":    confidence,
-					"probabilities": dist,
-				},
-			},
-			"usage": map[string]any{"input_tokens": 42},
+			"model":   "jev-fixture",
+			"answers": answers,
+			"usage":   map[string]any{"input_tokens": 42},
 		}
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(resp); err != nil {
@@ -276,11 +275,11 @@ only emit "high score" once score above 80
 `
 	out, err := Analyze(context.Background(), source, AnalyzeOptions{Config: sosconfig.Effective{Interpretation: "semantic", Runtime: "semantic", Requests: 8}})
 	requireSuccess(t, out, err)
-	if requests != 8 || out.Usage.TotalAdmitted != 8 || len(out.Decisions) != 8 {
-		t.Fatalf("gauntlet did not exercise eight bounded decisions: requests=%d usage=%+v decisions=%d", requests, out.Usage, len(out.Decisions))
+	if requests != 8 || out.Usage.TotalAdmitted != 1 || len(out.Decisions) != 8 {
+		t.Fatalf("gauntlet did not batch eight bounded decisions into one request: answers=%d usage=%+v decisions=%d", requests, out.Usage, len(out.Decisions))
 	}
 	for _, decision := range out.Decisions {
-		if decision.Method != "jev" || !strings.HasPrefix(decision.Candidate, "lexical-composed-conditional:") {
+		if decision.Method != "jev" || !strings.HasPrefix(decision.Candidate, "lexical-composed-conditional:") || decision.BatchSize != 8 || !decision.UsageShared {
 			t.Fatalf("gauntlet escaped bounded composition: %+v", decision)
 		}
 	}
