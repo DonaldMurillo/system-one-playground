@@ -168,6 +168,35 @@ call people.greet with user called result
 	}
 }
 
+func TestNamedRecordCheckerRejectsImportedActionArgumentMismatch(t *testing.T) {
+	dir := t.TempDir()
+	people := filepath.Join(dir, "people")
+	if err := os.MkdirAll(people, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTestFile(filepath.Join(people, "people.sos"), `package people
+export Account
+export inspect
+define Account:
+  id as text
+to inspect with account as Account:
+  return id of account
+`); err != nil {
+		t.Fatal(err)
+	}
+	source := `import "./people" as people
+define User:
+  name as text
+make user as User with:
+  name from "Ada"
+call people.inspect with user called result
+`
+	_, diagnostics := LoadProgram(filepath.Join(dir, "main.sos"), source)
+	if len(diagnostics) == 0 || !strings.Contains(diagnostics[0].Message, "people.inspect.account must be Account; received User") {
+		t.Fatalf("diagnostics = %+v", diagnostics)
+	}
+}
+
 func TestNamedRecordNestedAndListTypes(t *testing.T) {
 	source := `define Address:
   city as text

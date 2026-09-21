@@ -50,6 +50,17 @@ func analyze(p *Program) []Diagnostic {
 	add := func(s *Statement, msg string) { ds = append(ds, Diagnostic{s.Line, 1, msg}) }
 	checkActionArgs := func(s *Statement, action string, args []string) {
 		fn := actions[action]
+		if fn == nil && strings.Contains(action, ".") {
+			alias, name, _ := strings.Cut(action, ".")
+			if mod := moduleAlias(p, alias); mod != nil && mod.Exports[name] {
+				fn = mod.Actions[name]
+			}
+		}
+		if fn == nil && p.Modules != nil && p.Modules.vocab != nil {
+			if mod, name := sentTargetResolve(p.Modules.vocab, action); mod != nil && mod.Exports[name] {
+				fn = mod.Actions[name]
+			}
+		}
 		if fn == nil {
 			return
 		}
