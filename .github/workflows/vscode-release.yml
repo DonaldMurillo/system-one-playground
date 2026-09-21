@@ -128,7 +128,7 @@ jobs:
           version="${GITHUB_REF_NAME#vscode-v}"
           rm -rf vscode/bin release/cli
           mkdir -p vscode/bin release/cli
-          version_ldflag="-X github.com/DonaldMurillo/system-one-playground/sos.Version=$version -X github.com/DonaldMurillo/system-one-playground/sos.ReleaseMarker=SysOneScriptVersion=$version;SysOneScriptVersionEnd"
+          version_ldflag="-buildid= -X github.com/DonaldMurillo/system-one-playground/sos.Version=$version -X github.com/DonaldMurillo/system-one-playground/sos.ReleaseMarker=SysOneScriptVersion=$version;SysOneScriptVersionEnd"
           go build -trimpath -ldflags "$version_ldflag" -o "vscode/bin/${{ matrix.binary }}" ./cmd/sos
           go build -trimpath -ldflags "$version_ldflag" -o "release/cli/${{ matrix.binary }}" ./cmd/sos
           GOOS=linux GOARCH=amd64 go build -trimpath -o /tmp/sosverify ./cmd/sosverify
