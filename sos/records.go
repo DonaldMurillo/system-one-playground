@@ -37,6 +37,13 @@ func (t TypeRef) base() TypeRef {
 	return t
 }
 
+func sameTypeRef(left, right TypeRef) bool {
+	if left.Name != right.Name || left.Optional != right.Optional || (left.Element == nil) != (right.Element == nil) {
+		return false
+	}
+	return left.Element == nil || sameTypeRef(*left.Element, *right.Element)
+}
+
 type RecordField struct {
 	Name string  `json:"name"`
 	Type TypeRef `json:"type"`

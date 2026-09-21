@@ -1074,7 +1074,7 @@ func staticArgumentProblem(expression string, wanted TypeRef, known map[string]T
 		return ""
 	}
 	if actual, ok := known[tokens[0].text]; ok {
-		if actual.Name == wanted.Name && actual.Element == nil && wanted.Element == nil {
+		if sameTypeRef(actual, wanted.base()) {
 			return ""
 		}
 		return fmt.Sprintf("%s.%s must be %s; received %s", action, parameter, wanted.String(), actual.String())

@@ -177,23 +177,55 @@ func TestNamedRecordCheckerRejectsImportedActionArgumentMismatch(t *testing.T) {
 	if err := writeTestFile(filepath.Join(people, "people.sos"), `package people
 export Account
 export inspect
+export inspect_many
+word inspect of inspect
 define Account:
   id as text
 to inspect with account as Account:
   return id of account
+to inspect_many with accounts as list of integer returning integer:
+  finish with 1
 `); err != nil {
 		t.Fatal(err)
 	}
-	source := `import "./people" as people
+	for name, source := range map[string]string{
+		"qualified call": `import "./people" as people
 define User:
   name as text
 make user as User with:
   name from "Ada"
 call people.inspect with user called result
+	`,
+		"bare sentence": `import "./people"
+define User:
+  name as text
+make user as User with:
+  name from "Ada"
+inspect user called result
+`,
+		"qualified sentence": `import "./people" as people
+define User:
+  name as text
+make user as User with:
+  name from "Ada"
+people.inspect user called result
+`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, diagnostics := LoadProgram(filepath.Join(dir, "main.sos"), source)
+			if len(diagnostics) == 0 || !strings.Contains(diagnostics[0].Message, "must be Account; received User") {
+				t.Fatalf("diagnostics = %+v", diagnostics)
+			}
+		})
+	}
+
+	validList := `import "./people" as people
+to forward with values as list of integer returning integer:
+  call people.inspect_many with values called result
+  finish with result
 `
-	_, diagnostics := LoadProgram(filepath.Join(dir, "main.sos"), source)
-	if len(diagnostics) == 0 || !strings.Contains(diagnostics[0].Message, "people.inspect.account must be Account; received User") {
-		t.Fatalf("diagnostics = %+v", diagnostics)
+	if _, diagnostics := LoadProgram(filepath.Join(dir, "lists.sos"), validList); len(diagnostics) != 0 {
+		t.Fatalf("valid imported list argument diagnostics = %+v", diagnostics)
 	}
 }
 
