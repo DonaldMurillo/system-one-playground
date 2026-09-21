@@ -2,7 +2,7 @@
 
 Build readable scripts, semantic code checks and developer tools with the TypeSafe System One API. Use **SysOneScript** from your terminal or **Studio**, call the API directly from Go, or try **semlint** on your code.
 
-**Start offline. Add Jev judgments when you need them.** Repository name: `system-one-playground`. MIT licensed · SOS 0.6 preview.
+**Start offline. Add Jev judgments when you need them.** Repository name: `system-one-playground`. MIT licensed · SOS 0.3 preview.
 
 ## Ready to install and use
 

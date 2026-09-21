@@ -45,7 +45,7 @@ the destination machine. Existing single-file scripts remain supported.
 
 ## Import vocabulary
 
-In SOS 0.4, imports without `as` expose bare sentence words and preserve the
+In SOS 0.3, imports without `as` expose bare sentence words and preserve the
 default qualified form. An explicit `as` requires the alias prefix. Exported
 actions contribute their names; packages may add synonyms with `word alias of action`.
 See [vocabulary](sysonescript-vocabulary.md) for configured imports and discovery.

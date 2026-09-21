@@ -279,6 +279,6 @@ See [local packages and the first standard library](/docs/packages) for
 catalog. See [editor services](/docs/editor) for semantic colors, inferred
 type hints, folding, completion, and offline auto-import.
 
-## Parallel processing and host libraries (0.6)
+## Parallel processing and host libraries (0.3)
 
 See [parallel maps and failures](/docs/parallel), [I/O and data libraries](/docs/io), and [SOS semlint](/docs/semlint-sos). Failure handlers retain the `error` text and expose a `failure` record; `rethrow` propagates the original typed error from the active handler.

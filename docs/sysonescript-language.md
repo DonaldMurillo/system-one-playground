@@ -279,6 +279,6 @@ See [local packages and the first standard library](sysonescript-packages.md) fo
 catalog. See [editor services](sysonescript-editor.md) for semantic colors, inferred
 type hints, folding, completion, and offline auto-import.
 
-## Parallel processing and host libraries (0.6)
+## Parallel processing and host libraries (0.3)
 
 See [parallel maps and failures](sysonescript-parallel.md), [I/O and data libraries](sysonescript-io.md), and [SOS semlint](sysonescript-semlint.md). Failure handlers retain the `error` text and expose a `failure` record; `rethrow` propagates the original typed error from the active handler.
