@@ -131,11 +131,22 @@ jobs:
           version_ldflag="-X github.com/DonaldMurillo/system-one-playground/sos.Version=$version -X github.com/DonaldMurillo/system-one-playground/sos.ReleaseMarker=SysOneScriptVersion=$version;SysOneScriptVersionEnd"
           go build -trimpath -ldflags "$version_ldflag" -o "vscode/bin/${{ matrix.binary }}" ./cmd/sos
           go build -trimpath -ldflags "$version_ldflag" -o "release/cli/${{ matrix.binary }}" ./cmd/sos
+          go build -trimpath -o /tmp/sosverify ./cmd/sosverify
           if [ "${{ matrix.goos }}" = "windows" ]; then
             go build -trimpath -ldflags "$version_ldflag" -o release/cli/sysone.exe ./cmd/sysone
+            legacy_binary=release/cli/sysone.exe
           else
             go build -trimpath -ldflags "$version_ldflag" -o release/cli/sysone ./cmd/sysone
+            legacy_binary=release/cli/sysone
           fi
+          expected_marker="SysOneScriptVersion=${version};SysOneScriptVersionEnd"
+          /tmp/sosverify "vscode/bin/${{ matrix.binary }}" "$expected_marker"
+          /tmp/sosverify "release/cli/${{ matrix.binary }}" "$expected_marker"
+          for binary in "vscode/bin/${{ matrix.binary }}" "release/cli/${{ matrix.binary }}" "$legacy_binary"; do
+            metadata="$(go version -m "$binary")"
+            grep -Fqx $'\tbuild\tGOOS=${{ matrix.goos }}' <<<"$metadata"
+            grep -Fqx $'\tbuild\tGOARCH=${{ matrix.goarch }}' <<<"$metadata"
+          done
           cp LICENSE release/cli/
           cp README.md release/cli/
           find release/cli -exec touch -h -d '@0' {} +

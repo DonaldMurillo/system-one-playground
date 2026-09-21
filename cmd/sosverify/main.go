@@ -64,7 +64,7 @@ func openExecutable(path string) (*executable, error) {
 			return nil, fmt.Errorf("release marker must have exactly one defined ELF object symbol")
 		}
 		markerSection := f.Sections[matches[0].Section]
-		if !elfLoadable(f, markerSection) {
+		if !elfLoadable(f, markerSection) || markerSection.Flags&elf.SHF_WRITE == 0 {
 			return nil, fmt.Errorf("ELF release marker symbol is not in an allocated data section")
 		}
 		header, err := readAddress(markerSection, markerSection.Addr, markerSection.Size, matches[0].Value, 16)
@@ -99,7 +99,7 @@ func openExecutable(path string) (*executable, error) {
 			return nil, fmt.Errorf("release marker must be a defined Mach-O section symbol (type %#x, section %d)", matches[0].Type, matches[0].Sect)
 		}
 		markerSection := f.Sections[matches[0].Sect-1]
-		if !machoLoadable(f, markerSection) {
+		if !machoLoadable(f, markerSection) || markerSection.Seg != "__DATA" {
 			return nil, fmt.Errorf("Mach-O release marker symbol is not in a loadable data section")
 		}
 		header, err := readAddress(markerSection, markerSection.Addr, markerSection.Size, matches[0].Value, 16)
@@ -133,7 +133,7 @@ func openExecutable(path string) (*executable, error) {
 			return nil, fmt.Errorf("release marker must have exactly one defined external PE data symbol")
 		}
 		section := f.Sections[matches[0].SectionNumber-1]
-		if section.Characteristics&0x40000000 == 0 || section.Characteristics&0x02000000 != 0 {
+		if section.Characteristics&0x40000000 == 0 || section.Characteristics&0x80000000 == 0 || section.Characteristics&0x00000040 == 0 || section.Characteristics&0x02000020 != 0 {
 			return nil, fmt.Errorf("PE release marker symbol is not in a readable loadable section")
 		}
 		sectionAddr, ok := checkedAdd(imageBase, uint64(section.VirtualAddress))
@@ -154,7 +154,7 @@ func openExecutable(path string) (*executable, error) {
 				if !ok {
 					continue
 				}
-				if section.Characteristics&0x40000000 != 0 && section.Characteristics&0x02000000 == 0 && contains(start, uint64(section.Size), address, size) {
+				if section.Characteristics&0x40000000 != 0 && section.Characteristics&0x02000020 == 0 && contains(start, uint64(section.Size), address, size) {
 					return readAddress(section, start, uint64(section.Size), address, size)
 				}
 			}
@@ -174,11 +174,11 @@ func checkedAdd(left, right uint64) (uint64, bool) {
 }
 
 func elfLoadable(file *elf.File, section *elf.Section) bool {
-	if section.Type != elf.SHT_PROGBITS || section.Flags&elf.SHF_ALLOC == 0 || section.Flags&elf.SHF_COMPRESSED != 0 || section.ReaderAt == nil {
+	if section.Type != elf.SHT_PROGBITS || section.Flags&elf.SHF_ALLOC == 0 || section.Flags&(elf.SHF_COMPRESSED|elf.SHF_EXECINSTR) != 0 || section.ReaderAt == nil {
 		return false
 	}
 	for _, program := range file.Progs {
-		if program.Type == elf.PT_LOAD && program.Flags&elf.PF_R != 0 && contains(program.Vaddr, program.Filesz, section.Addr, section.Size) {
+		if program.Type == elf.PT_LOAD && program.Flags&elf.PF_R != 0 && contains(program.Vaddr, program.Filesz, section.Addr, section.Size) && contains(program.Off, program.Filesz, section.Offset, section.Size) {
 			return true
 		}
 	}
@@ -186,12 +186,13 @@ func elfLoadable(file *elf.File, section *elf.Section) bool {
 }
 
 func machoLoadable(file *macho.File, section *macho.Section) bool {
-	if section.Flags&0xff != 0 || section.Flags&0x02000000 != 0 || section.ReaderAt == nil {
+	const instructionFlags = 0x80000400 // S_ATTR_PURE_INSTRUCTIONS | S_ATTR_SOME_INSTRUCTIONS
+	if section.Flags&0xff != 0 || section.Flags&(0x02000000|instructionFlags) != 0 || section.ReaderAt == nil {
 		return false
 	}
 	for _, load := range file.Loads {
 		segment, ok := load.(*macho.Segment)
-		if ok && segment.Prot&1 != 0 && contains(segment.Addr, segment.Filesz, section.Addr, section.Size) {
+		if ok && segment.Prot&1 != 0 && contains(segment.Addr, segment.Filesz, section.Addr, section.Size) && contains(segment.Offset, segment.Filesz, uint64(section.Offset), section.Size) {
 			return true
 		}
 	}

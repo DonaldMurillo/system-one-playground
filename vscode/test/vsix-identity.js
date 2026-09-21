@@ -2,9 +2,13 @@ const assert = require('node:assert/strict')
 
 function parseIdentity (xml) {
   const identities = []
+  const stack = []
+  let roots = 0
   let cursor = 0
   while (cursor < xml.length) {
     const open = xml.indexOf('<', cursor)
+    const textEnd = open < 0 ? xml.length : open
+    if (stack.length === 0) assert.equal(xml.slice(cursor, textEnd).trim(), '', 'text is not allowed outside the XML root')
     if (open < 0) break
     if (xml.startsWith('<!--', open)) {
       cursor = skipDelimited(xml, open + 4, '-->', 'XML comment')
@@ -35,14 +39,29 @@ function parseIdentity (xml) {
     assert.ok(close < xml.length && quote === null, 'unterminated XML tag in VSIX manifest')
     const tag = xml.slice(open + 1, close).trim()
     cursor = close + 1
-    if (!tag || tag.startsWith('/')) continue
+    assert.ok(tag, 'empty XML tag in VSIX manifest')
+    if (tag.startsWith('/')) {
+      const closing = tag.slice(1).trim()
+      assert.match(closing, /^[A-Za-z_:][\w:.-]*$/, 'malformed closing XML tag')
+      assert.equal(stack.pop(), closing, `mismatched closing XML tag ${closing}`)
+      continue
+    }
     const name = tag.match(/^([A-Za-z_:][\w:.-]*)/)
     assert.ok(name, 'malformed XML tag in VSIX manifest')
+    const selfClosing = tag.endsWith('/')
+    if (stack.length === 0) {
+      roots++
+      assert.equal(name[1], 'PackageManifest', 'VSIX manifest root must be PackageManifest')
+    }
     if (name[1] === 'Identity') {
-      assert.ok(tag.endsWith('/'), 'VSIX Identity element must be self-closing')
+      assert.deepEqual(stack, ['PackageManifest', 'Metadata'], 'VSIX Identity must be a direct child of PackageManifest/Metadata')
+      assert.ok(selfClosing, 'VSIX Identity element must be self-closing')
       identities.push(parseAttributes(tag.slice(name[0].length)))
     }
+    if (!selfClosing) stack.push(name[1])
   }
+  assert.equal(stack.length, 0, 'VSIX manifest has unclosed XML elements')
+  assert.equal(roots, 1, 'VSIX manifest must have exactly one root element')
   assert.equal(identities.length, 1, 'VSIX manifest must contain exactly one effective Identity element')
   return identities[0]
 }
