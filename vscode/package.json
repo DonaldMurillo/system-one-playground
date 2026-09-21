@@ -66,7 +66,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "check": "node --check extension.js && node --check lsp-client.js && node --check project.js && node --check test/lsp-client.test.js && node --check test/project.test.js",
+    "check": "node --check extension.js && node --check lsp-client.js && node --check project.js && node --check semantic.js && node --check test/lsp-client.test.js && node --check test/project.test.js && node --check test/semantic.test.js",
     "test": "node --test test/*.test.js",
     "package": "pnpm dlx @vscode/vsce package --allow-unused-files-pattern"
   },

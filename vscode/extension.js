@@ -1,9 +1,12 @@
 const path = require('node:path')
 const fs = require('node:fs')
+const os = require('node:os')
+const crypto = require('node:crypto')
 const { spawn } = require('node:child_process')
 const vscode = require('vscode')
 const { LspClient } = require('./lsp-client')
 const { compareVersions, discoverEntrypoints, findProjectRoot, parseVersionLine, readHelpers, relativeScript, resolveProjectEntrypoint } = require('./project')
+const { decisionLensTitle } = require('./semantic')
 
 const LANGUAGE_ID = 'sos'
 const DOCUMENT_SELECTOR = [{ language: LANGUAGE_ID }]
@@ -262,7 +265,7 @@ function setPanelRun(action, value) {
   extensionState.tree.refresh()
 }
 
-function runPanelProcess(action, args, cwd, label, commandOverride) {
+function runPanelProcess(action, args, cwd, label, commandOverride, onClose) {
   const command = commandOverride || runnerCommand()
   const output = extensionState.runOutput
   output.clear()
@@ -284,6 +287,7 @@ function runPanelProcess(action, args, cwd, label, commandOverride) {
     output.appendLine('')
     output.appendLine(`[${label} ${code === 0 ? 'completed' : `exited with code ${code ?? 'unknown'}`}]`)
     setPanelRun(action, { status: code === 0 ? 'success' : 'failed', label: `${label} · ${code === 0 ? 'done' : `exit ${code ?? 'unknown'}`}` })
+    onClose?.(code)
   })
   return child
 }
@@ -295,8 +299,11 @@ function showRunOutput() {
 async function runProject(resource) {
   const selected = projectEntrypoint(resource)
   if (!selected) return
-  await saveWorkspace()
-  runPanelProcess('run', ['run', relativeScript(selected.root, selected.file)], selected.root, `Run ${relativeScript(selected.root, selected.file)}`)
+  if (!await saveWorkspace()) {
+    vscode.window.showWarningMessage('Run canceled because the workspace could not be saved.')
+    return
+  }
+  await runWithAnalysisCapture(selected.file, selected.root, `Run ${relativeScript(selected.root, selected.file)}`)
 }
 
 async function runFile(resource) {
@@ -307,8 +314,47 @@ async function runFile(resource) {
   }
   const root = projectFor(file)
   if (!root) return runProject(resource)
-  await saveWorkspace()
-  runInTerminal(['run', relativeScript(root, file)], root, `run ${relativeScript(root, file)}`)
+  if (!await saveWorkspace()) {
+    vscode.window.showWarningMessage('Run canceled because the workspace could not be saved.')
+    return
+  }
+  await runWithAnalysisCapture(file, root, `Run ${relativeScript(root, file)}`)
+}
+
+async function runWithAnalysisCapture(file, root, label) {
+  const document = vscode.workspace.textDocuments.find(item => item.uri.fsPath === file) || await vscode.workspace.openTextDocument(file)
+  const source = document?.getText()
+  const version = document?.version
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sysonescript-analysis-'))
+  try {
+    const resolution = path.join(tempDir, 'resolution.json')
+    const args = ['run', '--save-resolution', resolution]
+    const reviewed = extensionState.semanticAnalyses.get(document.uri.toString())
+    const usedReviewed = reviewed?.wholeSource && reviewed.version === version
+    if (usedReviewed) {
+      const inputResolution = path.join(tempDir, 'reviewed.json')
+      fs.writeFileSync(inputResolution, JSON.stringify(reviewed.analysis, null, 2) + '\n', {mode:0o600})
+      args.push('--resolution', inputResolution)
+    }
+    args.push(relativeScript(root, file))
+    runPanelProcess('run', args, root, label, undefined, code => {
+      try {
+        if (code === 0 && document && document.version === version && document.getText() === source) {
+          const analysis = JSON.parse(fs.readFileSync(resolution, 'utf8'))
+          const wholeSource = analysis.source_hash === crypto.createHash('sha256').update(source, 'utf8').digest('hex')
+          extensionState.semanticAnalyses.set(document.uri.toString(), {version, analysis, wholeSource})
+          extensionState.semanticLensEmitter?.fire()
+        }
+      } catch (error) {
+        extensionState.output.appendLine(`Could not load post-run analysis: ${error.message}`)
+      } finally {
+        fs.rmSync(tempDir, {recursive:true, force:true})
+      }
+    })
+  } catch (error) {
+    fs.rmSync(tempDir, {recursive:true, force:true})
+    throw error
+  }
 }
 
 async function checkProject(resource) {
@@ -350,13 +396,18 @@ async function canonicalizeActiveDocument() {
   const editor = vscode.window.activeTextEditor
   const document = editor?.document
   if (!editor || !document || !isSysOneScript(document)) return
-  if (!await document.save()) return
-  const root = projectFor(document.uri.fsPath)
-  if (!root) return
   const source = document.getText()
   const version = document.version
   try {
-    const canonical = await captureRunner(['canonicalize', relativeScript(root, document.uri.fsPath)], root)
+    await ensureDocument(document)
+    let analyzed = extensionState.semanticAnalyses.get(document.uri.toString())
+    if (!analyzed?.wholeSource || analyzed.version !== version) {
+      const result = await request('sos/analyze', { textDocument: { uri: document.uri.toString() } })
+      analyzed = {version, analysis: result?.analysis, wholeSource:true}
+      extensionState.semanticAnalyses.set(document.uri.toString(), analyzed)
+    }
+    const canonical = analyzed.analysis?.canonical
+    if (!canonical) throw new Error('analysis did not produce canonical source')
     if (document.version !== version || document.getText() !== source) {
       throw new Error('document changed while canonicalization was running; run the command again')
     }
@@ -883,7 +934,7 @@ function registerLanguageProviders(context) {
           if (!decision.canonical || decision.method === 'criterion' || decision.canonical === decision.source) continue
           const line = decision.line - 1
           lenses.push(new vscode.CodeLens(new vscode.Range(line, 0, line, 0), {
-            title: `Make canonical · ${Math.round((decision.confidence || 0) * 100)}% ${decision.method}`,
+            title: `${decisionLensTitle(decision)} · Make canonical`,
             command: 'sysonescript.canonicalizeLine',
             arguments: [document.uri.toString(), decision.line, decision.source, decision.canonical, analyzed.version],
           }))
@@ -912,12 +963,22 @@ function registerLanguageProviders(context) {
           source: diagnostic.source,
         })) },
       })
-      return (result || []).map(raw => {
+      const actions = (result || []).map(raw => {
         const action = new vscode.CodeAction(raw.title || 'SysOneScript quick fix', vscode.CodeActionKind.QuickFix)
         action.edit = workspaceEdit(raw.edit)
         action.command = command(raw.command)
         return action
       })
+      const analyzed = extensionState.semanticAnalyses.get(document.uri.toString())
+      const decision = analyzed?.version === document.version
+        ? analyzed.analysis?.decisions?.find(item => item.line - 1 === actionRange.start.line && item.canonical && item.method !== 'criterion' && item.canonical !== item.source)
+        : undefined
+      if (decision) {
+        const action = new vscode.CodeAction('Make interpreted line canonical', vscode.CodeActionKind.QuickFix)
+        action.command = {command:'sysonescript.canonicalizeLine', title:action.title, arguments:[document.uri.toString(), decision.line, decision.source, decision.canonical, analyzed.version]}
+        actions.push(action)
+      }
+      return actions
     },
   }))
 }
@@ -937,7 +998,7 @@ async function analyzeActiveDocument() {
       extensionState.output.appendLine('Analysis result discarded because the document changed while Jev was running.')
       return
     }
-    extensionState.semanticAnalyses.set(document.uri.toString(), {version, analysis: result?.analysis})
+    extensionState.semanticAnalyses.set(document.uri.toString(), {version, analysis: result?.analysis, wholeSource:true})
     extensionState.semanticLensEmitter?.fire()
     extensionState.output.appendLine(`Analysis for ${document.uri.fsPath}`)
     extensionState.output.appendLine(JSON.stringify(result, null, 2))

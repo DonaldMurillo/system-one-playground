@@ -92,11 +92,17 @@ Studio exposes **Make all canonical** after successful analysis, and the VS
 Code extension exposes **SysOneScript: Make File Canonical**. Both editor paths
 apply one undoable whole-document edit.
 
+VS Code reloads the exact analysis produced by Run into its code lenses, so it
+shows confidence, attributed tokens, estimated cost, batching, and memoization
+without issuing a second analysis request. The CLI prints the same per-decision
+summary and can persist the run analysis with
+`sos run --save-resolution analysis.json FILE`.
+
 `explain` does not execute script effects. Its JSON includes canonical source,
 source-line mapping, interpretation decisions, dictionary `matches`, diagnostics,
 and request usage. Each match identifies the phrase, concept, and executable
 language definition used by the lowering.
-Studio refreshes semantic code lenses after Analyze or Run. A Jev-resolved line
+Studio and VS Code refresh semantic code lenses after Analyze or Run. A Jev-resolved line
 shows its confidence, provider-reported input tokens, and the corresponding
 published-rate estimate; deterministic resolutions explicitly show that they
 used no Jev request. Per-line cost remains an estimate rather than account

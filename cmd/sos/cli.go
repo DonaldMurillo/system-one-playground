@@ -41,11 +41,13 @@ commands:
   version                             print the SysOneScript version
 `
 
-const runUsage = `usage: sos run FILE [--model M] [--max-calls N] [--timeout D] [--record PATH] [--replay PATH] [--resolution PATH] [-- SCRIPT_ARGS]
+const runUsage = `usage: sos run [--model M] [--max-calls N] [--timeout D] [--record PATH] [--replay PATH] [--resolution PATH] [--save-resolution PATH] FILE [-- SCRIPT_ARGS]
 
 .env is loaded from the current directory; its values are never printed.
 Run flags must precede script arguments. SCRIPT_ARGS are parsed against the
 script's command declarations; --help after FILE prints the script's usage.
+--save-resolution is a runner flag only before FILE, leaving the same-named
+token available to scripts after FILE.
 `
 
 const checkUsage = "usage: sos check FILE\n"
@@ -108,12 +110,13 @@ func RunCLI(args []string, stdout, stderr io.Writer) int {
 }
 
 type runOptions struct {
-	model      string
-	maxCalls   string
-	timeout    string
-	record     string
-	replay     string
-	resolution string
+	model          string
+	maxCalls       string
+	timeout        string
+	record         string
+	replay         string
+	resolution     string
+	saveResolution string
 }
 
 func isRunFlag(arg string) bool {
@@ -183,6 +186,15 @@ parse:
 			}
 			if opts.resolution == "" {
 				fmt.Fprintln(stderr, "--resolution requires a nonempty path")
+				return 2
+			}
+		case arg == "--save-resolution" || strings.HasPrefix(arg, "--save-resolution="):
+			var ok bool
+			if i, ok = take(&opts.saveResolution, i); !ok {
+				return 2
+			}
+			if opts.saveResolution == "" {
+				fmt.Fprintln(stderr, "--save-resolution requires a nonempty path")
 				return 2
 			}
 		case arg == "--replay" || strings.HasPrefix(arg, "--replay="):
@@ -276,6 +288,13 @@ parse:
 	})
 	if result != nil {
 		reportUsage(stderr, result.Usage, runErr)
+		reportInterpretations(stderr, result.Analysis)
+		if opts.saveResolution != "" && result.Analysis != nil {
+			if err := saveResolution(opts.saveResolution, result.Analysis); err != nil {
+				fmt.Fprintf(stderr, "sos: run: save resolution: %v\n", err)
+				return 1
+			}
+		}
 	}
 	var exit interface{ ExitCode() int }
 	if errors.As(runErr, &exit) {
@@ -558,5 +577,31 @@ func reportUsage(w io.Writer, usage sos.BudgetSnapshot, err error) {
 		tokens += bucket.ReportedInputTokens
 		unresolved += bucket.Unresolved
 	}
-	fmt.Fprintf(w, "sos: usage requests=%d/%d inputTokens=%d unresolved=%d\n", usage.TotalAdmitted, usage.TotalLimit, tokens, unresolved)
+	cost := float64(tokens) * 0.042 / 1_000_000
+	fmt.Fprintf(w, "sos: usage requests=%d/%d inputTokens=%d unresolved=%d estimatedUSD=%.8f (Jev 1.13 input estimate; not an invoice)\n", usage.TotalAdmitted, usage.TotalLimit, tokens, unresolved, cost)
+}
+
+func reportInterpretations(w io.Writer, analysis *sos.Analysis) {
+	if analysis == nil {
+		return
+	}
+	for _, d := range analysis.Decisions {
+		if d.Method == "deterministic" {
+			fmt.Fprintf(w, "sos: interpretation line=%d method=deterministic confidence=100%% usage=no-Jev-request\n", d.Line)
+			continue
+		}
+		if d.Method != "jev" && d.Method != "memoized" {
+			continue
+		}
+		if d.Method == "jev" && !d.UsageKnown {
+			fmt.Fprintf(w, "sos: interpretation line=%d method=jev confidence=%.0f%% usage=unavailable\n", d.Line, d.Confidence*100)
+			continue
+		}
+		cost := float64(d.InputTokens) * 0.042 / 1_000_000
+		shared := ""
+		if d.UsageShared {
+			shared = fmt.Sprintf(" sharedAcross=%d", d.BatchSize)
+		}
+		fmt.Fprintf(w, "sos: interpretation line=%d method=%s confidence=%.0f%% inputTokens=%d estimatedUSD=%.8f%s\n", d.Line, d.Method, d.Confidence*100, d.InputTokens, cost, shared)
+	}
 }

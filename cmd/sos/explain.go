@@ -63,7 +63,7 @@ func saveResolution(path string, analysis *sos.Analysis) error {
 	if err = f.Close(); err != nil {
 		return err
 	}
-	return os.Rename(f.Name(), path)
+	return replaceFile(f.Name(), path)
 }
 
 // parseForExecution leaves noncanonical source to the semantic analyzer while

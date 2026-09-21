@@ -204,7 +204,7 @@ func (s *Server) handleExamples(w http.ResponseWriter, r *http.Request) {
 		case "jev-language-composer":
 			title = "Jev grammar composer · 1 request"
 		case "semantic-gauntlet":
-			title = "Semantic Gauntlet · 8 Jev requests"
+			title = "Semantic Gauntlet · 8 decisions · 1 batched Jev request"
 		}
 		out = append(out, map[string]string{"name": strings.TrimSuffix(path.Base(n), ".sos"), "title": title})
 	}

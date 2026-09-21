@@ -608,17 +608,7 @@ function applyInterpretation(d, version, originalLine) {
     renderInterpretationError(new Error('source line changed since analysis — analyze again'))
     return
   }
-  // Keep the author's trailing comment when replacing a sentence.
-  let quoted = false, escaped = false, comment = ''
-  for (let i = 0; i < current.length; i++) {
-    const ch = current[i]
-    if (escaped) { escaped = false; continue }
-    if (ch === '\\' && quoted) { escaped = true; continue }
-    if (ch === '"') quoted = !quoted
-    if (ch === '#' && !quoted) { comment = current.slice(i); break }
-  }
   const precise = d.canonical.split('\n')
-  if (comment) precise[0] += ` ${comment}`
   model.pushEditOperations([], [{
     range: { startLineNumber: line, startColumn: 1, endLineNumber: line, endColumn: current.length + 1 },
     text: precise.join('\n')
