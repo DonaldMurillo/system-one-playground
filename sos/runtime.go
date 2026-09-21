@@ -845,10 +845,15 @@ func (r *runtime) execute(s *Statement) error {
 			r.failures = r.p.Failures
 		}
 		r.depth++
-		r.debugStack = append(r.debugStack, DebugFrame{Path: r.logicalPath, Line: fn.Line, Column: 1, Name: m[1], Kind: "action", Text: fn.Text, Depth: r.depth})
+		actionPath := r.logicalPath
+		if r.module != nil && r.module.actionPaths[m[1]] != "" {
+			actionPath = r.module.actionPaths[m[1]]
+		}
+		r.debugStack = append(r.debugStack, DebugFrame{Path: actionPath, Line: fn.Line, Column: 1, Name: m[1], Kind: "action", Text: fn.Text, Depth: r.depth})
 		e = r.block(fn.Body)
 		r.debugStack = r.debugStack[:len(r.debugStack)-1]
 		r.depth--
+		calleeDefinitions := r.definitions
 		r.env = outer
 		r.imports = outerImports
 		r.vocab = outerVocab
@@ -860,7 +865,7 @@ func (r *runtime) execute(s *Statement) error {
 			if decl.HasResult && !ret.hasValue {
 				return fmt.Errorf("action %s finished without a value", m[1])
 			}
-			if decl.HasResult && !typeMatchesRef(ret.value, decl.Result, r.definitions) {
+			if decl.HasResult && !typeMatchesRef(ret.value, decl.Result, calleeDefinitions) {
 				return fmt.Errorf("action %s must finish with %s; received %s", m[1], decl.Result.String(), valueTypeName(ret.value))
 			}
 			if m[3] != "" && ret.hasValue {
@@ -1524,7 +1529,10 @@ func (r *runtime) callModule(s *Statement, mod *Module, action, display string, 
 	r.definitions = actionDefs
 	r.failures = mod.Failures
 	r.depth++
-	modulePath := mod.Key
+	modulePath := mod.actionPaths[action]
+	if modulePath == "" {
+		modulePath = mod.Key
+	}
 	if !filepath.IsAbs(modulePath) && r.logicalPath != "" {
 		modulePath = filepath.Join(r.opts.Dir, modulePath)
 	}

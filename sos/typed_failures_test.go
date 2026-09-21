@@ -218,6 +218,121 @@ call service.fetch
 	}
 }
 
+func TestModuleFailureTraversalUsesModuleAndActionIdentity(t *testing.T) {
+	dir := t.TempDir()
+	dep := filepath.Join(dir, "dep")
+	service := filepath.Join(dir, "service")
+	for _, path := range []string{dep, service} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dep, "dep.sos"), []byte(`package dep
+export Missing
+export fetch
+define failure Missing:
+to fetch may fail with Missing:
+  fail Missing with "missing"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(service, "service.sos"), []byte(`package service
+import "../dep" as dep
+export fetch
+to fetch may fail with Missing:
+  call dep.fetch
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, diagnostics := LoadProgram(filepath.Join(dir, "main.sos"), `import "./service" as service
+show "loaded"
+`)
+	if len(diagnostics) == 0 || !strings.Contains(fmt.Sprint(diagnostics), "exposes failure Missing") {
+		t.Fatalf("diagnostics = %+v", diagnostics)
+	}
+}
+
+func TestModuleLocalCallValidatesResultInCalleeTypeScope(t *testing.T) {
+	dir := t.TempDir()
+	models := filepath.Join(dir, "models")
+	service := filepath.Join(dir, "service")
+	for _, path := range []string{models, service} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(models, "models.sos"), []byte(`package models
+export Address
+define Address:
+  city as text
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(service, "producer.sos"), []byte(`package service
+import "../models" as models
+to producer returning Address:
+  finish with {city: "Paris"}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(service, "consumer.sos"), []byte(`package service
+export consume
+to consume:
+  call producer called address
+  show city of address
+  finish
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p, diagnostics := LoadProgram(filepath.Join(dir, "main.sos"), `import "./service" as service
+call service.consume
+`)
+	if len(diagnostics) != 0 {
+		t.Fatal(diagnostics)
+	}
+	if _, err := Run(context.Background(), p, Options{Dir: dir, SourcePath: filepath.Join(dir, "main.sos")}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestNestedModuleFailureFramesUseDefiningFile(t *testing.T) {
+	dir := t.TempDir()
+	service := filepath.Join(dir, "service")
+	if err := os.MkdirAll(service, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	moduleFile := filepath.Join(service, "service.sos")
+	if err := os.WriteFile(moduleFile, []byte(`package service
+export Missing
+export outer
+define failure Missing:
+to inner may fail with Missing:
+  fail Missing with "missing"
+to outer may fail with Missing:
+  call inner
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p, diagnostics := LoadProgram(filepath.Join(dir, "main.sos"), `import "./service" as service
+call service.outer
+`)
+	if len(diagnostics) != 0 {
+		t.Fatal(diagnostics)
+	}
+	result, err := Run(context.Background(), p, Options{Dir: dir, SourcePath: filepath.Join(dir, "main.sos")})
+	if err == nil {
+		t.Fatal("expected typed failure")
+	}
+	frames := result.Failure["frames"].([]map[string]any)
+	for _, frame := range frames {
+		if frame["kind"] == "action" || frame["kind"] == "fail" {
+			if !strings.HasSuffix(frame["path"].(string), filepath.Join("service", "service.sos")) {
+				t.Fatalf("frame path = %#v, want defining file %q; frames=%#v", frame["path"], moduleFile, frames)
+			}
+		}
+	}
+}
+
 func TestTypedFailureCapturePreservesHiddenNameBinding(t *testing.T) {
 	source := `define failure Missing:
 to fetch returning text may fail with Missing:

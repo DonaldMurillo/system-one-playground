@@ -803,15 +803,19 @@ func possibleFailuresForCall(p *Program, actions map[string]*Statement, s *State
 }
 
 func modulePossibleFailures(m *Module, action string, visiting map[string]bool) []string {
-	if m == nil || visiting[action] {
+	if m == nil {
+		return nil
+	}
+	visitKey := m.Key + "\x00" + action
+	if visiting[visitKey] {
 		return nil
 	}
 	fn := m.Actions[action]
 	if fn == nil {
 		return nil
 	}
-	visiting[action] = true
-	defer delete(visiting, action)
+	visiting[visitKey] = true
+	defer delete(visiting, visitKey)
 	decl, _ := parseActionDecl(fn.Text)
 	result := append([]string(nil), decl.Failures...)
 	var walk func([]*Statement)

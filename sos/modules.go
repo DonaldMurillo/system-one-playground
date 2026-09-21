@@ -51,6 +51,7 @@ type Module struct {
 	fileVocabs        map[string]*fileVocab
 	failureImports    map[string]map[string]*Module
 	definitionImports map[string]map[string]*Module
+	actionPaths       map[string]string
 	// Native holds compiled-in operations (standard packages).
 	Native map[string]NativeOp
 	// Exports lists names importers may reference.
@@ -635,6 +636,7 @@ func buildModule(key string, files []*moduleFileDecls) (*Module, []Diagnostic) {
 		fileVocabs:        map[string]*fileVocab{},
 		failureImports:    map[string]map[string]*Module{},
 		definitionImports: map[string]map[string]*Module{},
+		actionPaths:       map[string]string{},
 		Exports:           map[string]bool{},
 		Words:             map[string]string{},
 	}
@@ -658,6 +660,15 @@ func buildModule(key string, files []*moduleFileDecls) (*Module, []Diagnostic) {
 				m.Actions[name] = s
 				m.fileImports[name] = f.aliases
 				m.fileVocabs[name] = f.vocab
+				actionPath := f.name
+				if !filepath.IsAbs(actionPath) {
+					if info, err := os.Stat(key); err == nil && info.IsDir() {
+						actionPath = filepath.Join(key, actionPath)
+					} else if filepath.Ext(key) == ".sos" {
+						actionPath = key
+					}
+				}
+				m.actionPaths[name] = actionPath
 			case "schema":
 				name := match("schema", s.Text)[1]
 				if m.Schemas[name] != nil {
