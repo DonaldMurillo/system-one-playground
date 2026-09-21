@@ -118,6 +118,21 @@ capture fetch with "" called outcome
 	}
 }
 
+func TestTypedFailureCaptureSuccessfulNoResultAction(t *testing.T) {
+	source := `to ping:
+  finish
+capture ping called outcome
+`
+	result, err := Run(context.Background(), mustParse(t, source), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	outcome := result.Variables["outcome"].(map[string]any)
+	if outcome["succeeded"] != true || outcome["value"] != nil || outcome["failure"] != nil {
+		t.Fatalf("outcome = %#v", outcome)
+	}
+}
+
 func TestTypedFailureCapturePreservesHiddenNameBinding(t *testing.T) {
 	source := `define failure Missing:
 to fetch returning text may fail with Missing:
@@ -214,6 +229,55 @@ to caller returning text:
 	}
 }
 
+func TestTypedFailureHandlerBindingsAreLocalAndCannotCollide(t *testing.T) {
+	collision := `define failure Missing:
+to fetch returning text may fail with Missing:
+  fail Missing with "missing"
+make problem "outer"
+call fetch called value
+  on failure Missing called problem:
+    recover with "cached"
+`
+	diagnostics := Check(collision)
+	if len(diagnostics) == 0 || !strings.Contains(diagnostics[0].Message, "collides") {
+		t.Fatalf("diagnostics = %+v", diagnostics)
+	}
+
+	local := `define failure Missing:
+to fetch returning text may fail with Missing:
+  fail Missing with "missing"
+call fetch called value
+  on failure Missing called problem:
+    recover with "cached"
+`
+	result, err := Run(context.Background(), mustParse(t, local), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, leaked := result.Variables["problem"]; leaked {
+		t.Fatalf("handler binding leaked: %#v", result.Variables)
+	}
+}
+
+func TestTypedFailureRejectsImpossibleHandler(t *testing.T) {
+	source := `define failure Missing:
+define failure Invalid:
+to fetch returning text may fail with Missing:
+  fail Missing with "missing"
+to caller returning text:
+  call fetch called value
+    on failure Invalid:
+      recover with "invalid"
+    on failure Missing:
+      recover with "cached"
+  finish with value
+`
+	diagnostics := Check(source)
+	if len(diagnostics) == 0 || !strings.Contains(diagnostics[0].Message, "impossible") {
+		t.Fatalf("diagnostics = %+v", diagnostics)
+	}
+}
+
 func TestTypedFailurePassThroughRequiresCallerContract(t *testing.T) {
 	source := `define failure Missing:
 to leaf returning text may fail with Missing:
@@ -285,6 +349,104 @@ to root returning text may fail with InvalidCity:
 	}
 	if len(p.Failures) != 1 || p.Failures["InvalidCity"].Fields[0].Name != "city" {
 		t.Fatalf("failures = %#v", p.Failures)
+	}
+}
+
+func TestTypedFailureMetadataExcludesRecoveredAndReplacedFailures(t *testing.T) {
+	source := `define failure Missing:
+define failure Replacement:
+to leaf returning text may fail with Missing:
+  fail Missing with "missing"
+to recovered returning text:
+  call leaf called value
+    on failure Missing:
+      recover with "cached"
+  finish with value
+to transformed returning text may fail with Replacement:
+  call leaf called value
+    on failure Missing:
+      fail Replacement with "replacement"
+  finish with value
+`
+	p := mustParse(t, source)
+	if diagnostics := Check(source); len(diagnostics) != 0 {
+		t.Fatal(diagnostics)
+	}
+	metadata := p.ActionMetadata()
+	byName := map[string][]string{}
+	for _, action := range metadata {
+		byName[action.Name] = action.PossibleFailures
+	}
+	if len(byName["recovered"]) != 0 {
+		t.Fatalf("recovered failures = %#v", byName["recovered"])
+	}
+	if got := byName["transformed"]; len(got) != 1 || got[0] != "Replacement" {
+		t.Fatalf("transformed failures = %#v", got)
+	}
+}
+
+func TestTypedFailureImportedNameCollisionIsDeterministic(t *testing.T) {
+	dir := t.TempDir()
+	for _, module := range []string{"alpha", "beta"} {
+		moduleDir := filepath.Join(dir, module)
+		if err := os.MkdirAll(moduleDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		source := "package " + module + "\nexport Missing\ndefine failure Missing:\n"
+		if err := writeTestFile(filepath.Join(moduleDir, module+".sos"), source); err != nil {
+			t.Fatal(err)
+		}
+	}
+	source := "import \"./beta\" as beta\nimport \"./alpha\" as alpha\n"
+	_, diagnostics := LoadProgram(filepath.Join(dir, "main.sos"), source)
+	if len(diagnostics) == 0 || !strings.Contains(diagnostics[0].Message, "module alpha (imported as alpha)") || !strings.Contains(diagnostics[0].Message, "module beta (imported as beta)") {
+		t.Fatalf("diagnostics = %+v", diagnostics)
+	}
+}
+
+func TestTypedFailureModuleContractRetainsImports(t *testing.T) {
+	dir := t.TempDir()
+	dep := filepath.Join(dir, "dep")
+	lib := filepath.Join(dir, "lib")
+	if err := os.MkdirAll(dep, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(lib, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTestFile(filepath.Join(dep, "dep.sos"), `package dep
+export Missing
+export fetch
+define failure Missing:
+to fetch returning text may fail with Missing:
+  fail Missing with "missing"
+`); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTestFile(filepath.Join(lib, "lib.sos"), `package lib
+import "../dep" as dep
+export caller
+to caller returning text:
+  call dep.fetch called value
+  finish with value
+`); err != nil {
+		t.Fatal(err)
+	}
+	_, diagnostics := LoadProgram(filepath.Join(dir, "main.sos"), `import "./lib" as lib
+`)
+	if len(diagnostics) == 0 || !strings.Contains(diagnostics[0].Message, "may pass Missing") {
+		t.Fatalf("diagnostics = %+v", diagnostics)
+	}
+}
+
+func TestParallelMapRejectsBareFinishValue(t *testing.T) {
+	source := `make values [1]
+map each value in values with at most 1 running called results:
+  finish
+`
+	_, err := Run(context.Background(), mustParse(t, source), Options{})
+	if err == nil || !strings.Contains(err.Error(), "finished without a value") {
+		t.Fatalf("error = %v", err)
 	}
 }
 

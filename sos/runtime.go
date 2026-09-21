@@ -313,6 +313,7 @@ func (r *runtime) block(sts []*Statement) error {
 				if h.Kind != "handler" || match("handler", h.Text)[1] != "failure" || !r.matchesFailureHandler(h, err) {
 					continue
 				}
+				restoreBindings := r.localFailureHandlerBindings(h)
 				r.env["error"] = err.Error()
 				r.env["failure"] = FailureValue(err)
 				r.bindFailureHandler(h, err)
@@ -320,6 +321,7 @@ func (r *runtime) block(sts []*Statement) error {
 				r.activeFailure = err
 				handledErr := r.handler(h)
 				r.activeFailure = outerFailure
+				restoreBindings()
 				var recovered recoveryValue
 				if errors.As(handledErr, &recovered) {
 					if recovered.hasValue && !r.callHasResult(s) {
@@ -366,6 +368,34 @@ func (r *runtime) block(sts []*Statement) error {
 		}
 	}
 	return nil
+}
+
+func (r *runtime) localFailureHandlerBindings(h *Statement) func() {
+	_, binding, fields, _ := failureHandlerHeader(h.Text)
+	names := []string{"error", "failure"}
+	if binding != "" {
+		names = append(names, binding)
+	} else {
+		names = append(names, fields...)
+	}
+	type previousBinding struct {
+		value any
+		set   bool
+	}
+	previous := make(map[string]previousBinding, len(names))
+	for _, name := range names {
+		value, set := r.env[name]
+		previous[name] = previousBinding{value: value, set: set}
+	}
+	return func() {
+		for name, binding := range previous {
+			if binding.set {
+				r.env[name] = binding.value
+			} else {
+				delete(r.env, name)
+			}
+		}
+	}
 }
 
 func debuggableStatement(s *Statement) bool {
@@ -1545,15 +1575,21 @@ func (r *runtime) capture(s *Statement, m []string) error {
 	if m[2] != "" {
 		callText += " with " + m[2]
 	}
-	callText += " called " + hiddenResult
+	if r.captureTargetHasResult(m[1]) {
+		callText += " called " + hiddenResult
+	}
 	call := &Statement{Kind: "call", Text: callText, Line: s.Line}
 	err := r.execute(call)
 	if err == nil {
-		r.env[m[3]] = map[string]any{
+		outcome := map[string]any{
 			"succeeded": true,
-			"value":     r.env[hiddenResult],
+			"value":     nil,
 			"failure":   nil,
 		}
+		if value, ok := r.env[hiddenResult]; ok {
+			outcome["value"] = value
+		}
+		r.env[m[3]] = outcome
 		return nil
 	}
 	var typed *typedFailure
@@ -1566,6 +1602,24 @@ func (r *runtime) capture(s *Statement, m []string) error {
 		"failure":   FailureValue(err),
 	}
 	return nil
+}
+
+func (r *runtime) captureTargetHasResult(target string) bool {
+	if strings.Contains(target, ".") {
+		alias, action, _ := strings.Cut(target, ".")
+		if mod := r.imports[alias]; mod != nil {
+			if fn := mod.Actions[action]; fn != nil {
+				decl, _ := parseActionDecl(fn.Text)
+				return decl.HasResult
+			}
+		}
+		return false
+	}
+	if fn := r.functions[target]; fn != nil {
+		decl, _ := parseActionDecl(fn.Text)
+		return decl.HasResult
+	}
+	return false
 }
 
 func readData(path, format string) (any, error) {

@@ -217,28 +217,54 @@ func (p *Program) actionPossibleFailures(name string, visiting map[string]bool) 
 				result = append(result, match("fail", statement.Text)[1])
 			case "call":
 				m := match("call", statement.Text)
+				var failures []string
 				if strings.Contains(m[1], ".") && p.Modules != nil {
 					alias, action, _ := strings.Cut(m[1], ".")
 					if module := p.Modules.Aliases[alias]; module != nil {
-						result = append(result, modulePossibleFailures(module, action, map[string]bool{})...)
+						failures = modulePossibleFailures(module, action, map[string]bool{})
 					}
 				} else if p.actionDeclaration(m[1]) != nil {
-					result = append(result, p.actionPossibleFailures(m[1], visiting)...)
+					failures = p.actionPossibleFailures(m[1], visiting)
 				}
+				result = append(result, unhandledFailures(failures, statement)...)
+				walkFailureHandlerBodies(statement.Body, walk)
+				continue
 			case "sent":
+				var failures []string
 				if p.Modules != nil && p.Modules.vocab != nil {
 					if sent := matchSent(statement.Text); sent != nil {
 						if module, action, ok := p.Modules.vocab.resolveName(sent[1]); ok {
-							result = append(result, modulePossibleFailures(module, action, map[string]bool{})...)
+							failures = modulePossibleFailures(module, action, map[string]bool{})
 						}
 					}
 				}
+				result = append(result, unhandledFailures(failures, statement)...)
+				walkFailureHandlerBodies(statement.Body, walk)
+				continue
 			}
 			walk(statement.Body)
 		}
 	}
 	walk(fn.Body)
 	return uniqueSorted(result)
+}
+
+func unhandledFailures(failures []string, operation *Statement) []string {
+	var out []string
+	for _, failure := range failures {
+		if !callHasFailureHandler(operation, failure) {
+			out = append(out, failure)
+		}
+	}
+	return out
+}
+
+func walkFailureHandlerBodies(stmts []*Statement, walk func([]*Statement)) {
+	for _, statement := range stmts {
+		if statement.Kind == "handler" {
+			walk(statement.Body)
+		}
+	}
 }
 
 func (p *Program) actionDeclaration(name string) *Statement {
@@ -671,12 +697,19 @@ func buildModule(key string, files []*moduleFileDecls) (*Module, []Diagnostic) {
 			}
 		}
 	}
-	moduleStatements := make([]*Statement, 0, len(m.Actions))
 	for _, name := range sortedActionNames(m) {
-		moduleStatements = append(moduleStatements, m.Actions[name])
+		moduleStatements := make([]*Statement, 0, len(m.Actions))
+		for _, actionName := range sortedActionNames(m) {
+			moduleStatements = append(moduleStatements, m.Actions[actionName])
+		}
+		moduleProgram := &Program{
+			Statements:  moduleStatements,
+			Definitions: m.Definitions,
+			Failures:    m.Failures,
+			Modules:     &ModuleTable{Aliases: m.scope(name), vocab: m.vocabulary(name)},
+		}
+		ds = append(ds, checkActionContracts(moduleProgram, map[string]*Statement{name: m.Actions[name]}, m.Definitions)...)
 	}
-	moduleProgram := &Program{Statements: moduleStatements, Definitions: m.Definitions, Failures: m.Failures}
-	ds = append(ds, checkActionContracts(moduleProgram, m.Actions, m.Definitions)...)
 	seen := map[string]bool{}
 	for _, f := range files {
 		for _, s := range f.stmts {

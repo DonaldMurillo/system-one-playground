@@ -211,6 +211,7 @@ func (r *runtime) parallelMap(s *Statement, m []string) error {
 				child.env["number"] = float64(index + 1)
 				child.functions = copyStatements(r.functions)
 				child.schemas = copyStatements(r.schemas)
+				child.debugStack = append([]DebugFrame(nil), r.debugStack...)
 				child.result = &Result{Traces: []Trace{}}
 				child.recording = nil
 				child.replay = nil
@@ -231,8 +232,12 @@ func (r *runtime) parallelMap(s *Statement, m []string) error {
 				err = child.block(s.Body)
 				var ret returnValue
 				if errors.As(err, &ret) {
-					slot.value = ret.value
-					err = nil
+					if !ret.hasValue {
+						err = fmt.Errorf("parallel iteration %d finished without a value", index+1)
+					} else {
+						slot.value = ret.value
+						err = nil
+					}
 				} else if err == nil {
 					err = fmt.Errorf("parallel iteration %d completed without return", index+1)
 				}

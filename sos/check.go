@@ -3,6 +3,7 @@ package sos
 import (
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -28,6 +29,10 @@ func analyze(p *Program) []Diagnostic {
 		return p.Modules.Aliases
 	}())
 	for _, problem := range importedTypeProblems {
+		ds = append(ds, Diagnostic{1, 1, problem})
+	}
+	_, importedFailureProblems := visibleFailureDefinitionsWithProblems(p)
+	for _, problem := range importedFailureProblems {
 		ds = append(ds, Diagnostic{1, 1, problem})
 	}
 	for _, failure := range p.Failures {
@@ -499,13 +504,26 @@ func analyze(p *Program) []Diagnostic {
 				if m[1] == "failure" {
 					_, binding, fields, typed := failureHandlerHeader(s.Text)
 					if typed {
+						oldNames, oldTypes := names, types
+						names, types = copyNames(names), copyTypes(types)
 						if binding != "" {
+							if names[binding] {
+								add(s, "failure handler binding "+binding+" collides with an existing name")
+							}
 							names[binding] = true
 						} else {
+							seenFields := map[string]bool{}
 							for _, field := range fields {
+								if names[field] || seenFields[field] {
+									add(s, "failure handler binding "+field+" collides with an existing name")
+								}
+								seenFields[field] = true
 								names[field] = true
 							}
 						}
+						walk(s.Body)
+						names, types = oldNames, oldTypes
+						continue
 					}
 				}
 				if m[1] == "uncertain" && m[2] == "" {
@@ -573,7 +591,7 @@ func analyze(p *Program) []Diagnostic {
 // in the closed contract.
 func checkActionContracts(p *Program, actions map[string]*Statement, defs map[string]*RecordDef) []Diagnostic {
 	var ds []Diagnostic
-	visibleFailures := visibleFailureDefinitions(p)
+	visibleFailures, _ := visibleFailureDefinitionsWithProblems(p)
 	add := func(line int, format string, args ...any) {
 		ds = append(ds, Diagnostic{line, 1, fmt.Sprintf(format, args...)})
 	}
@@ -629,16 +647,19 @@ func checkActionContracts(p *Program, actions map[string]*Statement, defs map[st
 					}
 					checkFailurePayload(s, visibleFailures[failure], defs, add)
 				case "call":
-					checkFailureHandlers(s, visibleFailures, add)
+					possible := possibleFailuresForCall(p, actions, s)
+					checkFailureHandlers(s, possible, add)
 					visit(s.Body, true)
-					for _, failure := range possibleFailuresForCall(p, actions, s) {
+					for _, failure := range possible {
 						if declared[failure] || callHasFailureHandler(s, failure) {
 							continue
 						}
 						add(s.Line, "%s may pass %s on; handle it or add it to \"may fail with\"", name, failure)
 					}
 				case "sent":
-					for _, failure := range possibleFailuresForCall(p, actions, s) {
+					possible := possibleFailuresForCall(p, actions, s)
+					checkFailureHandlers(s, possible, add)
+					for _, failure := range possible {
 						if declared[failure] || callHasFailureHandler(s, failure) {
 							continue
 						}
@@ -746,7 +767,7 @@ func possibleFailuresForCall(p *Program, actions map[string]*Statement, s *State
 			}
 			return nil
 		}
-		if actions[m[1]] != nil {
+		if p.actionDeclaration(m[1]) != nil {
 			return p.actionPossibleFailures(m[1], map[string]bool{})
 		}
 		return nil
@@ -783,24 +804,32 @@ func modulePossibleFailures(m *Module, action string, visiting map[string]bool) 
 				callMatch := match("call", statement.Text)
 				callee := callMatch[1]
 				calleeModule := callMatch
+				var failures []string
 				if strings.Contains(callee, ".") {
 					alias, name, _ := strings.Cut(callee, ".")
 					calleeModule = nil
 					if imported := m.scope(action)[alias]; imported != nil {
-						result = append(result, modulePossibleFailures(imported, name, visiting)...)
+						failures = modulePossibleFailures(imported, name, visiting)
 					}
 				}
 				if calleeModule != nil {
-					result = append(result, modulePossibleFailures(m, callee, visiting)...)
+					failures = modulePossibleFailures(m, callee, visiting)
 				}
+				result = append(result, unhandledFailures(failures, statement)...)
+				walkFailureHandlerBodies(statement.Body, walk)
+				continue
 			case "sent":
+				var failures []string
 				if vocab := m.vocabulary(action); vocab != nil {
 					if sent := matchSent(statement.Text); sent != nil {
 						if imported, name, ok := vocab.resolveName(sent[1]); ok {
-							result = append(result, modulePossibleFailures(imported, name, visiting)...)
+							failures = modulePossibleFailures(imported, name, visiting)
 						}
 					}
 				}
+				result = append(result, unhandledFailures(failures, statement)...)
+				walkFailureHandlerBodies(statement.Body, walk)
+				continue
 			}
 			walk(statement.Body)
 		}
@@ -837,7 +866,11 @@ func handlerPassesFailure(h *Statement) bool {
 	return false
 }
 
-func checkFailureHandlers(operation *Statement, failureDefs map[string]*FailureDef, add func(int, string, ...any)) {
+func checkFailureHandlers(operation *Statement, possible []string, add func(int, string, ...any)) {
+	possibleSet := map[string]bool{}
+	for _, kind := range possible {
+		possibleSet[kind] = true
+	}
 	seen := map[string]bool{}
 	general := -1
 	for i, child := range operation.Body {
@@ -850,6 +883,8 @@ func checkFailureHandlers(operation *Statement, failureDefs map[string]*FailureD
 		}
 		if !typed {
 			kind = ""
+		} else if !possibleSet[kind] {
+			add(child.Line, "failure handler %s is impossible for this operation", kind)
 		}
 		if seen[kind] {
 			add(child.Line, "failure handler %s is declared more than once", kind)
@@ -862,29 +897,45 @@ func checkFailureHandlers(operation *Statement, failureDefs map[string]*FailureD
 			add(child.Line, "general failure handler must be last")
 		}
 	}
-	_ = failureDefs
 }
 
 func visibleFailureDefinitions(p *Program) map[string]*FailureDef {
+	result, _ := visibleFailureDefinitionsWithProblems(p)
+	return result
+}
+
+func visibleFailureDefinitionsWithProblems(p *Program) (map[string]*FailureDef, []string) {
 	result := map[string]*FailureDef{}
+	owners := map[string]string{}
+	var problems []string
 	if p == nil {
-		return result
+		return result, nil
 	}
 	for name, definition := range p.Failures {
 		result[name] = definition
+		owners[name] = "the current file"
 	}
 	if p.Modules != nil {
-		for _, module := range p.Modules.Aliases {
+		aliases := make([]string, 0, len(p.Modules.Aliases))
+		for alias := range p.Modules.Aliases {
+			aliases = append(aliases, alias)
+		}
+		sort.Strings(aliases)
+		for _, alias := range aliases {
+			module := p.Modules.Aliases[alias]
 			for name, definition := range module.Failures {
 				if module.Exports[name] {
-					if _, exists := result[name]; !exists {
-						result[name] = definition
+					identity := fmt.Sprintf("module %s (imported as %s)", module.Name, alias)
+					if owner, exists := owners[name]; exists && result[name] != definition {
+						problems = append(problems, fmt.Sprintf("failure %s is ambiguous between %s and %s", name, owner, identity))
+						continue
 					}
+					result[name], owners[name] = definition, identity
 				}
 			}
 		}
 	}
-	return result
+	return result, uniqueSorted(problems)
 }
 
 type flowSummary struct {
