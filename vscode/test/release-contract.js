@@ -9,11 +9,10 @@ const runtime = api.match(/Version\s*=\s*"([^"]+)"/)?.[1]
 assert.equal(manifest.version, runtime, 'extension and runtime versions must match')
 const changelog = fs.readFileSync(path.join(root, 'vscode', 'CHANGELOG.md'), 'utf8')
 assert.match(changelog, new RegExp(`^## ${manifest.version.replaceAll('.', '\\.')}$`, 'm'))
-for (const relative of ['README.md', 'vscode/README.md', 'docs/sysonescript-editor.md', 'docs-site/content/editor.md']) {
+const releaseReferenceFiles = ['README.md', 'vscode/README.md', 'docs/sysonescript-editor.md', 'docs-site/content/editor.md', 'vscode/walkthrough/cli.md']
+for (const relative of releaseReferenceFiles) {
   const text = fs.readFileSync(path.join(root, relative), 'utf8')
   assert.ok(!text.includes('sysonescript-vscode-0.2.0.vsix'), `${relative} contains a stale VSIX version`)
+  const releaseVersions = [...text.matchAll(/vscode-v(\d+\.\d+\.\d+)/g)].map(match => match[1])
+  assert.ok(releaseVersions.every(version => version === manifest.version), `${relative} release references must match the extension version`)
 }
-const walkthrough = fs.readFileSync(path.join(root, 'vscode', 'walkthrough', 'cli.md'), 'utf8')
-const releaseVersions = [...walkthrough.matchAll(/vscode-v(\d+\.\d+\.\d+)/g)].map(match => match[1])
-assert.ok(releaseVersions.length > 0, 'CLI walkthrough must link to a versioned release')
-assert.ok(releaseVersions.every(version => version === manifest.version), 'CLI walkthrough release links must match the extension version')
