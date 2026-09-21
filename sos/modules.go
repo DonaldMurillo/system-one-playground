@@ -47,8 +47,9 @@ type Module struct {
 	Failures    map[string]*FailureDef
 	// fileImports maps each action to its defining file's import scope;
 	// fileVocabs maps it to that file's definition-site vocabulary.
-	fileImports map[string]map[string]*Module
-	fileVocabs  map[string]*fileVocab
+	fileImports    map[string]map[string]*Module
+	fileVocabs     map[string]*fileVocab
+	failureImports map[string]map[string]*Module
 	// Native holds compiled-in operations (standard packages).
 	Native map[string]NativeOp
 	// Exports lists names importers may reference.
@@ -624,15 +625,16 @@ type moduleFileDecls struct {
 // for exported action A, with deterministic duplicate checks.
 func buildModule(key string, files []*moduleFileDecls) (*Module, []Diagnostic) {
 	m := &Module{
-		Key:         key,
-		Actions:     map[string]*Statement{},
-		Schemas:     map[string]*Statement{},
-		Definitions: map[string]*RecordDef{},
-		Failures:    map[string]*FailureDef{},
-		fileImports: map[string]map[string]*Module{},
-		fileVocabs:  map[string]*fileVocab{},
-		Exports:     map[string]bool{},
-		Words:       map[string]string{},
+		Key:            key,
+		Actions:        map[string]*Statement{},
+		Schemas:        map[string]*Statement{},
+		Definitions:    map[string]*RecordDef{},
+		Failures:       map[string]*FailureDef{},
+		fileImports:    map[string]map[string]*Module{},
+		fileVocabs:     map[string]*fileVocab{},
+		failureImports: map[string]map[string]*Module{},
+		Exports:        map[string]bool{},
+		Words:          map[string]string{},
 	}
 	var ds []Diagnostic
 	for _, f := range files {
@@ -681,6 +683,7 @@ func buildModule(key string, files []*moduleFileDecls) (*Module, []Diagnostic) {
 				definition, definitionDiagnostics := parseFailureDefinition(s)
 				ds = append(ds, definitionDiagnostics...)
 				m.Failures[name] = definition
+				m.failureImports[name] = f.aliases
 			case "import", "export", "word":
 			default:
 				ds = append(ds, Diagnostic{s.Line, 1, "module top level allows only package, import, export, word, and declarations"})
@@ -691,8 +694,12 @@ func buildModule(key string, files []*moduleFileDecls) (*Module, []Diagnostic) {
 		ds = append(ds, Diagnostic{1, 1, problem})
 	}
 	for _, failure := range m.Failures {
+		definitionScope, typeProblems := visibleDefinitions(m.Definitions, m.failureImports[failure.Name])
+		for _, problem := range typeProblems {
+			ds = append(ds, Diagnostic{failure.Line, 1, problem})
+		}
 		for _, field := range failure.Fields {
-			if err := validateTypeRefs(field.Type, m.Definitions, map[string]bool{}); err != nil {
+			if err := validateTypeRefs(field.Type, definitionScope, map[string]bool{}); err != nil {
 				ds = append(ds, Diagnostic{field.Line, 1, fmt.Sprintf("%s.%s: %v", failure.Name, field.Name, err)})
 			}
 		}
@@ -750,6 +757,14 @@ func buildModule(key string, files []*moduleFileDecls) (*Module, []Diagnostic) {
 	for name := range m.Exports {
 		if m.Actions[name] != nil {
 			m.Words[name] = name
+			decl, _ := parseActionDecl(m.Actions[name].Text)
+			possible := append([]string(nil), decl.Failures...)
+			possible = append(possible, modulePossibleFailures(m, name, map[string]bool{})...)
+			for _, failure := range uniqueSorted(possible) {
+				if m.Failures[failure] == nil || !m.Exports[failure] {
+					ds = append(ds, Diagnostic{m.Actions[name].Line, 1, fmt.Sprintf("exported action %s exposes failure %s, which must be defined and exported by package %s", name, failure, m.Name)})
+				}
+			}
 		}
 	}
 	for _, f := range files {

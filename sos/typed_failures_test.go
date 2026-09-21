@@ -133,6 +133,91 @@ capture ping called outcome
 	}
 }
 
+func TestTypedFailureCapturePreservesNativeResult(t *testing.T) {
+	dir := t.TempDir()
+	source := `import "std/text" as text
+capture text.upper with "hello" called outcome
+`
+	p, diagnostics := LoadProgram(filepath.Join(dir, "main.sos"), source)
+	if len(diagnostics) != 0 {
+		t.Fatal(diagnostics)
+	}
+	result, err := Run(context.Background(), p, Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	outcome := result.Variables["outcome"].(map[string]any)
+	if outcome["succeeded"] != true || outcome["value"] != "HELLO" {
+		t.Fatalf("outcome = %#v", outcome)
+	}
+}
+
+func TestExportedActionRequiresExportedFailure(t *testing.T) {
+	dir := t.TempDir()
+	mod := filepath.Join(dir, "service")
+	if err := os.MkdirAll(mod, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(mod, "service.sos"), []byte(`package service
+export fetch
+define failure Missing:
+to fetch may fail with Missing:
+  fail Missing with "missing"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, diagnostics := LoadProgram(filepath.Join(dir, "main.sos"), `import "./service" as service
+show "loaded"
+`)
+	if len(diagnostics) == 0 || !strings.Contains(diagnostics[0].Message, "exposes failure Missing") {
+		t.Fatalf("diagnostics = %+v", diagnostics)
+	}
+}
+
+func TestModuleFailurePayloadCanUseImportedRecordAndReportsModuleFrame(t *testing.T) {
+	dir := t.TempDir()
+	models := filepath.Join(dir, "models")
+	service := filepath.Join(dir, "service")
+	for _, path := range []string{models, service} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(models, "models.sos"), []byte(`package models
+export Address
+define Address:
+  city as text
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(service, "service.sos"), []byte(`package service
+import "../models" as models
+export Missing
+export fetch
+define failure Missing:
+  address as Address
+to fetch may fail with Missing:
+  fail Missing with "missing":
+    address from {city: "Paris"}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p, diagnostics := LoadProgram(filepath.Join(dir, "main.sos"), `import "./service" as service
+call service.fetch
+`)
+	if len(diagnostics) != 0 {
+		t.Fatal(diagnostics)
+	}
+	result, err := Run(context.Background(), p, Options{Dir: dir, SourcePath: filepath.Join(dir, "main.sos")})
+	if err == nil || result.Failure["kind"] != "Missing" {
+		t.Fatalf("result = %#v, error = %v", result, err)
+	}
+	frames, ok := result.Failure["frames"].([]map[string]any)
+	if !ok || len(frames) == 0 || !strings.Contains(frames[0]["path"].(string), "service") {
+		t.Fatalf("frames = %#v", result.Failure["frames"])
+	}
+}
+
 func TestTypedFailureCapturePreservesHiddenNameBinding(t *testing.T) {
 	source := `define failure Missing:
 to fetch returning text may fail with Missing:

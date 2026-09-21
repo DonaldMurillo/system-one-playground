@@ -611,8 +611,12 @@ func (r *runtime) failureStatementFrame(s *Statement) map[string]any {
 	if s == nil {
 		return nil
 	}
+	path := r.logicalPath
+	if len(r.debugStack) > 0 && r.debugStack[len(r.debugStack)-1].Path != "" {
+		path = r.debugStack[len(r.debugStack)-1].Path
+	}
 	return map[string]any{
-		"name": r.logicalPath, "path": r.logicalPath, "line": s.Line,
+		"name": path, "path": path, "line": s.Line,
 		"column": 1, "kind": s.Kind, "text": s.Text,
 	}
 }
@@ -1608,6 +1612,9 @@ func (r *runtime) captureTargetHasResult(target string) bool {
 	if strings.Contains(target, ".") {
 		alias, action, _ := strings.Cut(target, ".")
 		if mod := r.imports[alias]; mod != nil {
+			if _, ok := mod.Native[action]; ok {
+				return true
+			}
 			if fn := mod.Actions[action]; fn != nil {
 				decl, _ := parseActionDecl(fn.Text)
 				return decl.HasResult
