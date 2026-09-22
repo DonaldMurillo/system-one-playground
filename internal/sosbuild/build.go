@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"html"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -281,55 +282,103 @@ func Build(ctx context.Context, opts BuildOptions) error {
 
 type stagedPath struct{ staged, destination string }
 
-// publishStagedPaths replaces destinations only after every build output has
-// been materialized successfully. Existing artifacts are moved aside and
-// restored if publishing any member fails.
+// publishStagedPaths replaces each destination atomically only after every
+// build output has been materialized. Backups are copies, not renames, so a
+// crash can never leave a previously published destination temporarily absent.
 func publishStagedPaths(paths []stagedPath) error {
 	type movedPath struct {
 		destination, backup string
 		published           bool
 	}
 	moved := make([]movedPath, 0, len(paths))
-	rollback := func() {
+	rollback := func() error {
+		var problems []string
 		for i := len(moved) - 1; i >= 0; i-- {
 			item := moved[i]
-			if item.published {
-				_ = os.RemoveAll(item.destination)
-			}
-			if item.backup != "" {
-				_ = os.Rename(item.backup, item.destination)
+			if item.published && item.backup != "" {
+				if info, err := os.Stat(item.backup); err == nil && info.IsDir() {
+					if err := os.RemoveAll(item.destination); err != nil {
+						problems = append(problems, fmt.Sprintf("remove %s: %v", item.destination, err))
+						continue
+					}
+					if err := os.Rename(item.backup, item.destination); err != nil {
+						problems = append(problems, fmt.Sprintf("restore %s: %v", item.destination, err))
+					}
+					continue
+				}
+				if err := atomicReplace(item.backup, item.destination); err != nil {
+					problems = append(problems, fmt.Sprintf("restore %s: %v", item.destination, err))
+				}
+			} else if item.published {
+				if err := os.Remove(item.destination); err != nil && !errors.Is(err, os.ErrNotExist) {
+					problems = append(problems, fmt.Sprintf("remove %s: %v", item.destination, err))
+				}
 			}
 		}
+		if len(problems) > 0 {
+			return errors.New(strings.Join(problems, "; "))
+		}
+		return nil
+	}
+	fail := func(err error) error {
+		if rollbackErr := rollback(); rollbackErr != nil {
+			return fmt.Errorf("%w; rollback failed: %v", err, rollbackErr)
+		}
+		return err
 	}
 	for _, path := range paths {
 		item := movedPath{destination: path.destination}
-		if _, err := os.Lstat(path.destination); err == nil {
+		if info, err := os.Stat(path.destination); err == nil {
 			placeholder, err := os.CreateTemp(filepath.Dir(path.destination), ".sosbuild-backup-")
 			if err != nil {
-				rollback()
-				return err
+				return fail(err)
 			}
 			item.backup = placeholder.Name()
-			_ = placeholder.Close()
-			_ = os.Remove(item.backup)
-			if err := os.Rename(path.destination, item.backup); err != nil {
-				rollback()
-				return err
+			if info.IsDir() {
+				_ = placeholder.Close()
+				_ = os.Remove(item.backup)
+				if err := os.Rename(path.destination, item.backup); err != nil {
+					return fail(err)
+				}
+				moved = append(moved, item)
+				if err := os.Rename(path.staged, path.destination); err != nil {
+					return fail(err)
+				}
+				moved[len(moved)-1].published = true
+				continue
+			}
+			source, err := os.Open(path.destination)
+			if err == nil {
+				_, err = io.Copy(placeholder, source)
+				_ = source.Close()
+			}
+			if err == nil {
+				err = placeholder.Chmod(info.Mode())
+			}
+			if err == nil {
+				err = placeholder.Sync()
+			}
+			if closeErr := placeholder.Close(); err == nil {
+				err = closeErr
+			}
+			if err != nil {
+				_ = os.Remove(item.backup)
+				return fail(err)
 			}
 		} else if !errors.Is(err, os.ErrNotExist) {
-			rollback()
-			return err
+			return fail(err)
 		}
 		moved = append(moved, item)
-		if err := os.Rename(path.staged, path.destination); err != nil {
-			rollback()
-			return err
+		if err := atomicReplace(path.staged, path.destination); err != nil {
+			return fail(err)
 		}
 		moved[len(moved)-1].published = true
 	}
 	for _, item := range moved {
 		if item.backup != "" {
-			_ = os.RemoveAll(item.backup)
+			if err := os.RemoveAll(item.backup); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("remove build backup: %w", err)
+			}
 		}
 	}
 	return nil

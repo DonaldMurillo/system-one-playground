@@ -3,6 +3,9 @@
 This project uses a local Python stdio plugin to demonstrate the complete
 single-owner stream lifecycle without network access. Python 3.10 or newer must
 be available on `PATH`.
+On Windows, the bundled `python3.cmd` adapter uses the standard `py -3`
+launcher, so a normal python.org installation works without a `python3.exe`
+alias.
 
 From this directory:
 
