@@ -35,6 +35,13 @@ as pending analysis; **Analyze** or **Run** performs the configured requests.
 - `http` is a bounded loopback JSON service with typed request validation,
   response headers, exactly-once response ownership, and graceful shutdown.
 
+## Filesystem and background services
+
+- `files` demonstrates the canonical filesystem surface: bounded `walk through`
+  and streaming `stream ... under` traversal, explicit write policy with atomic
+  replacement, copy/move with explicit overwrite wording, reserved typed
+  failures, and a recursive background watcher.
+
 ## External modules
 
 - `external-command` wraps an existing CLI without a shell.

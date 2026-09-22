@@ -109,6 +109,9 @@ type StreamEvent struct {
 	EndedAt         *time.Time     `json:"endedAt,omitempty"`
 	Failure         map[string]any `json:"failure,omitempty"`
 	Reason          string         `json:"reason,omitempty"`
+	Root            string         `json:"root,omitempty"`
+	Bound           int            `json:"bound,omitempty"`
+	Watching        bool           `json:"watching,omitempty"`
 }
 
 type Options struct {

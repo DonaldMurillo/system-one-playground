@@ -22,6 +22,7 @@ var forms = []struct{ kind, pattern string }{
 	{"remember", `^remember (.+) called ([A-Za-z_]\w*)$`},
 	{"find", `^find files under (.+) matching (.+) called ([A-Za-z_]\w*)$`},
 	{"readEach", `^read each (\w+) in (.+) as lines of json into (\w+)$`},
+	{"readFile", `^read file (.+) as text called ([A-Za-z_]\w*)$`},
 	{"read", `^read (.+) as (json|text|lines of json) called (\w+)$`},
 	{"httpGet", `^get (text|JSON) from (.+?)(?: expecting status (\d+) through (\d+))? called ([A-Za-z_]\w*)$`},
 	{"httpPost", `^post (.+?) as JSON to (.+?) called ([A-Za-z_]\w*)$`},
@@ -35,6 +36,20 @@ var forms = []struct{ kind, pattern string }{
 	{"sort", `^sort (\w+) by (.+?)(?: (ascending|descending))?$`},
 	{"group", `^group (\w+) by (.+) called (\w+)$`},
 	{"folder", `^create folder (.+) if missing$`},
+	{"writeFile", `^write (.+?)( atomically)? to file (.+)$`},
+	{"appendFile", `^append (.+) to file (.+)$`},
+	{"checkExists", `^check whether (entry|file|folder) (.+) exists called ([A-Za-z_]\w*)$`},
+	{"inspectEntry", `^inspect (entry|file|folder) (.+) called ([A-Za-z_]\w*)$`},
+	{"listEntries", `^list (entries|files|folders) in folder (.+) called ([A-Za-z_]\w*)$`},
+	{"walkThrough", `^walk through folder (.+) at most (\d+) entries called ([A-Za-z_]\w*)$`},
+	{"createFoldersThrough", `^create folders through (.+)$`},
+	{"copyEntry", `^copy (file|folder) (.+?) to (.+)$`},
+	{"moveEntry", `^move (file|folder) (.+?) to (.+)$`},
+	{"removeFile", `^remove file (.+)$`},
+	{"removeEmptyFolder", `^remove empty folder (.+)$`},
+	{"removeFolder", `^remove folder (.+) including its contents$`},
+	{"streamFiles", `^stream (files|entries|folders) under folder (.+) called ([A-Za-z_]\w*)$`},
+	{"watchFolder", `^watch folder (.+?)( recursively)? called ([A-Za-z_]\w*)$`},
 	{"make", `^(?:make|assign|set) (\w+) (.+)$`},
 	{"openStream", `^stream ([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?)(?: with (.+?))? called ([A-Za-z_]\w*)$`},
 	{"closeStream", `^close stream ([A-Za-z_]\w*)$`},
@@ -131,7 +146,7 @@ func match(kind, text string) []string {
 }
 
 func Keywords() []string {
-	return append([]string{"wait for", "to be quiet for", "limit", "handle each", "handle only the newest", "handle one", "keeping the first", "keeping the latest", "keeping only the latest waiting", "ignoring new", "rejecting new", "rejecting excess", "canceling an older", "acknowledging completed effects are not reversed", "or after", "into batches of at most", "ignore consecutive duplicate", "keep only changes in", "keep each", "listen to", "then stop normally", "at least every", "to finish within", "at once", "one at a time", "while busy", "use"}, originalKeywords()...)
+	return append([]string{"wait for", "to be quiet for", "limit", "handle each", "handle only the newest", "handle one", "keeping the first", "keeping the latest", "keeping only the latest waiting", "ignoring new", "rejecting new", "rejecting excess", "canceling an older", "acknowledging completed effects are not reversed", "or after", "into batches of at most", "ignore consecutive duplicate", "keep only changes in", "keep each", "listen to", "then stop normally", "at least every", "to finish within", "at once", "one at a time", "while busy", "use", "read file", "write to file", "check whether", "inspect entry", "inspect file", "inspect folder", "list entries in folder", "list files in folder", "list folders in folder", "walk through folder", "stream files under folder", "watch folder", "copy file", "copy folder", "move file", "move folder", "remove file", "remove empty folder", "remove folder", "create folders through", "atomically", "recursively", "folders deep", "following symbolic links", "without following symbolic links", "including files and folders", "including its contents", "only if it does not exist", "only if the destination does not exist", "replacing an existing file", "matching", "excluding"}, originalKeywords()...)
 }
 
 func originalKeywords() []string {
@@ -240,6 +255,15 @@ func Parse(source string) (*Program, []Diagnostic) {
 		}
 		kind := classifyLine(text)
 		if kind == "" && fr.parent != nil {
+			// Filesystem modifier continuations classify only under their
+			// owning statement, like schema fields under expect headers.
+			if isFileForm(fr.parent.Kind) {
+				if continuation := classifyFileContinuation(text); continuation != "" && fileContinuationAllowed(fr.parent.Kind, continuation) {
+					kind = continuation
+				}
+			}
+		}
+		if kind == "" && fr.parent != nil {
 			switch fr.parent.Kind {
 			case "define", "failure":
 				if _, err := parseFieldDecl(text); err == nil {
@@ -346,7 +370,7 @@ func Parse(source string) (*Program, []Diagnostic) {
 				}
 			} else {
 				for _, c := range s.Body {
-					if !block && c.Kind != "handler" {
+					if !block && c.Kind != "handler" && !fileContinuationAllowed(s.Kind, c.Kind) {
 						ds = append(ds, Diagnostic{c.Line, 1, "only on handlers may follow this operation"})
 					}
 				}

@@ -26,6 +26,10 @@ type streamMetricsSource interface {
 	streamMetrics() (itemsBuffered, creditAvailable int)
 }
 
+type streamScopeSource interface {
+	streamScope() (root string, bound int, watching bool)
+}
+
 // streamStopRequester lets a multiplexed producer request its own graceful
 // end without cancelling the process-wide read context.
 type streamStopRequester interface{ requestStreamStop() error }
@@ -214,6 +218,9 @@ func (s *streamHandle) snapshot(event string) StreamEvent {
 	s.mu.Unlock()
 	if metrics, ok := s.source.(streamMetricsSource); ok {
 		snapshot.ItemsBuffered, snapshot.CreditAvailable = metrics.streamMetrics()
+	}
+	if scoped, ok := s.source.(streamScopeSource); ok {
+		snapshot.Root, snapshot.Bound, snapshot.Watching = scoped.streamScope()
 	}
 	if stats, ok := s.source.(interface{ transformStats() map[string]any }); ok {
 		snapshot.Policy = stats.transformStats()

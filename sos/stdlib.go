@@ -133,5 +133,10 @@ func stdModule(key string) (*Module, bool) {
 			m.Words[s] = n
 		}
 	}
+	m.Definitions = map[string]*RecordDef{}
+	for name, definition := range stdModuleDefinitions(key) {
+		m.Definitions[name] = definition
+		m.Exports[name] = true
+	}
 	return m, true
 }

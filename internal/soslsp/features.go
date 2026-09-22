@@ -719,6 +719,12 @@ type lexicalScope struct {
 	bindings []*lexicalBinding
 }
 
+var ownedHandleKinds = map[string]bool{
+	"openStream":  true,
+	"streamFiles": true,
+	"watchFolder": true,
+}
+
 // ownedStreamOccurrences resolves a stream handle through lexical ownership
 // scopes before returning edits. It deliberately declines non-stream symbols,
 // which continue through the general reference path.
@@ -764,7 +770,7 @@ func ownedStreamOccurrences(text string, cursorLine int, word string) ([]lspRang
 		return nil
 	}
 	selected := resolve(lineScopes[cursorLine], cursorLine, word)
-	if selected == nil || selected.kind != "openStream" {
+	if selected == nil || !ownedHandleKinds[selected.kind] {
 		return nil, false
 	}
 	var occurrences []lspRange

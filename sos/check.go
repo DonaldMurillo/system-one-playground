@@ -684,6 +684,54 @@ func analyze(p *Program) []Diagnostic {
 				if m[1] != "" {
 					checkExpr(s, m[1], false)
 				}
+			case "readFile":
+				checkExpr(s, m[1], false)
+				names[m[2]] = true
+				types[m[2]] = TypeRef{Name: "text"}
+			case "writeFile":
+				checkExpr(s, m[1], false)
+				checkExpr(s, m[3], false)
+				checkFileFormModifiers(s, add, checkExpr)
+			case "appendFile":
+				checkExpr(s, m[1], false)
+				checkExpr(s, m[2], false)
+			case "checkExists":
+				checkExpr(s, m[2], false)
+				names[m[3]] = true
+				types[m[3]] = TypeRef{Name: "boolean"}
+			case "inspectEntry":
+				checkExpr(s, m[2], false)
+				names[m[3]] = true
+				types[m[3]] = TypeRef{Name: "FileEntry"}
+			case "listEntries":
+				checkExpr(s, m[2], false)
+				names[m[3]] = true
+				types[m[3]] = TypeRef{Element: &TypeRef{Name: "FileEntry"}}
+			case "walkThrough":
+				checkExpr(s, m[1], false)
+				if limit, err := strconv.ParseFloat(m[2], 64); err == nil && limit <= 0 {
+					add(s, "walk through requires a positive entry bound")
+				}
+				names[m[3]] = true
+				types[m[3]] = TypeRef{Element: &TypeRef{Name: "FileEntry"}}
+				checkFileFormModifiers(s, add, checkExpr)
+			case "streamFiles", "watchFolder":
+				root := m[2]
+				if s.Kind == "watchFolder" {
+					root = m[1]
+				}
+				checkExpr(s, root, false)
+				names[m[3]] = true
+				delete(types, m[3])
+				checkFileFormModifiers(s, add, checkExpr)
+			case "copyEntry", "moveEntry":
+				checkExpr(s, m[2], false)
+				checkExpr(s, m[3], false)
+				checkFileFormModifiers(s, add, checkExpr)
+			case "createFoldersThrough", "removeFile", "removeEmptyFolder", "removeFolder":
+				checkExpr(s, m[1], false)
+			case "fsMatch", "fsExclude":
+				checkExpr(s, m[1], false)
 			case "handler":
 				if m[1] == "failure" {
 					_, binding, fields, typed := failureHandlerHeader(s.Text)
@@ -904,6 +952,16 @@ func checkStreamOwnership(p *Program, actions map[string]*Statement) []Diagnosti
 					continue
 				}
 				owned[m[3]] = &streamOwnershipState{line: s.Line, obligations: streamActionObligations(p, "http.listen")}
+			case "streamFiles", "watchFolder":
+				if openFailureHandlerRecovers(s) {
+					ds = append(ds, Diagnostic{s.Line, 1, "an opening failure handler cannot recover and continue because no stream handle exists; finish, fail, stop, or pass the failure on"})
+					continue
+				}
+				if existing := owned[m[3]]; existing != nil && !existing.consumed {
+					ds = append(ds, Diagnostic{s.Line, 1, "stream " + m[3] + " is already active; consume or close it before reopening"})
+					continue
+				}
+				owned[m[3]] = &streamOwnershipState{line: s.Line}
 			case "streamFor":
 				name := strings.TrimSpace(m[2])
 				state := owned[name]
@@ -1292,6 +1350,25 @@ func checkActionContracts(p *Program, actions map[string]*Statement, defs map[st
 							continue
 						}
 						add(s.Line, "%s may pass %s on; handle it or add it to \"may fail with\"", name, failure)
+					}
+				case "readFile", "writeFile", "appendFile", "checkExists", "inspectEntry", "listEntries", "walkThrough", "copyEntry", "moveEntry", "createFoldersThrough", "removeFile", "removeEmptyFolder", "removeFolder":
+					possible := fileFormFailures(s.Kind)
+					checkFailureHandlers(s, possible, add)
+					visit(s.Body, true)
+					for _, failure := range possible {
+						if !declared[failure] && !callHasFailureHandler(s, failure) {
+							add(s.Line, "%s may pass %s on; handle it or add it to \"may fail with\"", fileFormLabel(s.Kind), failure)
+						}
+					}
+				case "streamFiles", "watchFolder":
+					possible := fileFormFailures(s.Kind)
+					checkFailureHandlers(s, possible, add)
+					streamFailures[m[3]] = possible
+					visit(s.Body, true)
+					for _, failure := range possible {
+						if !declared[failure] && !callHasFailureHandler(s, failure) {
+							add(s.Line, "%s may pass %s on while opening a stream; handle it or add it to \"may fail with\"", fileFormLabel(s.Kind), failure)
+						}
 					}
 				case "handler":
 					if match(s.Kind, s.Text)[1] != "failure" {

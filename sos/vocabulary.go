@@ -61,6 +61,10 @@ var reservedWords = func() map[string]bool {
 	for _, k := range Keywords() {
 		set[strings.Fields(k)[0]] = true
 	}
+	// Canonical filesystem inspection always requires an explicit entry kind
+	// ("inspect entry/file/folder ..."), so a bare imported action named
+	// inspect remains unambiguous and backward compatible.
+	delete(set, "inspect")
 	for _, w := range []string{"print", "emit", "set", "stop", "order", "load", "write", "store", "collect", "retain", "remove", "filter", "criterion"} {
 		set[w] = true
 	}
@@ -470,6 +474,12 @@ func moduleEntries(lib vocabLib, enabled bool) []VocabularyEntry {
 			e.Import = `import "` + lib.path + `"`
 			e.Patterns = sentencePatterns(e.Alias, words, len(e.Params), false)
 		}
+		if english := fileEnglishPatterns(lib.key, name); len(english) > 0 {
+			e.Patterns = append(e.Patterns, english...)
+			if named := fileNamedArgumentPattern(e.Alias, name); named != "" {
+				e.Patterns = append(e.Patterns, named)
+			}
+		}
 		out = append(out, e)
 	}
 	return out
@@ -511,24 +521,31 @@ func stdPreviewEntries(enabledKeys map[string]bool) []VocabularyEntry {
 			continue
 		}
 		e := VocabularyEntry{
-			ID:          op.ImportPath + "." + op.Name,
-			Library:     op.ImportPath,
-			Alias:       op.Package,
-			Name:        op.Name,
-			Kind:        "native",
-			Description: op.Description,
-			Result:      op.Result,
-			Effects:     append([]string(nil), op.Effects...),
-			Targets:     append([]string(nil), op.Targets...),
-			Origin:      "standard library",
-			Enabled:     false,
-			Import:      `import "` + op.ImportPath + `"`,
+			ID:               op.ImportPath + "." + op.Name,
+			Library:          op.ImportPath,
+			Alias:            op.Package,
+			Name:             op.Name,
+			Kind:             "native",
+			Description:      op.Description,
+			Result:           op.Result,
+			Effects:          append([]string(nil), op.Effects...),
+			Targets:          append([]string(nil), op.Targets...),
+			PossibleFailures: append([]string(nil), op.PossibleFailures...),
+			Origin:           "standard library",
+			Enabled:          false,
+			Import:           `import "` + op.ImportPath + `"`,
 		}
 		for _, p := range op.Params {
 			e.Params = append(e.Params, VocabularyParam{Name: p.Name, Type: p.Type})
 		}
 		e.Synonyms = stdSynonyms(op.ImportPath, op.Name)
 		e.Patterns = sentencePatterns(op.Package, append([]string{op.Name}, e.Synonyms...), len(e.Params), false)
+		if english := fileEnglishPatterns(op.ImportPath, op.Name); len(english) > 0 {
+			e.Patterns = append(e.Patterns, english...)
+			if named := fileNamedArgumentPattern(op.Package, op.Name); named != "" {
+				e.Patterns = append(e.Patterns, named)
+			}
+		}
 		out = append(out, e)
 	}
 	return out
@@ -680,8 +697,14 @@ func actionEffects(mod *Module, name string, seen map[string]bool) []string {
 				effects["jev"] = true
 			}
 			switch st.Kind {
-			case "read", "readEach", "find", "save", "folder":
+			case "read", "readEach", "find", "save":
 				effects["filesystem"] = true
+			default:
+				if isFileForm(st.Kind) {
+					for _, effect := range fileFormEffects[st.Kind] {
+						effects[effect] = true
+					}
+				}
 			case "show":
 				effects["output"] = true
 			case "call":

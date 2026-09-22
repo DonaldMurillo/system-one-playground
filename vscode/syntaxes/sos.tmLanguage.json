@@ -113,11 +113,11 @@
       "patterns": [
         {
           "name": "keyword.control.sos",
-          "match": "\\b(?:evaluate|criterion|package|import|export|define|failure|argument|option|switch|to|call|returning|streaming|stream|send|close|collect|may|finish|fail|recover|capture|return|while|repeat|set|emit|judge|score|command|describe|expect|remember|find|read|require|keep|sort|group|create|make|assign|when|take|classify|append|save|show|for|map|stop|print)\\b"
+          "match": "\\b(?:evaluate|criterion|package|import|export|define|failure|argument|option|switch|to|call|returning|streaming|stream|send|close|collect|may|finish|fail|recover|capture|return|while|repeat|set|emit|judge|score|command|describe|expect|remember|find|read|require|keep|sort|group|create|make|assign|when|take|classify|append|save|show|for|map|stop|print|list|walk|watch|inspect|remove|move|copy|check)\\b"
         },
         {
           "name": "keyword.control.operator.sos",
-          "match": "\\b(?:each|in|as|into|on|failure|called|with|where|by|from|under|named|matching|if|missing|numbered|otherwise|and|or|not|of|count|first|last|items|default|choices|is|ascending|descending|existing|off|at|most|running|collecting|failures|rethrow|pass|recover|using|reading|plus|minus|times)\\b"
+          "match": "\\b(?:each|in|as|into|on|failure|called|with|where|by|from|under|named|matching|if|missing|numbered|otherwise|and|or|not|of|count|first|last|items|default|choices|is|ascending|descending|existing|off|at|most|running|collecting|failures|rethrow|pass|recover|using|reading|plus|minus|times|through|recursively|whether|exists|atomically|replacing|including|contents|its|empty|without|following|symbolic|links|deep|only|entries|folders|entry)\\b"
         },
         {
           "name": "keyword.control.operator.sos",
@@ -129,7 +129,7 @@
       "patterns": [
         {
           "name": "storage.type.sos",
-          "match": "\\b(?:optional|text|timestamp|duration|folder|list|json|table|number|integer|boolean|switch|[A-Z][A-Za-z0-9_]*)\\b"
+          "match": "\\b(?:optional|text|timestamp|duration|file|folder|list|json|table|number|integer|boolean|switch|[A-Z][A-Za-z0-9_]*)\\b"
         }
       ]
     },

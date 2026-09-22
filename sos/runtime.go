@@ -1192,6 +1192,8 @@ func (r *runtime) execute(s *Statement) error {
 			r.env[m[3]] = v
 		}
 		return e
+	case "readFile", "writeFile", "appendFile", "checkExists", "inspectEntry", "listEntries", "walkThrough", "streamFiles", "watchFolder", "copyEntry", "moveEntry", "createFoldersThrough", "removeFile", "removeEmptyFolder", "removeFolder", "folder":
+		return r.executeFileForm(s, m)
 	case "find":
 		dir, e := r.path(m[1])
 		if e != nil {
@@ -1381,12 +1383,6 @@ func (r *runtime) execute(s *Statement) error {
 		}
 		r.env[m[3]] = groups
 		return nil
-	case "folder":
-		p, e := r.path(m[1])
-		if e != nil {
-			return e
-		}
-		return os.MkdirAll(p, 0755)
 	case "map":
 		return r.parallelMap(s, m)
 	case "for":
@@ -1639,6 +1635,123 @@ func (r *runtime) recordHTTPRuntimeFailure(line int, err error) {
 	}
 }
 
+func fileFormModifiers(s *Statement) (policy, include, exclude string, depth int, follow bool) {
+	for _, child := range s.Body {
+		switch child.Kind {
+		case "fsPolicy":
+			if strings.HasPrefix(child.Text, "only if") {
+				policy = "create"
+			} else {
+				policy = "replace"
+			}
+		case "fsMatch":
+			include = match("fsMatch", child.Text)[1]
+		case "fsExclude":
+			exclude = match("fsExclude", child.Text)[1]
+		case "fsDepth":
+			depth, _ = strconv.Atoi(match("fsDepth", child.Text)[1])
+		case "fsLinks":
+			follow = !strings.HasPrefix(child.Text, "without ")
+		}
+	}
+	return
+}
+
+func quotedText(value string) string { return strconv.Quote(value) }
+
+// executeFileForm is the single canonical-English adapter into std/files.
+// It intentionally contains no host filesystem logic: module calls and
+// English forms therefore share validation, failures, effects, and behavior.
+func (r *runtime) executeFileForm(s *Statement, m []string) error {
+	mod, ok := stdModule("std/files")
+	if !ok {
+		return fmt.Errorf("std/files is unavailable")
+	}
+	policy, include, exclude, depth, follow := fileFormModifiers(s)
+	if include == "" {
+		include = "[]"
+	}
+	if exclude == "" {
+		exclude = "[]"
+	}
+	boolExpr := "false"
+	if follow {
+		boolExpr = "true"
+	}
+	call := func(action string, args []string, binding string) error {
+		return r.callModule(s, mod, action, "files."+action, args, binding)
+	}
+	open := func(action string, args []string, binding string) error {
+		op := mod.Native[action]
+		stream, err := r.openNativeModuleStream(mod, op, "files."+action, binding, s.Line, args)
+		if err == nil {
+			r.env[binding] = stream
+		}
+		return err
+	}
+	switch s.Kind {
+	case "readFile":
+		return call("read_text", []string{m[1]}, m[2])
+	case "writeFile":
+		action := "write_text"
+		if m[2] != "" {
+			action = "write_text_atomically"
+		}
+		return call(action, []string{m[3], m[1], quotedText(policy)}, "")
+	case "appendFile":
+		return call("append_text", []string{m[2], m[1]}, "")
+	case "checkExists":
+		return call("exists", []string{m[2]}, m[3])
+	case "inspectEntry":
+		return call("inspect", []string{m[2]}, m[3])
+	case "listEntries":
+		return call("list", []string{m[2], quotedText(m[1])}, m[3])
+	case "walkThrough":
+		return call("walk", []string{m[1], m[2], include, exclude, "[]", strconv.Itoa(depth), boolExpr}, m[3])
+	case "streamFiles":
+		kinds := "[]"
+		if m[1] == "files" {
+			kinds = `["file"]`
+		} else if m[1] == "folders" {
+			kinds = `["folder"]`
+		}
+		return open("stream", []string{m[2], include, exclude, kinds, strconv.Itoa(depth), boolExpr}, m[3])
+	case "watchFolder":
+		watchDepth := 1
+		if m[2] != "" {
+			watchDepth = depth
+			if watchDepth == 0 {
+				watchDepth = 0
+			}
+		}
+		return open("watch", []string{m[1], include, exclude, "[]", strconv.Itoa(watchDepth), boolExpr}, m[3])
+	case "copyEntry":
+		action := "copy_file"
+		args := []string{m[2], m[3], quotedText(policy)}
+		if m[1] == "folder" {
+			action = "copy_folder"
+			args = append(args, exclude)
+		}
+		return call(action, args, "")
+	case "moveEntry":
+		return call("move", []string{m[2], m[3], quotedText(policy)}, "")
+	case "folder", "createFoldersThrough":
+		pathExpr := m[1]
+		action := "create_folders"
+		if s.Kind == "folder" {
+			action = "create_folder"
+		}
+		return call(action, []string{pathExpr}, "")
+	case "removeFile":
+		return call("remove_file", []string{m[1]}, "")
+	case "removeEmptyFolder":
+		return call("remove_folder", []string{m[1]}, "")
+	case "removeFolder":
+		return call("remove_folder_recursively", []string{m[1]}, "")
+	}
+	return fmt.Errorf("unsupported filesystem construction %q", s.Kind)
+}
+
 // callImported executes one qualified call with definition-site semantics:
 // the target's module scope (its own actions, schemas, and imports) replaces
 // the caller's, and the body runs in a fresh environment holding only its
@@ -1757,6 +1870,8 @@ func (r *runtime) callModule(s *Statement, mod *Module, action, display string, 
 			if mod.external != nil {
 				typ, parseErr := parseType(op.Result, true)
 				matches = parseErr == nil && typeMatchesRef(out, typ, mod.Definitions)
+			} else if typ, parseErr := parseType(op.Result, true); parseErr == nil && r.definitions[typ.Name] != nil {
+				matches = typeMatchesRef(out, typ, r.definitions)
 			}
 			if !matches {
 				return fmt.Errorf("%s returned %s; expected %s", display, valueTypeName(out), op.Result)

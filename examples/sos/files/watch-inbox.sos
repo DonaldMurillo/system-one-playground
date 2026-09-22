@@ -1,0 +1,27 @@
+# A background service: watch an inbox recursively and process each arriving
+# document. The watcher is an independently owned stream, so cancelling or
+# closing it never affects another watcher opened by the same program.
+
+create folder "incoming" if missing
+create folders through "processed/2026"
+
+make handled 0
+watch folder "incoming" recursively called changes
+  without following symbolic links
+
+for each change from changes:
+  when kind of change is "created":
+    when entry_kind of change is "file":
+      make destination "processed/2026/{relative_path of change}"
+      move file path of change to destination
+        only if the destination does not exist
+      make line "filed {relative_path of change}"
+      append line to file "processed/activity.log"
+      assign handled handled + 1
+      show "Filed {relative_path of change} (total {handled})"
+  when kind of change is "overflowed":
+    # The operating system dropped events; rescan rather than trust the gap.
+    show "Watcher overflowed at {relative_path of change}; rescan required"
+    stop
+
+show "Watcher stopped after filing {handled} documents"

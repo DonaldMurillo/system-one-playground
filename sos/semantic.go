@@ -153,6 +153,11 @@ func Analyze(ctx context.Context, source string, opts AnalyzeOptions) (*Analysis
 	}
 	out.SourceHash = semanticSourceHash(source)
 	out.PolicyHash = semanticPolicyHash(policy)
+	// The compatibility rewrite runs after the source hash (staleness is
+	// judged on the author's bytes) and before scanning, so canonical output,
+	// diagnostics, and decisions all see the modern forms. It preserves line
+	// numbers exactly.
+	source = canonicalizeFileCompatibility(source)
 	a.scan = scanSemantic(source)
 	if opts.Modules != nil && opts.Modules.vocab != nil {
 		// Resolvable sentence calls are canonical: they must never fall

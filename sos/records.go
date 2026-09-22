@@ -87,7 +87,7 @@ var failureCommonFields = map[string]bool{
 }
 
 func builtInFailures() map[string]*FailureDef {
-	return map[string]*FailureDef{
+	failures := map[string]*FailureDef{
 		"StreamLimitExceeded": {
 			Name: "StreamLimitExceeded",
 			Fields: []RecordField{
@@ -135,6 +135,10 @@ func builtInFailures() map[string]*FailureDef {
 			},
 		},
 	}
+	for kind, definition := range fileFailures() {
+		failures[kind] = definition
+	}
+	return failures
 }
 
 func parseFailureDefinition(statement *Statement) (*FailureDef, []Diagnostic) {
@@ -183,6 +187,10 @@ func collectRecordDefinitions(stmts []*Statement) (map[string]*RecordDef, []Diag
 			continue
 		}
 		name := match("define", statement.Text)[1]
+		if builtInFileDefinitions()[name] != nil {
+			diagnostics = append(diagnostics, Diagnostic{statement.Line, 1, "record " + name + " is reserved by the SysOneScript runtime"})
+			continue
+		}
 		if _, exists := defs[name]; exists {
 			diagnostics = append(diagnostics, Diagnostic{statement.Line, 1, "duplicate definition " + name})
 			continue
@@ -239,6 +247,9 @@ func parseRecordDefinition(statement *Statement) (*RecordDef, []Diagnostic) {
 
 func visibleDefinitions(local map[string]*RecordDef, modules map[string]*Module) (map[string]*RecordDef, []string) {
 	result := map[string]*RecordDef{}
+	for name, definition := range builtInFileDefinitions() {
+		result[name] = definition
+	}
 	localNames := map[string]bool{}
 	for name, definition := range local {
 		result[name] = definition

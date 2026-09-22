@@ -1,0 +1,34 @@
+# Incremental traversal for large trees: entries stream in depth-first
+# lexical order with backpressure, so the consumer never materializes the
+# whole tree. Early stop cancels the walk and continues below the loop.
+
+check whether folder "src" exists called present
+when present is false:
+  show "No src folder here; the walk would fail with FileNotFound"
+  stop
+
+stream files under folder "src" called source_files
+  matching ["*.go", "*.sos"]
+  excluding [".git", "vendor"]
+  at most 8 folders deep
+  without following symbolic links
+
+make total 0
+for each file from source_files:
+  assign total total + 1
+  when total is 5:
+    show "Five source files are enough for this demo; stopping the walk"
+    stop reading
+
+show "Streamed past {total} matching files before stopping"
+
+# Without the early stop the stream finishes on its own and the handle is
+# consumed; a second traversal opens a new, independent stream.
+stream entries under folder "src" called everything
+  without following symbolic links
+
+for each entry from everything:
+  when depth of entry is 1:
+    show "top level: {relative_path of entry}"
+
+show "Second traversal finished independently"
