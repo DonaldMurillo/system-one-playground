@@ -17,7 +17,7 @@ func TestCLIStreamExamples(t *testing.T) {
 		file string
 		want string
 	}{
-		{"main.sos", "Stream opened\n0: event 0\n1: event 1\n2: event 2\nStream finished\n"},
+		{"main.sos", "Watching checkout deployment...\n[queued] release accepted\n[building] container image built\n[testing] smoke tests passed\n[deploying] traffic shifting to new release\n[failed] health check failed\nDeployment failed; stopping live feed\nMonitor stopped without waiting for rollback updates\n"},
 		{"early-stop.sos", "event 0\nevent 1\nevent 2\nStopped intentionally\n"},
 		{"close.sos", "Producer started\nProducer closed\n"},
 		{"collect.sos", "event 0\nevent 1\nevent 2\n"},

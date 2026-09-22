@@ -3,6 +3,7 @@
 
 import json
 import sys
+import time
 
 
 def receive():
@@ -23,21 +24,38 @@ def notification(method, params):
 def run_stream(request):
     params = request["params"]
     action = params["action"]
-    count = params.get("arguments", {}).get("count")
+    arguments = params.get("arguments", {})
+    count = arguments.get("count")
     stream_id = "stream-{}".format(request["id"])
-    send({"jsonrpc": "2.0", "id": request["id"], "result": {"streamId": stream_id, "itemType": "Event"}})
-    sequence = 0
+    item_type = "DeploymentUpdate" if action == "watch_deployment" else "Event"
+    send({"jsonrpc": "2.0", "id": request["id"], "result": {"streamId": stream_id, "itemType": item_type}})
     credit = params["credit"]
+    if action == "watch_deployment":
+        service = arguments["service"]
+        stages = [
+            ("queued", "release accepted"),
+            ("building", "container image built"),
+            ("testing", "smoke tests passed"),
+            ("deploying", "traffic shifting to new release"),
+            ("failed", "health check failed"),
+            ("rolling_back", "restoring the previous release"),
+            ("stable", "previous release restored"),
+        ]
+        for sequence, (status, message) in enumerate(stages):
+            credit = wait_for_credit_or_cancel(stream_id, credit, sequence)
+            if credit is None:
+                return
+            time.sleep(0.35)
+            notification("stream.item", {"streamId": stream_id, "sequence": sequence, "value": {"service": service, "status": status, "message": message}})
+            credit -= 1
+        notification("stream.end", {"streamId": stream_id, "lastSequence": len(stages) - 1})
+        return
+    sequence = 0
     while count is None or sequence < count:
         if credit == 0:
-            control = receive()
-            control_params = control.get("params", {})
-            if control.get("method") == "stream.cancel" and control_params.get("streamId") == stream_id:
-                notification("stream.end", {"streamId": stream_id, "lastSequence": sequence - 1})
+            credit = wait_for_credit_or_cancel(stream_id, credit, sequence)
+            if credit is None:
                 return
-            if control.get("method") != "stream.credit" or control_params.get("streamId") != stream_id:
-                raise RuntimeError("unexpected stream control message")
-            credit += control_params["credit"]
         notification("stream.item", {"streamId": stream_id, "sequence": sequence, "value": {"sequence": sequence, "message": "event {}".format(sequence)}})
         sequence += 1
         credit -= 1
@@ -45,6 +63,19 @@ def run_stream(request):
         notification("stream.error", {"streamId": stream_id, "failure": {"kind": "ConnectionLost", "message": "example connection lost", "retryable": True, "payload": {"after": sequence}}})
     else:
         notification("stream.end", {"streamId": stream_id, "lastSequence": sequence - 1})
+
+
+def wait_for_credit_or_cancel(stream_id, credit, sequence):
+    while credit == 0:
+        control = receive()
+        control_params = control.get("params", {})
+        if control.get("method") == "stream.cancel" and control_params.get("streamId") == stream_id:
+            notification("stream.end", {"streamId": stream_id, "lastSequence": sequence - 1})
+            return None
+        if control.get("method") != "stream.credit" or control_params.get("streamId") != stream_id:
+            raise RuntimeError("unexpected stream control message")
+        credit += control_params["credit"]
+    return credit
 
 
 def main():

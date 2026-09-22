@@ -31,6 +31,21 @@ type = "integer"
 name = "message"
 type = "text"
 
+[[type]]
+name = "DeploymentUpdate"
+
+[[type.field]]
+name = "service"
+type = "text"
+
+[[type.field]]
+name = "status"
+type = "text"
+
+[[type.field]]
+name = "message"
+type = "text"
+
 [[failure]]
 name = "ConnectionLost"
 
@@ -48,6 +63,17 @@ type = "integer"
 
 [action.result]
 type = "stream of Event"
+
+[[action]]
+name = "watch_deployment"
+description = "Watches live deployment stages until completion or cancellation."
+
+[[action.parameter]]
+name = "service"
+type = "text"
+
+[action.result]
+type = "stream of DeploymentUpdate"
 
 [[action]]
 name = "failing"

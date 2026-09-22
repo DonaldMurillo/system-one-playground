@@ -1,10 +1,14 @@
 import "example/streams" as events
 
-# Opening returns after producer startup; consumption remains ordered.
-stream events.finite with 3 called incoming
-show "Stream opened"
+# A deployment is happening in another process. Updates do not exist yet as a
+# list: they arrive over time, and the producer could run indefinitely.
+show "Watching checkout deployment..."
+stream events.watch_deployment with "checkout" called updates
 
-for each event from incoming:
-  show "{sequence of event}: {message of event}"
+for each update from updates:
+  show "[{status of update}] {message of update}"
+  when status of update is "failed":
+    show "Deployment failed; stopping live feed"
+    stop reading
 
-show "Stream finished"
+show "Monitor stopped without waiting for rollback updates"

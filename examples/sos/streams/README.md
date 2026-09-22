@@ -19,7 +19,12 @@ sos run sample.sos
 sos run failure.sos
 ```
 
-`main.sos` consumes a finite producer in sequence. `early-stop.sos` cancels an
+`main.sos` watches a simulated deployment as delayed updates arrive from the
+Python process. When its health check fails, the script reacts immediately and
+cancels the feed, so the plugin's later rollback updates are never emitted.
+This is the practical distinction from looping over a list: the values do not
+exist when the loop begins, work starts on the first update, and stopping the
+consumer stops the producer. `early-stop.sos` cancels an
 infinite producer from inside its loop, while `close.sos` closes before
 consumption. `collect.sos` materializes only under an overflow bound and
 `sample.sos` intentionally cancels after three items. `failure.sos` retains and
