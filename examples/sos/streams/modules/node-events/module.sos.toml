@@ -1,0 +1,88 @@
+schema = 1
+
+[module]
+path = "example/streams-node"
+version = "1.0.0"
+description = "Node.js credit and cancellation stream fixture."
+
+[runtime]
+kind = "stdio"
+protocol = "sos-plugin/1"
+command = ["node", "plugin.js"]
+working_directory = "${definition_dir}"
+max_in_flight = 1
+shutdown_timeout = "1s"
+
+[runtime.requires]
+node = ">=20.0.0"
+
+[capabilities]
+process = true
+filesystem = "none"
+
+[[type]]
+name = "Event"
+
+[[type.field]]
+name = "sequence"
+type = "integer"
+
+[[type.field]]
+name = "message"
+type = "text"
+
+[[type]]
+name = "MarketTick"
+
+[[type.field]]
+name = "symbol"
+type = "text"
+
+[[type.field]]
+name = "second"
+type = "integer"
+
+[[type.field]]
+name = "price"
+type = "number"
+
+[[type.field]]
+name = "change"
+type = "number"
+
+[[action]]
+name = "finite"
+description = "Emits count deterministic events and completes."
+
+[[action.parameter]]
+name = "count"
+type = "integer"
+
+[action.result]
+type = "stream of Event"
+
+[[action]]
+name = "statuses"
+description = "Emits duplicate scalar statuses for flow-control examples."
+
+[action.result]
+type = "stream of text"
+
+[[action]]
+name = "watch_market"
+description = "Emits a simulated live market tick at the requested interval. Replace the deterministic price source with a broker WebSocket without changing the SysOneScript consumer."
+
+[[action.parameter]]
+name = "symbol"
+type = "text"
+
+[[action.parameter]]
+name = "updates"
+type = "integer"
+
+[[action.parameter]]
+name = "every_milliseconds"
+type = "integer"
+
+[action.result]
+type = "stream of MarketTick"

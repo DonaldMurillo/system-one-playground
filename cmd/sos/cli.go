@@ -43,13 +43,16 @@ commands:
   version                             print the SysOneScript version
 `
 
-const runUsage = `usage: sos run [--model M] [--max-calls N] [--timeout D] [--record PATH] [--replay PATH] [--resolution PATH] [--save-resolution PATH] FILE [-- SCRIPT_ARGS]
+const runUsage = `usage: sos run [--model M] [--max-calls N] [--timeout D] [--record PATH] [--replay PATH] [--resolution PATH] [--save-resolution PATH] [--stream-control ADDRESS] [--stream-session ID] FILE [-- SCRIPT_ARGS]
 
 .env is loaded from the current directory; its values are never printed.
 Run flags must precede script arguments. SCRIPT_ARGS are parsed against the
 script's command declarations; --help after FILE prints the script's usage.
 --save-resolution is a runner flag only before FILE, leaving the same-named
 token available to scripts after FILE.
+Editor integrations pass --stream-control and --stream-session before FILE and
+provide the private SOS_STREAM_TOKEN through the child environment; the token
+is never accepted as a command-line flag.
 `
 
 const checkUsage = "usage: sos check FILE [--json] [--editor]\n"
@@ -177,6 +180,8 @@ type runOptions struct {
 	replay         string
 	resolution     string
 	saveResolution string
+	streamControl  string
+	streamSession  string
 }
 
 func isRunFlag(arg string) bool {
@@ -257,6 +262,16 @@ parse:
 				fmt.Fprintln(stderr, "--save-resolution requires a nonempty path")
 				return 2
 			}
+		case arg == "--stream-control" || strings.HasPrefix(arg, "--stream-control="):
+			var ok bool
+			if i, ok = take(&opts.streamControl, i); !ok {
+				return 2
+			}
+		case arg == "--stream-session" || strings.HasPrefix(arg, "--stream-session="):
+			var ok bool
+			if i, ok = take(&opts.streamSession, i); !ok {
+				return 2
+			}
 		case arg == "--replay" || strings.HasPrefix(arg, "--replay="):
 			var ok bool
 			if i, ok = take(&opts.replay, i); !ok {
@@ -318,7 +333,8 @@ parse:
 			return 2
 		}
 	}
-	ctx := context.Background()
+	ctx, stopSignals := commandSignalContext(context.Background())
+	defer stopSignals()
 	if timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, timeout)
@@ -328,6 +344,26 @@ parse:
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
+	}
+	streamController := sos.NewStreamController()
+	var streamControl *streamControlClient
+	if opts.streamControl != "" {
+		streamToken := os.Getenv("SOS_STREAM_TOKEN")
+		if streamToken == "" {
+			fmt.Fprintln(stderr, "sos: run: SOS_STREAM_TOKEN is required with --stream-control")
+			return 2
+		}
+		streamControl, err = connectStreamControl(ctx, opts.streamControl, streamToken, opts.streamSession, streamController)
+		if err != nil {
+			fmt.Fprintf(stderr, "sos: run: stream control: %v\n", err)
+			return 1
+		}
+		defer func() {
+			streamControl.close()
+			if dropped := streamControl.Dropped(); dropped > 0 {
+				fmt.Fprintf(stderr, "sos: stream control: dropped %d lifecycle events; snapshots remain authoritative\n", dropped)
+			}
+		}()
 	}
 	result, runErr := sos.Run(ctx, program, sos.Options{
 		Resolution: saved, Locked: saved != nil,
@@ -341,6 +377,12 @@ parse:
 		Model:       opts.model,
 		Record:      opts.record,
 		Replay:      opts.replay,
+		Streams:     streamController,
+		OnStreamEvent: func(event sos.StreamEvent) {
+			if streamControl != nil {
+				streamControl.event(event)
+			}
+		},
 		OnTrace: func(t sos.Trace) {
 			fmt.Fprintf(stderr, "sos: trace line=%d model=%s %dms inputTokens=%d replay=%v\n",
 				t.Line, t.Model, t.Milliseconds, t.InputTokens, t.Replay)
@@ -365,6 +407,10 @@ parse:
 		return exit.ExitCode()
 	}
 	if runErr != nil {
+		if errors.Is(runErr, context.Canceled) {
+			fmt.Fprintln(stderr, "sos: run: interrupted")
+			return 130
+		}
 		failure := sos.FailureValue(runErr)
 		if kind, ok := failure["kind"].(string); ok && kind != "runtime" {
 			message, _ := failure["message"].(string)

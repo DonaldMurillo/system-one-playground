@@ -39,12 +39,14 @@ type dapBreakpoint struct {
 }
 
 type debugLaunch struct {
-	Program     string   `json:"program"`
-	Cwd         string   `json:"cwd"`
-	Args        []string `json:"args"`
-	StopOnEntry bool     `json:"stopOnEntry"`
-	Model       string   `json:"model"`
-	MaxCalls    int      `json:"maxCalls"`
+	Program       string   `json:"program"`
+	Cwd           string   `json:"cwd"`
+	Args          []string `json:"args"`
+	StopOnEntry   bool     `json:"stopOnEntry"`
+	Model         string   `json:"model"`
+	MaxCalls      int      `json:"maxCalls"`
+	StreamControl string   `json:"streamControl"`
+	StreamSession string   `json:"streamSession"`
 }
 
 type debugSnapshot struct {
@@ -414,6 +416,22 @@ func (s *dapServer) start() error {
 	s.processDone = make(chan struct{})
 	go func() {
 		defer close(s.processDone)
+		streamController := sos.NewStreamController()
+		var streamControl *streamControlClient
+		if s.launch.StreamControl != "" {
+			// The token never travels in launch JSON, which clients log; the
+			// extension injects SOS_STREAM_TOKEN into the adapter environment.
+			streamToken := os.Getenv("SOS_STREAM_TOKEN")
+			connected, connectErr := connectStreamControl(ctx, s.launch.StreamControl, streamToken, s.launch.StreamSession, streamController)
+			if connectErr != nil {
+				s.output("stderr", "Stream inspector unavailable: "+connectErr.Error()+"\n")
+			} else {
+				streamControl = connected
+			}
+		}
+		if streamControl != nil {
+			defer streamControl.close()
+		}
 		result, runErr := sos.Run(ctx, program, sos.Options{
 			Dir:         s.launch.Cwd,
 			SourcePath:  programPath,
@@ -424,6 +442,12 @@ func (s *dapServer) start() error {
 			Model:       s.launch.Model,
 			MaxCalls:    s.launch.MaxCalls,
 			Debugger:    s.session,
+			Streams:     streamController,
+			OnStreamEvent: func(event sos.StreamEvent) {
+				if streamControl != nil {
+					streamControl.event(event)
+				}
+			},
 			OnTrace: func(trace sos.Trace) {
 				trace.Item = redactDebugSecrets(trace.Item)
 				data, _ := json.Marshal(trace)

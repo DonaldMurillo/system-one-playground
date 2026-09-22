@@ -73,6 +73,28 @@ take first 2 items from events called sample`
 	}
 }
 
+func TestStreamReferencesRespectOwnershipScopes(t *testing.T) {
+	source := `to first:
+  stream source called events
+  close stream events
+to second:
+  stream source called events
+  close stream events
+make events "unrelated"
+show events
+`
+	locations, ok := ownedStreamOccurrences(source, 2, "events")
+	if !ok || len(locations) != 2 {
+		t.Fatalf("first stream locations=%+v owned=%v", locations, ok)
+	}
+	if locations[0].Start.Line != 1 || locations[1].Start.Line != 2 {
+		t.Fatalf("locations=%+v", locations)
+	}
+	if _, ok := ownedStreamOccurrences(source, 7, "events"); ok {
+		t.Fatal("an unrelated later value was resolved as the earlier owned stream")
+	}
+}
+
 func TestQualifiedExternalStreamHoverShowsCompleteSignature(t *testing.T) {
 	root := t.TempDir()
 	moduleDir := filepath.Join(root, "modules", "events")

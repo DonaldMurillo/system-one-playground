@@ -1,8 +1,8 @@
 package studio
 
 import (
-	"testing"
 	"github.com/DonaldMurillo/system-one-playground/sos"
+	"testing"
 )
 
 func TestCommandMetadataRetainsNestedDeclarations(t *testing.T) {

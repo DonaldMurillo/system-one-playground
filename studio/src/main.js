@@ -4,6 +4,7 @@ import { commandLeaves, effectiveInputs, findByPath } from './commands.js'
 import { normalizeCatalog, searchEntries, searchLibraries, enabledView, libraryView, libraryEnabled, importPreview, entrySignature, needsJev, diagnosticsFor } from './vocabulary.js'
 import { installLanguageServices, diagnosticColumn } from './lsp.js'
 import { actionFailureContracts, failureOutput } from './failures.js'
+import { streamCanStop, streamElapsed, streamSubtitle, streamSummary } from './streams.js'
 import * as monaco from 'monaco-editor'
 import editorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker'
 import { registerSOSLanguage } from './sos.js'
@@ -223,6 +224,83 @@ function renderTraces(traces, usage) {
     }
     entry.append(question,answer);host.appendChild(entry)
   }
+}
+
+const streamHistory = new Map()
+const streamStopErrors = new Map()
+function renderStreams(streams = [], events = []) {
+  for (const event of events) {
+    const history = streamHistory.get(event.id) || []
+    history.push(event); streamHistory.set(event.id, history.slice(-50))
+  }
+  const host = $('streams')
+  const expanded = new Set([...host.querySelectorAll('details[open][data-stream-id]')].map(item => item.dataset.streamId))
+  host.innerHTML = ''
+  const active = streams.filter(streamCanStop).length
+  $('stream-count').textContent = active ? String(active) : ''
+  $('stream-count').classList.toggle('is-clear', active === 0)
+  if (!streams.length) {
+    host.textContent = state.running ? 'Waiting for a stream to open…' : 'No streams were opened during this run.'
+    return
+  }
+  for (const stream of streams) {
+    const card = document.createElement('article'); card.className = `stream-card is-${stream.state}`
+    const head = document.createElement('div'); head.className = 'stream-head'
+    const name = document.createElement('strong'); name.textContent = stream.binding || stream.id
+    const status = document.createElement('span'); status.className = 'stream-state'; status.textContent = stream.state
+    head.append(name, status)
+    const producer = document.createElement('p'); producer.className = 'stream-producer'; producer.textContent = streamSubtitle(stream)
+    const metrics = document.createElement('p'); metrics.className = 'stream-metrics'; metrics.textContent = `${streamSummary(stream)} · ${streamElapsed(stream)}`
+    card.append(head, producer, metrics)
+    if (stream.failure?.message) {
+      const failure = document.createElement('p'); failure.className = 'stream-failure'; failure.textContent = stream.failure.message; card.appendChild(failure)
+    }
+    const history = streamHistory.get(stream.id) || []
+    if (history.length) {
+      const details = document.createElement('details'); details.className = 'stream-history'; details.dataset.streamId = stream.id; details.open = expanded.has(stream.id)
+      const summary = document.createElement('summary'); summary.textContent = `Lifecycle · ${history.length} events`
+      const lines = document.createElement('pre'); lines.textContent = history.map(event => `${new Date(event.updatedAt).toISOString().slice(11,23)}  ${event.event}  ${event.itemsReceived || 0} received${event.reason ? ` · ${event.reason}` : ''}`).join('\n')
+      details.append(summary, lines); card.appendChild(details)
+    }
+    if (streamCanStop(stream)) {
+      const stop = document.createElement('button'); stop.className = 'btn stream-stop'; stop.type = 'button'; stop.textContent = 'Stop stream'
+      stop.addEventListener('click', async () => {
+        stop.disabled = true
+        try { streamStopErrors.delete(stream.id); await api('/api/streams/stop', {id:stream.id, runId:streamRunId}); await refreshStreams() } catch (error) { streamStopErrors.set(stream.id, error.message); renderStreams(streams) }
+      })
+      card.appendChild(stop)
+    }
+    if (streamStopErrors.has(stream.id)) {
+      const failure = document.createElement('p'); failure.className = 'stream-failure'; failure.textContent = streamStopErrors.get(stream.id); card.appendChild(failure)
+    }
+    host.appendChild(card)
+  }
+}
+
+function showStreamHistoryLimit(truncated) {
+  $('stream-history-limit')?.remove()
+  if (!truncated) return
+  const warning = document.createElement('p')
+  warning.id = 'stream-history-limit'
+  warning.className = 'stream-failure'
+  warning.textContent = 'Lifecycle history reached its safety limit; current stream state remains accurate.'
+  $('streams').appendChild(warning)
+}
+
+let streamPollActive = false, streamRunId = 0, streamCursor = 0, streamRenderEpoch = 0
+async function refreshStreams() {
+  if (streamPollActive) return
+  streamPollActive = true
+  const epoch = streamRenderEpoch
+  try {
+    const result = await api(`/api/streams?since=${streamCursor}`, undefined, 'GET')
+    if (epoch !== streamRenderEpoch) return
+    if (result.runId !== streamRunId) { streamRunId = result.runId; streamCursor = 0 }
+    streamCursor = result.next || 0
+    renderStreams(result.streams || [], result.events || [])
+    showStreamHistoryLimit(result.eventsTruncated)
+  } catch { /* run may be changing */ }
+  finally { streamPollActive = false }
 }
 
 // ---- command selection ----
@@ -1004,11 +1082,14 @@ $('run').addEventListener('click', async () => {
   if (projects?.hasUnsavedImports()) { showOutput('', 'Save other edited project files before running; imports are loaded from disk.'); return }
   const epoch = documentEpoch
   setRunning(true)
+  streamRenderEpoch++; streamHistory.clear(); streamStopErrors.clear(); streamCursor = 0
+  renderStreams([])
   const started = performance.now()
   const tick = setInterval(() => {
     if (epoch !== documentEpoch) return
     $('run-state').textContent = `running… ${((performance.now() - started) / 1000).toFixed(1)}s`
-  }, 100)
+    refreshStreams()
+  }, 250)
   try {
     await refreshCommands()
     if (epoch !== documentEpoch) { clearInterval(tick); setRunning(false); scheduleCheck(); return }
@@ -1026,6 +1107,9 @@ $('run').addEventListener('click', async () => {
     if (r.stderr) parts.push(r.stderr)
     showOutput(parts.join('\n') || (r.ok ? `(no output, ${r.steps} steps)` : ''), r.ok ? null : failureOutput(r.error))
     renderTraces(r.traces, r.usage)
+    streamRenderEpoch++; streamHistory.clear()
+    renderStreams(r.streams || [], r.streamEvents || [])
+    showStreamHistoryLimit(r.streamEventsTruncated)
     diagnosticEpoch++
     if (r.analysis) {
       const analysisResult = {analysis:r.analysis, originalSource:editor.getValue()}
@@ -1050,6 +1134,7 @@ $('run').addEventListener('click', async () => {
   } catch (e) {
     clearInterval(tick)
     if (epoch !== documentEpoch) { setRunning(false); scheduleCheck(); return }
+    await refreshStreams()
     showOutput('', e.kind ? `${e.kind}: ${e.message}` : e.message)
     setRunning(false, 'error')
   }

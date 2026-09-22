@@ -39,7 +39,7 @@ Settings stores project environment values in a local `.env` with restrictive pe
 
 ## Understand the panels
 
-Output shows emitted program text and run failures. Diagnostics reports checker findings. Interpretation explains sentence resolution. Trace reports runtime judgment results and available usage. Vocabulary explains enabled words and imports. Studio does not yet have a per-stream status panel or lifecycle trace events. Stopping the run cancels its active producers.
+Output shows emitted program text and run failures. Diagnostics reports checker findings. Interpretation explains sentence resolution. Trace reports runtime judgment results and available usage. Vocabulary explains enabled words and imports. Streams shows each producer's live state, type, item and credit counts, elapsed time, bounded lifecycle history, and terminal failure without consuming data. **Stop stream** ends one producer and continues below its loop; the main Stop action cancels the run and all active producers.
 
 The project explorer also lists registered external modules separately from
 files. **Open** navigates to a TOML definition inside the opened project;

@@ -86,6 +86,57 @@ var failureCommonFields = map[string]bool{
 	"code": true, "frames": true,
 }
 
+func builtInFailures() map[string]*FailureDef {
+	return map[string]*FailureDef{
+		"StreamLimitExceeded": {
+			Name: "StreamLimitExceeded",
+			Fields: []RecordField{
+				{Name: "limit", Type: TypeRef{Name: "integer"}},
+				{Name: "received", Type: TypeRef{Name: "integer"}},
+			},
+		},
+		"StreamKeyLimitExceeded": {
+			Name: "StreamKeyLimitExceeded",
+			Fields: []RecordField{
+				{Name: "limit", Type: TypeRef{Name: "integer"}},
+				{Name: "operation", Type: TypeRef{Name: "text"}},
+			},
+		},
+		"StreamConcurrencyLimitExceeded": {
+			Name: "StreamConcurrencyLimitExceeded",
+			Fields: []RecordField{
+				{Name: "limit", Type: TypeRef{Name: "integer"}},
+			},
+		},
+		"StreamIdleTimeout": {
+			Name: "StreamIdleTimeout",
+			Fields: []RecordField{
+				{Name: "idle_for", Type: TypeRef{Name: "duration"}},
+			},
+		},
+		"StreamDeadlineExceeded": {
+			Name: "StreamDeadlineExceeded",
+			Fields: []RecordField{
+				{Name: "deadline", Type: TypeRef{Name: "duration"}},
+			},
+		},
+		"StreamHandlerCleanupFailed": {
+			Name: "StreamHandlerCleanupFailed",
+			Fields: []RecordField{
+				{Name: "operation", Type: TypeRef{Name: "text"}},
+				{Name: "reason", Type: TypeRef{Name: "text"}},
+			},
+		},
+		"StreamObligationAbandoned": {
+			Name: "StreamObligationAbandoned",
+			Fields: []RecordField{
+				{Name: "operation", Type: TypeRef{Name: "text"}},
+				{Name: "item", Type: TypeRef{Name: "text", Optional: true}},
+			},
+		},
+	}
+}
+
 func parseFailureDefinition(statement *Statement) (*FailureDef, []Diagnostic) {
 	m := match("failure", statement.Text)
 	definition := &FailureDef{Name: m[1], Line: statement.Line}

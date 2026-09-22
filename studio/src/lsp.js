@@ -87,6 +87,22 @@ export function installLanguageServices(monaco, api, context = () => ({}), analy
       return {uri:model.uri,range:toEditorRange(r.range)}
     })
   }))
+  registrations.push(monaco.languages.registerReferenceProvider('sos', {
+    provideReferences: safe(async (model,position,_context,token) => {
+      const locations=await request(model,'textDocument/references',at(position),token) || []
+      return locations.flatMap(location => location.uri && !location.uri.endsWith('/buffer.sos') && location.uri !== model.uri.toString()
+        ? [] : [{uri:model.uri,range:toEditorRange(location.range)}])
+    })
+  }))
+  registrations.push(monaco.languages.registerRenameProvider('sos', {
+    provideRenameEdits: safe(async (model,position,newName,token) => {
+      const result=await request(model,'textDocument/rename',{...at(position),newName},token)
+      const changes=result?.changes || {}
+      const entries=Object.entries(changes)
+      if (entries.some(([uri])=>!uri.endsWith('/buffer.sos') && uri!==model.uri.toString())) return {edits:[],rejectReason:'Cross-file rename is not available in Studio.'}
+      return {edits:entries.flatMap(([,values])=>values.map(edit=>({resource:model.uri,versionId:model.getVersionId(),textEdit:{range:toEditorRange(edit.range),text:edit.newText}})))}
+    })
+  }))
   registrations.push(monaco.languages.registerDocumentFormattingEditProvider('sos', {
     provideDocumentFormattingEdits: safe(async (model,_options,token) => edits(await request(model,'textDocument/formatting',{},token)))
   }))

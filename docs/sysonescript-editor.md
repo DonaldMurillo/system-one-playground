@@ -114,9 +114,12 @@ collection loops and diagnoses copied, abandoned, or reused handles. Hover
 shows the item type and declared opening/terminal failures.
 Debugger Variables may show stream state, producer, received/buffered item
 counts, and available credit, but expanding that value never requests the next
-item. Dedicated active-stream panels, individual Cancel buttons, and stream
-lifecycle trace/progress events are not implemented. Use **Stop processes** to
-cancel the active run and all of its producers.
+item. Studio's **Streams** tab and VS Code's **Streams** view update live from
+the same non-consuming runtime snapshots. Each stream exposes **Stop stream**,
+which gracefully ends that stream and continues the program below its loop.
+The lifecycle view/output records open, reading, completion, stop, cancellation,
+and failure events. Use **Stop processes** to cancel the whole run and all of
+its producers.
 
 Project helpers and generators are configured in `.vscode/sysonescript.json`:
 
@@ -131,6 +134,47 @@ Project helpers and generators are configured in `.vscode/sysonescript.json`:
 
 Built-in SysOneScript commands use the bundled runner; other helper commands
 are launched from `PATH` with the configured project working directory.
+
+### Control channel failure policy
+
+VS Code observes live runs over an editor-owned loopback TCP control channel;
+`sos run` attaches to it with `--stream-control` and `--stream-session` before
+the file argument, and the `sos debug` adapter connects the same way. The
+channel is inspection-only — lifecycle events, snapshots, and stream stop
+requests — and program execution never depends on it. Its failure rules are
+explicit:
+
+- **Loopback only.** The editor binds the control server to `127.0.0.1`, and
+  the runtime client refuses to connect to any non-loopback control address,
+  so inspection traffic never leaves the machine.
+- **Environment-only authentication.** The control token reaches the child
+  runtime only through the `SOS_STREAM_TOKEN` environment variable. It is
+  never accepted as a command-line flag and never travels in DAP launch
+  arguments — both are logged by tooling, and both leakage paths are removed.
+  `sos run` requires the variable whenever `--stream-control` is present.
+- **Inspection degrades; the run survives.** In the debug adapter a failed or
+  rejected control connection only disables inspection — the session reports
+  "Stream inspector unavailable" and the program continues; an authentication
+  failure never kills a run. A direct `sos run --stream-control` invocation
+  that cannot authenticate reports the error on stderr and exits before the
+  script starts.
+- **Dropping beats blocking.** Lifecycle events flow through a bounded queue
+  (2048 events). Under an extreme burst the runtime drops events instead of
+  blocking execution, counts the drops, and reports the total in a final
+  `bye` frame. The CLI prints the dropped count on stderr, and VS Code
+  reports it in the SysOneScript output channel when a session ends; both
+  note that snapshots remain authoritative. Editors refresh stream identity,
+  counters, credit, and terminal state from runtime snapshots, so a dropped
+  event never corrupts the view.
+- **Bounded framing and connections.** Control frames are newline-delimited
+  JSON capped at 8 MiB. An oversized frame is rejected observably: the socket
+  is closed and the failure appears in the SysOneScript output channel. The
+  editor's control server accepts at most 16 concurrent connections, counted
+  at TCP accept whether or not they have authenticated; excess connections
+  are refused immediately and surfaced the same way.
+- **Stops name one run.** Studio's Stop stream request must carry the current
+  `runId`. A request without one is rejected, and a request naming a previous
+  run is reported as stale instead of stopping a live stream.
 
 ### Marketplace publishing
 

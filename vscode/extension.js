@@ -7,6 +7,8 @@ const vscode = require('vscode')
 const { LspClient } = require('./lsp-client')
 const { appendScriptArguments, compareVersions, discoverEntrypoints, findProjectRoot, parseVersionLine, readExternalModules, readHelpers, relativeScript, resolveProjectEntrypoint } = require('./project')
 const { decisionLensTitle, analyzedLineMatches } = require('./semantic')
+const { StreamStore, canStopStream, traceLine } = require('./streams')
+const { StreamControlServer } = require('./streams-server')
 
 const LANGUAGE_ID = 'sos'
 const DOCUMENT_SELECTOR = [{ language: LANGUAGE_ID }]
@@ -272,7 +274,7 @@ function setPanelRun(action, value) {
   extensionState.tree.refresh()
 }
 
-function runPanelProcess(action, args, cwd, label, commandOverride, onClose) {
+function runPanelProcess(action, args, cwd, label, commandOverride, onClose, extraEnvironment = {}) {
 	const state = extensionState
   const command = commandOverride || runnerCommand()
   const output = state.runOutput
@@ -282,7 +284,7 @@ function runPanelProcess(action, args, cwd, label, commandOverride, onClose) {
   output.appendLine('')
   output.show(true)
   setPanelRun(action, { status: 'running', label: `${label} · running` })
-  const child = spawn(command, args, { cwd, env: serverEnvironment(), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
+  const child = spawn(command, args, { cwd, env: {...serverEnvironment(), ...extraEnvironment}, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
 	state.processes.add(child)
   state.actionProcesses.set(action, child)
   child.stdout.on('data', chunk => output.append(chunk.toString()))
@@ -344,13 +346,18 @@ async function runFile(resource) {
 
 async function runWithAnalysisCapture(file, root, label, scriptArgs = []) {
   const state = extensionState
+  await state.streamControlReady
   const document = vscode.workspace.textDocuments.find(item => item.uri.fsPath === file) || await vscode.workspace.openTextDocument(file)
   const source = document?.getText()
   const version = document?.version
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sysonescript-analysis-'))
   try {
     const resolution = path.join(tempDir, 'resolution.json')
+    const session = `run-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`
+    state.streamStore.begin(session, {label, root, file})
+    state.streamsTree.refresh()
     const args = ['run', '--save-resolution', resolution]
+    if (state.streamControlAddress) args.push('--stream-control', state.streamControlAddress, '--stream-session', session)
     const reviewed = state.semanticAnalyses.get(document.uri.toString())
     const usedReviewed = reviewed?.wholeSource && reviewed.version === version
     if (usedReviewed) {
@@ -360,6 +367,8 @@ async function runWithAnalysisCapture(file, root, label, scriptArgs = []) {
     }
     args.push(relativeScript(root, file))
     runPanelProcess('run', appendScriptArguments(args, scriptArgs), root, label, undefined, code => {
+      state.streamStore.end(session, code)
+      state.streamsTree.refresh()
       try {
         if (code === 0 && document && document.version === version && document.getText() === source) {
           const analysis = JSON.parse(fs.readFileSync(resolution, 'utf8'))
@@ -374,7 +383,7 @@ async function runWithAnalysisCapture(file, root, label, scriptArgs = []) {
       } finally {
         fs.rmSync(tempDir, {recursive:true, force:true})
       }
-    })
+    }, state.streamControlAddress ? {SOS_STREAM_TOKEN: state.streamsServer.token} : {})
   } catch (error) {
     fs.rmSync(tempDir, {recursive:true, force:true})
     throw error
@@ -550,12 +559,26 @@ async function debugProject(resource) {
 async function startDebugSession(folder, configuration) {
   const state = extensionState
   if (!state || state.disposed) return false
+  configuration.__sysoneLaunchId = configuration.__sysoneLaunchId || `launch-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`
   const launch = vscode.debug.startDebugging(folder, configuration)
   state.debugLaunches.add(launch)
   try {
-    return await launch
+    const started = await launch
+    if (!started) endPendingDebugStream(state, configuration.__sysoneLaunchId, 1)
+    return started
   } finally {
     state.debugLaunches.delete(launch)
+  }
+}
+
+function endPendingDebugStream(state, launchId, exitCode, endSession = true) {
+  const pending = launchId ? state?.pendingDebugStreams.get(launchId) : undefined
+  if (!pending) return
+  clearTimeout(pending.timer)
+  state.pendingDebugStreams.delete(launchId)
+  if (endSession) {
+    state.streamStore.end(pending.session, exitCode)
+    state.streamsTree.refresh()
   }
 }
 
@@ -767,6 +790,66 @@ class SysOneScriptTreeProvider {
     return []
   }
 }
+
+class StreamsTreeProvider {
+  constructor() { this.changed = new vscode.EventEmitter(); this.onDidChangeTreeData = this.changed.event }
+  refresh() { this.changed.fire() }
+  getTreeItem(element) { return element }
+  getChildren(element) {
+    const state = extensionState
+    if (!vscode.workspace.workspaceFolders?.length) return [this.message('Open a folder to see SysOneScript streams', 'info')]
+    if (!vscode.workspace.isTrusted) return [this.message('Trust the workspace to run and inspect streams', 'lock')]
+    const sessions = state.streamStore.sessionsList()
+    if (!sessions.length) return [this.message('No active streams', 'circle-slash', 'Run or debug a project to watch streams live')]
+    if (!element && sessions.length > 1) return sessions.map(session => {
+      const item = new SysOneScriptItem(session.label || session.session, vscode.TreeItemCollapsibleState.Expanded, 'streamSession', session.root, undefined, session.status === 'running' ? 'pulse' : 'history', path.basename(session.root || ''))
+      item.session = session.session
+      return item
+    })
+    const session = element?.kind === 'streamSession' ? sessions.find(item => item.session === element.session) : sessions[0]
+    if (!session) return []
+    const streams = [...session.streams.values()]
+    if (!streams.length) return [this.message(session.status === 'running' ? 'No streams opened yet' : 'No streams were opened', 'circle-outline', session.label)]
+    return streams.map(stream => {
+      const icons = {open:'pulse', reading:'pulse', stopping:'loading~spin', stopped:'debug-stop', cancelled:'debug-stop', completed:'pass-filled', closed:'close', failed:'error', unknown:'warning'}
+      const origin = stream.line > 0 ? ` · line ${stream.line}` : ''
+      const item = new SysOneScriptItem(stream.binding || stream.id, vscode.TreeItemCollapsibleState.None, 'stream', session.root, undefined, icons[stream.state] || 'question', `${stream.state} · ${stream.itemsReceived || 0} items · ${stream.itemType || 'unknown'}${origin} · ${stream.producer || ''}`)
+      item.stream = {...stream, session:session.session}
+      const terminal = ['completed', 'failed', 'stopped'].includes(stream.state)
+      item.tooltip = new vscode.MarkdownString(`**${stream.binding || stream.id}**\n\n${stream.producer || 'unknown producer'} · stream of ${stream.itemType || 'unknown'}${origin}\n\n${stream.itemsReceived || 0} received · ${stream.itemsBuffered || 0} buffered · ${stream.creditAvailable || 0} credit${terminal && stream.reason ? `\n\n${stream.reason}` : ''}`)
+      if (session.file && stream.line > 0) item.command = {command:'vscode.open', title:'Reveal stream', arguments:[vscode.Uri.file(session.file), {selection:new vscode.Range(stream.line-1, 0, stream.line-1, 0)}]}
+      return item
+    })
+  }
+  message(label, icon, description) { return new SysOneScriptItem(label, vscode.TreeItemCollapsibleState.None, 'streamStatus', undefined, undefined, icon, description) }
+}
+
+async function stopStream(item) {
+  const stream = item?.stream || item
+  if (!stream?.session || !stream?.id || !canStopStream(stream)) return
+  try {
+    await extensionState.streamsServer.request(stream.session, 'stream.stop', stream.id)
+    await refreshStreams(stream.session)
+  } catch (error) {
+    vscode.window.showWarningMessage(`SysOneScript could not stop the stream: ${error.message}`)
+  }
+}
+
+async function refreshStreams(session) {
+	if (extensionState.streamRefreshActive) return
+  const sessions = session ? [session] : extensionState.streamStore.sessionsList().filter(item => item.status === 'running').map(item => item.session)
+  if (sessions.length === 0) return
+	extensionState.streamRefreshActive = true
+  try {
+	await Promise.allSettled(sessions.map(async key => {
+	  const response = await extensionState.streamsServer.request(key, 'streams.snapshot')
+	  extensionState.streamStore.replace(key, response.streams || [])
+	}))
+	extensionState.streamsTree.refresh()
+  } finally { extensionState.streamRefreshActive = false }
+}
+
+function showStreamsOutput() { extensionState.streamsOutput.show(true) }
 
 function initializeParams() {
   const root = workspaceRoot()
@@ -1200,7 +1283,8 @@ async function restartServer() {
 }
 
 class SysOneScriptDebugConfigurationProvider {
-  resolveDebugConfiguration(folder, config) {
+  async resolveDebugConfiguration(folder, config) {
+	await extensionState.streamControlReady
     const root = folder?.uri.fsPath || workspaceRoot()
     const result = { ...config }
     result.type = 'sysonescript'
@@ -1208,6 +1292,9 @@ class SysOneScriptDebugConfigurationProvider {
     result.__sysoneEpoch = result.__sysoneEpoch ?? extensionState?.debugEpoch ?? 0
     result.name = result.name || 'Debug SysOneScript'
     result.cwd = result.cwd || root
+	result.streamSession = result.streamSession || `debug-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`
+	result.__sysoneLaunchId = result.__sysoneLaunchId || `launch-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`
+	result.streamControl = extensionState.streamControlAddress
     if (!result.program) {
       const editorFile = fileFor(vscode.window.activeTextEditor?.document.uri)
       if (editorFile) result.program = editorFile
@@ -1220,6 +1307,10 @@ class SysOneScriptDebugConfigurationProvider {
       vscode.window.showErrorMessage('Choose a SysOneScript program to debug.')
       return undefined
     }
+	extensionState.streamStore.begin(result.streamSession, {label:`Debug ${path.basename(result.program)}`, root, file:result.program})
+	const timer = setTimeout(() => endPendingDebugStream(extensionState, result.__sysoneLaunchId, 1), 30000)
+	extensionState.pendingDebugStreams.set(result.__sysoneLaunchId, {session:result.streamSession, timer})
+	extensionState.streamsTree.refresh()
     return result
   }
 }
@@ -1229,7 +1320,7 @@ class SysOneScriptDebugAdapterFactory {
     const folder = session.workspaceFolder?.uri.fsPath || workspaceRoot()
     return new vscode.DebugAdapterExecutable(runnerCommand(), ['debug'], {
       cwd: folder,
-      env: serverEnvironment(),
+      env: {...serverEnvironment(), SOS_STREAM_TOKEN: extensionState.streamsServer.token},
     })
   }
 }
@@ -1237,13 +1328,37 @@ class SysOneScriptDebugAdapterFactory {
 function activate(context) {
   const output = vscode.window.createOutputChannel('SysOneScript')
   const runOutput = vscode.window.createOutputChannel('SysOneScript Run')
+  const streamsOutput = vscode.window.createOutputChannel('SysOneScript Streams')
   const diagnostics = vscode.languages.createDiagnosticCollection('sysonescript')
   const tree = new SysOneScriptTreeProvider()
+  const streamsTree = new StreamsTreeProvider()
+  const streamStore = new StreamStore()
+  const streamsServer = new StreamControlServer({
+    onEvent(session, event) {
+      streamStore.apply(session, event)
+      streamsOutput.appendLine(traceLine(session, event))
+      streamsTree.refresh()
+    },
+    onDisconnect() { streamsTree.refresh() },
+    onBye(session, dropped) {
+      output.appendLine(`Stream inspector: session ${session} ended; ${dropped} lifecycle events dropped (snapshots remain authoritative)`)
+      streamsTree.refresh()
+    },
+	onError(error) { output.appendLine(`Stream inspector: ${error.message}`) },
+  })
   const state = {
     output,
     runOutput,
+    streamsOutput,
     diagnostics,
     tree,
+    streamsTree,
+    streamStore,
+    streamsServer,
+    streamControlAddress: undefined,
+    streamControlReady: undefined,
+    streamRefreshActive: false,
+    streamRefreshTimer: undefined,
     client: null,
     ready: null,
     opened: new Set(),
@@ -1252,6 +1367,7 @@ function activate(context) {
 		actionProcesses: new Map(),
 		debugSessions: new Set(),
 		debugLaunches: new Set(),
+		pendingDebugStreams: new Map(),
     panelRuns: new Map(),
     treeView: null,
     extensionPath: context.extensionPath,
@@ -1274,10 +1390,15 @@ function activate(context) {
   state.tokenReady = context.secrets.get(JEV_SECRET_KEY).then(token => {
     if (!state.disposed) state.jevToken = token || undefined
   })
-  context.subscriptions.push(output, runOutput, diagnostics)
+  context.subscriptions.push(output, runOutput, streamsOutput, diagnostics)
+
+  state.streamControlReady = streamsServer.start().then(address => { if (!state.disposed) state.streamControlAddress = address }).catch(error => output.appendLine(`Stream inspector unavailable: ${error.message}`))
+  state.streamRefreshTimer = setInterval(() => refreshStreams().catch(() => {}), 250)
 
   extensionState.treeView = vscode.window.createTreeView('sysonescript.project', { treeDataProvider: tree, showCollapseAll: true })
   context.subscriptions.push(extensionState.treeView)
+  state.streamsTreeView = vscode.window.createTreeView('sysonescript.streams', {treeDataProvider:streamsTree, showCollapseAll:true})
+  context.subscriptions.push(state.streamsTreeView)
   context.subscriptions.push(vscode.debug.registerDebugConfigurationProvider('sysonescript', new SysOneScriptDebugConfigurationProvider()))
 	context.subscriptions.push(vscode.debug.registerDebugAdapterDescriptorFactory('sysonescript', new SysOneScriptDebugAdapterFactory()))
 	context.subscriptions.push(vscode.debug.onDidStartDebugSession(session => {
@@ -1285,6 +1406,7 @@ function activate(context) {
 		const state = extensionState
 		if (!state) return
 		state.debugSessions.add(session)
+		endPendingDebugStream(state, session.configuration.__sysoneLaunchId, 0, false)
 		if (state.disposed || (session.configuration.__sysoneEpoch ?? -1) < state.debugEpoch) {
 			state.stoppedDebugSessions.add(session.id)
 			vscode.debug.stopDebugging(session)
@@ -1296,6 +1418,8 @@ function activate(context) {
 			state?.debugSessions.delete(session)
       output.appendLine('SysOneScript debugger session ended.')
       const stopped = state?.stoppedDebugSessions.delete(session.id)
+		const streamSession = session.configuration.streamSession
+		if (streamSession) { state?.streamStore.end(streamSession, stopped ? 1 : 0); state?.streamsTree.refresh() }
       setPanelRun('debug', { status: stopped ? 'stopped' : 'success', label: stopped ? 'Debug session stopped' : 'Debug session ended' })
     }
   }))
@@ -1316,6 +1440,9 @@ function activate(context) {
   context.subscriptions.push(vscode.commands.registerCommand('sysonescript.debugProject', debugProject))
   context.subscriptions.push(vscode.commands.registerCommand('sysonescript.stop', stopProcesses))
   context.subscriptions.push(vscode.commands.registerCommand('sysonescript.showRunOutput', showRunOutput))
+  context.subscriptions.push(vscode.commands.registerCommand('sysonescript.stopStream', stopStream))
+  context.subscriptions.push(vscode.commands.registerCommand('sysonescript.refreshStreams', () => refreshStreams()))
+  context.subscriptions.push(vscode.commands.registerCommand('sysonescript.showStreamsOutput', showStreamsOutput))
   context.subscriptions.push(vscode.commands.registerCommand('sysonescript.setJevToken', setJevToken))
   context.subscriptions.push(vscode.commands.registerCommand('sysonescript.clearJevToken', clearJevToken))
   context.subscriptions.push(vscode.commands.registerCommand('sysonescript.showJevStatus', showJevStatus))
@@ -1358,6 +1485,10 @@ async function deactivate() {
 	state.disposed = true
 	state.serverGeneration++
 	state.debugEpoch++
+	clearInterval(state.streamRefreshTimer)
+	for (const pending of state.pendingDebugStreams.values()) clearTimeout(pending.timer)
+	state.pendingDebugStreams.clear()
+	await state.streamsServer?.close().catch(() => {})
 	if (state.client) await state.client.stop()
 	for (const child of state?.processes || []) child.kill()
 	await Promise.allSettled([...state.debugLaunches])

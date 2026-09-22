@@ -41,6 +41,7 @@ const (
 	maxBodyBytes    = 2 << 20 // request body cap
 	maxSourceBytes  = 1 << 20 // editor buffer cap
 	maxTraces       = 512
+	maxStreamEvents = 2048
 	defaultTimeout  = 30 * time.Second
 	maxTimeout      = 2 * time.Minute
 	defaultMaxSteps = 100_000
@@ -55,12 +56,16 @@ type Options struct {
 
 // Server is one studio session bound to one working directory.
 type Server struct {
-	projectMu sync.Mutex
-	dir       string
-	token     string
-	mux       *http.ServeMux
-	mu        sync.Mutex
-	cancel    context.CancelFunc // non-nil while a run is active
+	projectMu             sync.Mutex
+	dir                   string
+	token                 string
+	mux                   *http.ServeMux
+	mu                    sync.Mutex
+	cancel                context.CancelFunc // non-nil while a run is active
+	streams               *sos.StreamController
+	streamLog             []sos.StreamEvent
+	streamEventsTruncated bool
+	runSeq                uint64
 	// On-demand semantic analysis state, guarded by mu. Independent of a run.
 	analysisCancel      context.CancelFunc // non-nil while an analysis is active
 	analysisCache       *analysisEntry     // last successful analysis, one source
@@ -95,6 +100,8 @@ func New(opts Options) (*Server, error) {
 	mux.HandleFunc("/api/analyze", s.guard(s.handleAnalyze))
 	mux.HandleFunc("/api/run", s.guard(s.handleRun))
 	mux.HandleFunc("/api/cancel", s.guard(s.handleCancel))
+	mux.HandleFunc("/api/streams", s.guard(s.handleStreams))
+	mux.HandleFunc("/api/streams/stop", s.guard(s.handleStopStream))
 	mux.HandleFunc("/api/save", s.guard(s.handleSave))
 	mux.HandleFunc("/", s.handleAssets)
 	s.mux = mux
@@ -354,6 +361,12 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	s.cancel = cancel
+	s.streams = sos.NewStreamController()
+	s.streamLog = nil
+	s.streamEventsTruncated = false
+	s.runSeq++
+	runID := s.runSeq
+	streams := s.streams
 	runDir := s.dir
 	s.mu.Unlock()
 	defer func() {
@@ -385,6 +398,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		"steps":       0,
 		"durationMs":  time.Since(started).Milliseconds(),
 		"diagnostics": diagnostics,
+		"runId":       runID,
 	}
 	if program == nil {
 		resp["error"] = map[string]string{"kind": "parse", "message": "source did not parse"}
@@ -409,11 +423,26 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 				traces = append(traces, t)
 			}
 		},
+		Streams: streams,
+		OnStreamEvent: func(event sos.StreamEvent) {
+			s.mu.Lock()
+			if len(s.streamLog) < maxStreamEvents {
+				s.streamLog = append(s.streamLog, event)
+			} else {
+				s.streamEventsTruncated = true
+			}
+			s.mu.Unlock()
+		},
 	})
 	resp["output"] = stdout.String()
 	resp["stderr"] = stderr.String()
 	resp["traces"] = traces
 	resp["durationMs"] = time.Since(started).Milliseconds()
+	resp["streams"] = streams.Snapshots()
+	s.mu.Lock()
+	resp["streamEvents"] = append([]sos.StreamEvent(nil), s.streamLog...)
+	resp["streamEventsTruncated"] = s.streamEventsTruncated
+	s.mu.Unlock()
 	if result != nil {
 		resp["traces"] = result.Traces[:min(len(result.Traces), maxTraces)]
 		resp["usage"] = result.Usage
@@ -467,6 +496,70 @@ func (s *Server) handleCancel(w http.ResponseWriter, r *http.Request) {
 	}
 	cancel()
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handleStreams(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method", "GET required")
+		return
+	}
+	s.mu.Lock()
+	controller := s.streams
+	running := s.cancel != nil
+	runID := s.runSeq
+	since, _ := strconv.Atoi(r.URL.Query().Get("since"))
+	if since < 0 || since > len(s.streamLog) {
+		since = 0
+	}
+	events := append([]sos.StreamEvent(nil), s.streamLog[since:]...)
+	next := len(s.streamLog)
+	truncated := s.streamEventsTruncated
+	s.mu.Unlock()
+	streams := []sos.StreamEvent{}
+	if controller != nil {
+		streams = controller.Snapshots()
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"runId": runID, "running": running, "streams": streams, "events": events, "next": next, "eventsTruncated": truncated})
+}
+
+func (s *Server) handleStopStream(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method", "POST required")
+		return
+	}
+	var req struct {
+		ID    string `json:"id"`
+		RunID uint64 `json:"runId"`
+	}
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	if strings.TrimSpace(req.ID) == "" {
+		writeError(w, http.StatusBadRequest, "stream", "stream id is required")
+		return
+	}
+	if req.RunID == 0 {
+		writeError(w, http.StatusBadRequest, "runId", "runId is required to stop a stream")
+		return
+	}
+	s.mu.Lock()
+	controller := s.streams
+	running := s.cancel != nil
+	runID := s.runSeq
+	s.mu.Unlock()
+	if controller == nil || !running {
+		writeError(w, http.StatusConflict, "idle", "no run is active")
+		return
+	}
+	if req.RunID != runID {
+		writeError(w, http.StatusConflict, "stale", "that stream belongs to an earlier run")
+		return
+	}
+	if err := controller.Stop(r.Context(), req.ID); err != nil {
+		writeError(w, http.StatusNotFound, "stream", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": req.ID})
 }
 
 // ---- save / download ----

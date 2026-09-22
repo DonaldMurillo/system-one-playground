@@ -34,5 +34,8 @@ The public site lives in [docs-site](../docs-site/README.md). Its explicit conte
 - [Named record definitions](sysonescript-defined-records-spec.md)
 - [Typed failures and results proposal](sysonescript-typed-failures-spec.md)
 - [Streams design specification](sysonescript-streams-spec.md)
+- [Readable stream handling and flow-control specification](sysonescript-stream-handling-spec.md)
+- [Filesystem standard-library specification](sysonescript-files-spec.md)
+- [HTTP clients and services specification](sysonescript-http-spec.md)
 - [Add Jev to your application](enable-jev.md)
 - [For agents](for-agents.md)

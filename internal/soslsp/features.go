@@ -191,6 +191,12 @@ func (s *server) sentenceHover(params json.RawMessage) any {
 			return map[string]any{"contents": map[string]any{"kind": "markdown", "value": value}}
 		}
 	}
+	// Technical stream aliases get a canonical cross-reference: the alias is
+	// deterministic and never interpreted, so hover always shows the one
+	// canonical sentence it means.
+	if value, is := streamAliasHover(line); is {
+		return map[string]any{"contents": map[string]any{"kind": "markdown", "value": value}}
+	}
 	if info, exists := sos.EditorMeanings(text)[pos.Line+1]; exists {
 		return map[string]any{"contents": map[string]any{"kind": "markdown", "value": "```sos\n" + strings.TrimSpace(line) + "\n```\n\n**" + info.Kind + "**\n\n" + info.Description}}
 	}
@@ -269,6 +275,21 @@ func (s *server) completion(params json.RawMessage) any {
 		item := map[string]any{"label": kw, "kind": 14, "detail": "SysOneScript keyword"}
 		if replace != nil {
 			item["textEdit"] = wordEdit(kw)
+		}
+		items = append(items, item)
+	}
+	for _, snippet := range streamConstructionCompletions(prefix) {
+		item := map[string]any{
+			"label":         snippet.label,
+			"kind":          15,
+			"detail":        "stream handling construction",
+			"documentation": map[string]any{"kind": "markdown", "value": snippet.doc},
+			"sortText":      "~~" + snippet.label,
+			"filterText":    snippet.label,
+		}
+		if replace != nil {
+			item["textEdit"] = wordEdit(snippet.insert)
+			item["insertTextFormat"] = 2
 		}
 		items = append(items, item)
 	}
@@ -628,6 +649,13 @@ func (s *server) references(params json.RawMessage) any {
 	if word == "" {
 		return []any{}
 	}
+	if scoped, ok := ownedStreamOccurrences(text, pos.Line, word); ok {
+		locations := make([]map[string]any, 0, len(scoped))
+		for _, occurrence := range scoped {
+			locations = append(locations, map[string]any{"uri": uri, "range": occurrence})
+		}
+		return locations
+	}
 	locations := []map[string]any{}
 	for lineNo, sourceLine := range strings.Split(text, "\n") {
 		for _, token := range sossyntax.Parse(sourceLine).Lines[0].Tokens {
@@ -661,6 +689,13 @@ func (s *server) rename(params json.RawMessage) any {
 	if word == "" {
 		return nil
 	}
+	if scoped, ok := ownedStreamOccurrences(doc.text, request.Position.Line, word); ok {
+		edits := make([]map[string]any, 0, len(scoped))
+		for _, occurrence := range scoped {
+			edits = append(edits, map[string]any{"range": occurrence, "newText": request.NewName})
+		}
+		return map[string]any{"changes": map[string]any{request.TextDocument.URI: edits}}
+	}
 	edits := []map[string]any{}
 	for lineNo, sourceLine := range strings.Split(doc.text, "\n") {
 		for _, token := range sossyntax.Parse(sourceLine).Lines[0].Tokens {
@@ -670,6 +705,81 @@ func (s *server) rename(params json.RawMessage) any {
 		}
 	}
 	return map[string]any{"changes": map[string]any{request.TextDocument.URI: edits}}
+}
+
+type lexicalBinding struct {
+	name  string
+	line  int
+	kind  string
+	scope *lexicalScope
+}
+
+type lexicalScope struct {
+	parent   *lexicalScope
+	bindings []*lexicalBinding
+}
+
+// ownedStreamOccurrences resolves a stream handle through lexical ownership
+// scopes before returning edits. It deliberately declines non-stream symbols,
+// which continue through the general reference path.
+func ownedStreamOccurrences(text string, cursorLine int, word string) ([]lspRange, bool) {
+	root := &lexicalScope{}
+	lineScopes := map[int]*lexicalScope{}
+	var walk func([]*sos.Statement, *lexicalScope)
+	walk = func(statements []*sos.Statement, scope *lexicalScope) {
+		for _, statement := range statements {
+			line := statement.Line - 1
+			lineScopes[line] = scope
+			child := &lexicalScope{parent: scope}
+			for index, pattern := range bindPatterns {
+				match := pattern.FindStringSubmatch(statement.Text)
+				if match == nil {
+					continue
+				}
+				target := scope
+				if index == 3 { // the singular introduced by "for each" belongs to its body
+					target = child
+				}
+				binding := &lexicalBinding{name: match[1], line: line, kind: statement.Kind, scope: target}
+				target.bindings = append(target.bindings, binding)
+			}
+			if len(statement.Body) > 0 {
+				walk(statement.Body, child)
+			}
+		}
+	}
+	walk(statementsOf(text), root)
+	resolve := func(scope *lexicalScope, line int, name string) *lexicalBinding {
+		for current := scope; current != nil; current = current.parent {
+			var found *lexicalBinding
+			for _, binding := range current.bindings {
+				if binding.name == name && binding.line <= line && (found == nil || binding.line >= found.line) {
+					found = binding
+				}
+			}
+			if found != nil {
+				return found
+			}
+		}
+		return nil
+	}
+	selected := resolve(lineScopes[cursorLine], cursorLine, word)
+	if selected == nil || selected.kind != "openStream" {
+		return nil, false
+	}
+	var occurrences []lspRange
+	for lineNo, sourceLine := range strings.Split(text, "\n") {
+		scope := lineScopes[lineNo]
+		if scope == nil || resolve(scope, lineNo, word) != selected {
+			continue
+		}
+		for _, token := range sossyntax.Parse(sourceLine).Lines[0].Tokens {
+			if token.Kind == "identifier" && token.Text == word {
+				occurrences = append(occurrences, lspRange{Start: lspPosition{Line: lineNo, Character: token.Start}, End: lspPosition{Line: lineNo, Character: token.End}})
+			}
+		}
+	}
+	return occurrences, true
 }
 
 func validRename(name string) bool {
@@ -756,4 +866,98 @@ func statementLine(st *sos.Statement, numLines int) int {
 		l = numLines - 1
 	}
 	return l
+}
+
+// reStreamAliasCall matches the technical fallback form for std/streams.
+var reStreamAliasCall = regexp.MustCompile(`^\s*call\s+streams\.([a-z_]+)(?:\s+with\s+(.*?))?(?:\s+called\s+([A-Za-z_]\w*))?\s*$`)
+
+// streamAliasHover explains one std/streams alias call with its canonical
+// sentence and technical name. ok is false for every other line.
+func streamAliasHover(line string) (string, bool) {
+	m := reStreamAliasCall.FindStringSubmatch(line)
+	if m == nil {
+		return "", false
+	}
+	action := m[1]
+	for _, info := range sos.StreamAliases() {
+		if info.Name != action {
+			continue
+		}
+		value := "```sos\n" + strings.TrimSpace(line) + "\n```\n\n**streams." + action + "** — technical alias, deterministic; never interpreted.\n\n" + info.Description + "\n\n**Canonical form:**\n\n```sos\n" + info.Canonical + "\n```"
+		if rewrite, ok := streamAliasRewrite(action, m[2], m[3]); ok {
+			value = "```sos\n" + strings.TrimSpace(line) + "\n```\n\n**streams." + action + "** — technical alias, deterministic; never interpreted.\n\nIt means:\n\n```sos\n" + rewrite + "\n```\n\n" + info.Description
+		}
+		return value, true
+	}
+	return "```sos\n" + strings.TrimSpace(line) + "\n```\n\n**streams." + action + "** is not a std/streams operation.", true
+}
+
+// streamAliasRewrite rewrites one alias call into its canonical sentence,
+// splitting arguments outside double quotes.
+func streamAliasRewrite(action, argsText, sink string) (string, bool) {
+	var args []string
+	argsText = strings.TrimSpace(argsText)
+	if argsText != "" {
+		start, quoted := 0, false
+		for i := 0; i <= len(argsText); i++ {
+			if i < len(argsText) && argsText[i] == '"' {
+				quoted = !quoted
+			}
+			if i == len(argsText) || (argsText[i] == ',' && !quoted) {
+				if field := strings.TrimSpace(argsText[start:i]); field != "" {
+					args = append(args, field)
+				}
+				start = i + 1
+			}
+		}
+	}
+	return sos.StreamAliasRewrite(action, args, sink)
+}
+
+// streamConstructionSnippet is one canonical stream-handling construction
+// offered by completion.
+type streamConstructionSnippet struct{ label, insert, doc string }
+
+// streamConstructionCompletions lists canonical stream-handling snippets
+// filtered by the typed prefix. Every technical alias name also prefixes its
+// canonical sentence so searching "debounce" finds the canonical form.
+func streamConstructionCompletions(prefix string) []streamConstructionSnippet {
+	all := []streamConstructionSnippet{
+		{"wait for quiet", "wait for ${1:source} to be quiet for ${2:500 milliseconds} called ${3:name}", "debounce: emit the latest item only after the source is quiet for the full duration"},
+		{"limit rate", "limit ${1:source} to ${2:10} each ${3:second}\n  keeping the ${4|first,latest|}\n  called ${5:name}", "throttle: bounded emission rate; the keeping policy is mandatory"},
+		{"handle each with bound", "handle each ${1:item} from ${2:source} with at most ${3:32} at once:\n\n  ${0}", "merge: bounded concurrent handling"},
+		{"handle each one at a time", "handle each ${1:item} from ${2:source} one at a time:\n\n  ${0}", "concat: ordered sequential handling"},
+		{"handle only the newest", "handle only the newest ${1:item} from ${2:source}:\n  when a newer ${1:item} arrives cancel the previous work\n\n  ${0}", "switch_latest: cancel obsolete in-flight work"},
+		{"handle keeping latest waiting", "handle ${1:source} one at a time\n  keeping only the latest waiting ${2:update}:\n\n  ${0}", "conflate: finish active work, replace queued work"},
+		{"handle one at a time ignoring while busy", "handle one ${1:source} at a time\n  ignoring new ${1:source} while busy:\n\n  ${0}", "exhaust: ignore disposable arrivals while busy"},
+		{"handle one at a time rejecting while busy", "handle one ${1:source} at a time\n  rejecting new ${1:source} with status ${2:429} while busy:\n\n  ${0}", "exhaust: reject owned arrivals with an explicit status"},
+		{"group into batches", "group ${1:source} into batches of at most ${2:100}\n  or after ${3:5 seconds}\n  called ${4:name}", "batch: bounded count or time-window batches"},
+		{"ignore consecutive duplicates", "ignore consecutive duplicate ${1:source} called ${2:name}", "distinct_consecutive: drop consecutive repeats"},
+		{"require an item at least every", "require an item at least every ${1:30 seconds} from ${2:source} called ${3:name}", "idle_timeout: fail with StreamIdleTimeout when the source goes quiet"},
+		{"listen for at most", "listen to ${1:source} for at most ${2:10 minutes} then stop normally called ${3:name}", "take_for: bounded observation that completes normally"},
+		{"require to finish within", "require ${1:source} to finish within ${2:10 minutes} called ${3:name}", "deadline: fail with StreamDeadlineExceeded"},
+		{"keep each matching", "keep each ${1:item} from ${2:source} called ${3:name}:\n  when ${4:condition}:\n    keep ${1:item}", "block-based filter; keep at most once per item"},
+		{"take a value from each", "take a value from each ${1:item} in ${2:source} called ${3:name}:\n  use ${4:value}", "block-based projection; use exactly one value"},
+	}
+	for _, info := range sos.StreamAliases() {
+		all = append(all, streamConstructionSnippet{info.Name + " — canonical form", canonicalInsertForAlias(info), "streams." + info.Name + " · " + info.Description})
+	}
+	if prefix == "" {
+		return nil
+	}
+	var out []streamConstructionSnippet
+	for _, snippet := range all {
+		if strings.HasPrefix(strings.ToLower(snippet.label), prefix) {
+			out = append(out, snippet)
+		}
+	}
+	return out
+}
+
+func canonicalInsertForAlias(info sos.StreamAliasInfo) string {
+	canonical := info.Canonical
+	if i := strings.Index(canonical, "\n"); i >= 0 {
+		canonical = canonical[:i]
+	}
+	return strings.ReplaceAll(strings.ReplaceAll(canonical, "<source>", "${1:source}"), "<name>", "${2:name}")
 }
