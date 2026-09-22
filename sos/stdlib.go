@@ -20,7 +20,10 @@ type NativeParam struct {
 // Synonyms are alternate words for the same operation
 // (upper/uppercase); the name always works too.
 type NativeOp struct {
-	ContextFn        func(context.Context, Options, []any) (any, error)
+	ContextFn func(context.Context, Options, []any) (any, error)
+	// StreamFn opens an independently owned stream for streaming actions
+	// (Result "stream of T"); it is nil for ordinary operations.
+	StreamFn         func(context.Context, Options, []any) (streamSource, error)
 	Targets          []string
 	Effects          []string
 	Description      string
@@ -129,6 +132,11 @@ func stdModule(key string) (*Module, bool) {
 		for _, s := range op.Synonyms {
 			m.Words[s] = n
 		}
+	}
+	m.Definitions = map[string]*RecordDef{}
+	for name, definition := range stdModuleDefinitions(key) {
+		m.Definitions[name] = definition
+		m.Exports[name] = true
 	}
 	return m, true
 }

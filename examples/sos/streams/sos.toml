@@ -6,3 +6,7 @@ process = true
 [[module.external]]
 path = "example/streams"
 definition = "modules/events/module.sos.toml"
+
+[[module.external]]
+path = "example/streams-node"
+definition = "modules/node-events/module.sos.toml"

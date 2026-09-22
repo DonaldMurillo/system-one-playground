@@ -1,0 +1,59 @@
+# A complete filesystem CLI: bounded traversal, explicit write policy,
+# archiving with copy and move, and removal that says exactly what it deletes.
+# Every operation is canonical English and resolves to the same checked
+# runtime actions as the std/files module calls.
+
+command organize:
+  describe "Inspect a source tree and archive its report"
+
+  command scan:
+    describe "Write a bounded inventory of the tree"
+    argument source as folder
+    option output as file default "output/inventory.txt"
+
+    check whether folder source exists called present
+    when present is false:
+      fail FileNotFound with "Source folder is missing":
+        path from source
+
+    list folders in folder source called packages
+    show "Folders in {source}: {count of packages}"
+
+    walk through folder source at most 1000 entries called entries
+      including files and folders
+      excluding [".git", "node_modules"]
+      at most 6 folders deep
+      without following symbolic links
+
+    show entries as table with relative_path, kind, size
+
+    create folders through "output"
+    make summary "{count of entries} entries under {source}"
+    write summary atomically to file output
+      replacing an existing file
+    make line "inventory of {source} written to {output}"
+    append line to file "output/activity.log"
+    show "Inventory written to {output}"
+
+  command tidy:
+    describe "Archive the inventory and remove temporary files"
+    option archive as folder default "archive"
+
+    create folders through "archive/reports"
+
+    copy file "output/inventory.txt" to "archive/reports/inventory.txt"
+      only if the destination does not exist
+      on failure FileAlreadyExists called problem:
+        show "Archive already holds {path of problem}; skipping"
+        recover
+
+    move file "output/inventory.txt" to "archive/inventory.previous.txt"
+      replacing an existing file
+
+    remove file "output/activity.log"
+      on failure FileNotFound called problem:
+        show "Nothing to remove at {path of problem}"
+        recover
+
+    remove empty folder "output"
+    show "Tidied into {archive}"

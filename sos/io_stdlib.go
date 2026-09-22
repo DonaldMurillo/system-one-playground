@@ -6,14 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"math"
-	"os"
 	"os/exec"
-	"path"
 	"path/filepath"
-	"sort"
-	"strings"
 	"time"
 )
 
@@ -41,80 +36,15 @@ func registerIO(module, name string, params []NativeParam, result, description, 
 	if effect == "process" {
 		targets = []string{"native"}
 	}
-	stdRegistry[module][name] = NativeOp{Name: name, Params: params, ContextFn: fn, Targets: targets}
+	stdRegistry[module][name] = NativeOp{Name: name, Params: params, ContextFn: fn, Targets: targets, Effects: []string{effect}, Description: description, Result: result}
 	stdDocs[module+"."+name] = stdDoc{result, description, []string{effect}}
 }
 
 func init() {
-	registerIO("std/files", "exists", []NativeParam{{"path", "text"}}, "boolean", "Reports whether a path exists; permission and other filesystem errors fail rather than returning false.", "filesystem", func(ctx context.Context, opts Options, args []any) (any, error) {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		_, err := os.Lstat(ioPath(opts, args[0].(string)))
-		if os.IsNotExist(err) {
-			return false, nil
-		}
-		if err != nil {
-			return nil, err
-		}
-		return true, nil
-	})
 
 	registerIO("std/process", "run", []NativeParam{{"executable", "text"}, {"arguments", "list"}}, "record", "Runs an executable without a shell, with a 30-second deadline and 16 MiB per output stream. Returns stdout, stderr and status; nonzero exit status is a value.", "process", runProcess)
 
 	registerIO("std/files", "discover", []NativeParam{{"root", "text"}, {"exclusions", "list"}}, "list", "Recursively lists sorted regular-file paths relative to root. Exclusions match slash-separated relative paths or any path component; symlinks are skipped.", "filesystem", discoverFiles)
-	registerIO("std/files", "read", []NativeParam{{"path", "text"}}, "text", "Reads a regular text file (up to 16 MiB), relative to the execution directory.", "filesystem", func(ctx context.Context, opts Options, args []any) (any, error) {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		name := ioPath(opts, args[0].(string))
-		initial, err := os.Lstat(name)
-		if err != nil {
-			return nil, err
-		}
-		if !initial.Mode().IsRegular() {
-			return nil, fmt.Errorf("read requires a regular file, not a symlink or special file")
-		}
-		file, err := os.Open(name)
-		if err != nil {
-			return nil, err
-		}
-		defer file.Close()
-		info, err := file.Stat()
-		if err != nil {
-			return nil, err
-		}
-		if !info.Mode().IsRegular() {
-			return nil, fmt.Errorf("read requires a regular file")
-		}
-		data, err := io.ReadAll(io.LimitReader(file, maxIOBytes+1))
-		if err != nil {
-			return nil, err
-		}
-		if len(data) > maxIOBytes {
-			return nil, fmt.Errorf("file exceeds 16 MiB limit")
-		}
-		return string(data), ctx.Err()
-	})
-	registerIO("std/files", "write", []NativeParam{{"path", "text"}, {"text", "text"}}, "text", "Writes text to a regular file, replacing its contents. Parent directories must exist.", "filesystem", func(ctx context.Context, opts Options, args []any) (any, error) {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		name := ioPath(opts, args[0].(string))
-		data := args[1].(string)
-		if len(data) > maxIOBytes {
-			return nil, fmt.Errorf("text exceeds 16 MiB limit")
-		}
-		if info, err := os.Lstat(name); err == nil && !info.Mode().IsRegular() {
-			return nil, fmt.Errorf("write requires a regular file destination")
-		} else if err != nil && !os.IsNotExist(err) {
-			return nil, err
-		}
-		if err := os.WriteFile(name, []byte(data), 0644); err != nil {
-			return nil, err
-		}
-		return args[0], nil
-	})
 	registerIO("std/io", "read", []NativeParam{{"maxBytes", "number"}}, "text", "Reads standard input up to the explicit byte limit (at most 16 MiB); oversized input fails.", "stdin", func(ctx context.Context, opts Options, args []any) (any, error) {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -165,68 +95,23 @@ func init() {
 }
 
 func discoverFiles(ctx context.Context, opts Options, args []any) (any, error) {
-	root := ioPath(opts, args[0].(string))
-	exclusions := args[1].([]any)
-	patterns := make([]string, 0, len(exclusions))
-	for _, v := range exclusions {
-		s, ok := v.(string)
-		if !ok {
-			return nil, fmt.Errorf("exclusions must contain only text")
-		}
-		s = filepath.ToSlash(s)
-		if _, err := path.Match(s, ""); err != nil {
-			return nil, fmt.Errorf("invalid exclusion %q: %w", s, err)
-		}
-		patterns = append(patterns, s)
-	}
-	info, err := os.Lstat(root)
+	patterns, err := stringListArg(args[1], "exclusions")
 	if err != nil {
 		return nil, err
 	}
-	if !info.IsDir() {
-		return nil, fmt.Errorf("discovery root must be a directory, not a symlink or file")
+	spec, err := parseTraversalSpec(opts, traversalOptions{root: args[0].(string), exclude: patterns, kinds: []string{fileKind}})
+	if err != nil {
+		return nil, err
 	}
-	out := []any{}
-	err = filepath.WalkDir(root, func(name string, entry fs.DirEntry, walkErr error) error {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if walkErr != nil {
-			return walkErr
-		}
-		if name == root {
-			return nil
-		}
-		rel, err := filepath.Rel(root, name)
-		if err != nil {
-			return err
-		}
-		rel = filepath.ToSlash(rel)
-		for _, pattern := range patterns {
-			match, _ := path.Match(pattern, rel)
-			if !strings.Contains(pattern, "/") {
-				for _, part := range strings.Split(rel, "/") {
-					m, _ := path.Match(pattern, part)
-					match = match || m
-				}
-			}
-			if match {
-				if entry.IsDir() {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-		}
-		if entry.Type().IsRegular() {
-			out = append(out, rel)
-			if len(out) > 100000 {
-				return fmt.Errorf("discovery exceeds 100000 files")
-			}
-		}
-		return nil
-	})
-	sort.Slice(out, func(i, j int) bool { return out[i].(string) < out[j].(string) })
-	return out, err
+	entries, err := walkFileTree(ctx, spec, maxListEntries)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]any, 0, len(entries))
+	for _, entry := range entries {
+		out = append(out, entry.(map[string]any)["relative_path"])
+	}
+	return out, nil
 }
 
 // boundedOutput rejects oversized process output without retaining it in memory.

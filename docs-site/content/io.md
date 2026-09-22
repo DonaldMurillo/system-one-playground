@@ -18,19 +18,20 @@ process.run "git", ["diff", "--no-ext-diff", "--unified=0"] called diff
 show diff
 ```
 
-`files.discover root, exclusions` returns regular files recursively in sorted
-order, with slash-separated paths relative to `root`. Symlinks are skipped, and
-the root must be a directory rather than a symlink. A pattern containing `/`
-matches the relative path; other patterns match any component. Matching
-directories are pruned. Patterns use Go's path glob rules (`*`, `?`, character
-classes); `**` has no special recursive meaning. Permission and traversal errors
-fail the operation. Discovery stops at cancellation or 100,000 files.
+The canonical filesystem surface is documented in
+[Files and folders](/docs/files): `list`, bounded `walk through`,
+backpressured `stream ... under`, native `watch`, explicit `create`/`replace`
+write policy, atomic writing, copy/move, and explicit removal, each with
+reserved typed failures and declared `filesystem-read`/`filesystem-write`
+capabilities. The older actions below remain accepted as compatibility
+aliases and share the same implementations.
 
-`files.read path` reads a regular file up to 16 MiB. `files.write path, text`
-replaces a regular destination or creates a file, with existing parent
-directories required and the same size limit. Both reject symlink and special
-file destinations at validation time; they do not promise race-resistant
-filesystem confinement.
+`files.discover root, exclusions` returns regular files recursively in sorted
+order, with slash-separated paths relative to `root`; it remains the
+compatibility form of bounded recursive traversal. `files.read path` and
+`files.write path, text` read and replace or create a regular text file with
+the same 16 MiB limit and symlink rejections as `files.read_text` and
+`files.write_text`. Parent directories must already exist for writes.
 
 `path.base`, `path.extension`, `path.directory`, and `path.clean` take one path.
 `path.join base, child` joins two components; `path.relative base, target` returns

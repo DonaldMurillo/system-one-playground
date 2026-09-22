@@ -81,8 +81,9 @@ actions operate on the selected `.sos` file while retaining the containing
 project's `sos.toml`, working directory, and `.env`.
 Long-running runs remain cancellable from **Stop processes**, which also closes
 their owned streams. Inspecting a stream in Variables never advances its
-producer. Per-stream status panels, individual Cancel actions, and stream
-lifecycle progress/trace events are not implemented yet.
+producer. The **Streams** view shows live runtime snapshots and offers an
+individual **Stop stream** action; **SysOneScript Streams** records lifecycle
+events without logging program-visible stream items.
 The `.sos` mark is contributed as a language-default icon, allowing compatible
 file-icon packs to display it without replacing the active pack. A pack's own
 `.sos` mapping takes precedence, and packs can disable language-mode icons. The

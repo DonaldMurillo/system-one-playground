@@ -4,7 +4,7 @@ export const SENTENCE_STARTERS = [
   'evaluate', 'criterion', 'package', 'import', 'export', 'define', 'failure', 'argument', 'option', 'switch', 'to', 'call', 'returning', 'may', 'finish', 'fail', 'recover', 'capture', 'return', 'while', 'repeat', 'set', 'emit', 'judge', 'score', 'command', 'describe', 'expect', 'remember', 'find', 'read', 'require',
   'keep', 'sort', 'group', 'create', 'make', 'assign', 'when', 'take',
   'classify', 'append', 'save', 'show', 'for', 'map', 'stop', 'print',
-  'stream', 'streaming', 'close', 'collect'
+  'stream', 'streaming', 'send', 'close', 'collect'
 ]
 
 export const CONNECTORS = [

@@ -188,6 +188,14 @@ func classifyUnderParent(parent *semNode, text string) (string, string) {
 		if semanticChoiceRe.MatchString(text) {
 			return "canonical", "choice"
 		}
+	default:
+		// Filesystem modifier continuations classify only under their owning
+		// statement, mirroring the canonical parser.
+		if isFileForm(parent.form) {
+			if kind := classifyFileContinuation(text); kind != "" && fileContinuationAllowed(parent.form, kind) {
+				return "canonical", kind
+			}
+		}
 	}
 	return "unknown", ""
 }
@@ -352,6 +360,22 @@ func scopeForChildren(kind string, scope *semScope) *semScope {
 // statement, mirroring the interpreter's binding behavior conservatively.
 func applyCanonicalEffects(scope *semScope, n *semNode) {
 	switch n.form {
+	case "readFile":
+		if len(n.m) >= 3 {
+			delete(scope.collections, n.m[2])
+		}
+	case "checkExists", "inspectEntry":
+		if len(n.m) >= 4 {
+			delete(scope.collections, n.m[3])
+		}
+	case "listEntries":
+		if len(n.m) >= 4 {
+			scope.collections[n.m[3]] = "entries listed in " + n.m[2]
+		}
+	case "walkThrough":
+		if len(n.m) >= 4 {
+			scope.collections[n.m[3]] = "entries walked under " + n.m[1]
+		}
 	case "read":
 		if len(n.m) >= 4 {
 			if n.m[2] == "text" {

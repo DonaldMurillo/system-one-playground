@@ -5,7 +5,7 @@ import {installLanguageServices, SEMANTIC_LEGEND, diagnosticColumn} from './lsp.
 function setup(api, analysis = () => null) {
   const providers={}
   const languages={CompletionItemKind:{Function:1,Keyword:2},InlayHintKind:{Type:1,Parameter:2},CompletionItemInsertTextRule:{InsertAsSnippet:4}}
-  for (const kind of ['CodeLens','CompletionItem','Hover','Definition','DocumentFormattingEdit','DocumentSemanticTokens','InlayHints','CodeAction','FoldingRange']) {
+  for (const kind of ['CodeLens','CompletionItem','Hover','Definition','Reference','Rename','DocumentFormattingEdit','DocumentSemanticTokens','InlayHints','CodeAction','FoldingRange']) {
     languages[`register${kind}Provider`]=(_language,provider)=>{providers[kind]=provider;return {dispose(){}}}
   }
   const model={getVersionId:()=>1,isDisposed:()=>false,getValue:()=>'',uri:{toString:()=> 'inmemory://model/1'},getWordUntilPosition:()=>({startColumn:6,endColumn:10})}
@@ -64,6 +64,18 @@ test('quickfix imports map to the active model as a versioned workspace edit',as
   const r=await providers.CodeAction.provideCodeActions(model,{startLineNumber:1,startColumn:1,endLineNumber:1,endColumn:10})
   assert.equal(r.actions[0].edit.edits[0].resource,model.uri)
   assert.equal(r.actions[0].edit.edits[0].versionId,1)
+})
+
+test('references and rename map the synthetic LSP document to the active model',async()=>{
+  const range={start:{line:2,character:4},end:{line:2,character:10}}
+  const {providers,model}=setup(async(_path,request)=>({result:request.method==='textDocument/references'
+    ? [{uri:'file:///sysonescript/buffer.sos',range}]
+    : {changes:{'file:///sysonescript/buffer.sos':[{range,newText:'updates'}]}}}))
+  const references=await providers.Reference.provideReferences(model,{lineNumber:3,column:5},{})
+  assert.deepEqual(references,[{uri:model.uri,range:{startLineNumber:3,startColumn:5,endLineNumber:3,endColumn:11}}])
+  const rename=await providers.Rename.provideRenameEdits(model,{lineNumber:3,column:5},'updates')
+  assert.equal(rename.edits[0].resource,model.uri)
+  assert.equal(rename.edits[0].textEdit.text,'updates')
 })
 
 test('diagnostics convert UTF8 byte columns to Monaco UTF16 columns',()=>{

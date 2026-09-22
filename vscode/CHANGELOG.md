@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Adds a live Streams view, per-stream stop controls, and a dedicated lifecycle output channel for run and debug sessions.
+- Keeps stream inspection non-consuming and reports runtime-owned counters, credit, producer identity, terminal state, and failures.
+
 ## 0.4.0
 
 - Adds typed external command and persistent stdio modules with capability policy, diagnostics, generated interfaces, and project controls.

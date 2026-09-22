@@ -8,14 +8,15 @@ import (
 // StandardOperationInfo is the offline tooling view of an executable native
 // operation. Params come from the same registry used to validate runtime calls.
 type StandardOperationInfo struct {
-	ImportPath  string        `json:"importPath"`
-	Package     string        `json:"package"`
-	Name        string        `json:"name"`
-	Params      []NativeParam `json:"params"`
-	Result      string        `json:"result"`
-	Description string        `json:"description"`
-	Effects     []string      `json:"effects"`
-	Targets     []string      `json:"targets"`
+	ImportPath       string        `json:"importPath"`
+	Package          string        `json:"package"`
+	Name             string        `json:"name"`
+	Params           []NativeParam `json:"params"`
+	Result           string        `json:"result"`
+	Description      string        `json:"description"`
+	Effects          []string      `json:"effects"`
+	Targets          []string      `json:"targets"`
+	PossibleFailures []string      `json:"possibleFailures,omitempty"`
 }
 
 // StandardOperations returns a detached, deterministic catalog. It performs no
@@ -30,14 +31,15 @@ func StandardOperations() []StandardOperationInfo {
 				targets = []string{"native", "wasm", "wasip1"}
 			}
 			out = append(out, StandardOperationInfo{
-				ImportPath:  path,
-				Package:     path[strings.LastIndex(path, "/")+1:],
-				Name:        name,
-				Params:      append([]NativeParam(nil), op.Params...),
-				Result:      doc.result,
-				Description: doc.description,
-				Effects:     append([]string(nil), doc.effects...),
-				Targets:     append([]string(nil), targets...),
+				ImportPath:       path,
+				Package:          path[strings.LastIndex(path, "/")+1:],
+				Name:             name,
+				Params:           append([]NativeParam(nil), op.Params...),
+				Result:           doc.result,
+				Description:      doc.description,
+				Effects:          append([]string(nil), doc.effects...),
+				Targets:          append([]string(nil), targets...),
+				PossibleFailures: append([]string(nil), op.PossibleFailures...),
 			})
 		}
 	}

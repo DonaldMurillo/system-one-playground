@@ -16,7 +16,14 @@ A streaming action declares its item type with `streaming`:
 ```sos
 to follow with service as text streaming LogEvent
   may fail with ServiceNotFound, ConnectionLost:
+  send {"message": "connected", "service": service}
+  send {"message": "waiting for updates", "service": service}
+  finish
 ```
+
+`send VALUE` emits one typed item and pauses when the consumer has not granted
+capacity. It is valid only inside a streaming action. Local producers start
+lazily when consumption begins, so setup after `stream` is deterministic.
 
 Open the producer with `stream`, then consume it with `from`:
 
@@ -80,7 +87,8 @@ take first 100 items from events called sample
 ```
 
 `collect at most` expects natural completion; item 1001 cancels upstream and
-fails with the collection-limit failure. `take first` intentionally cancels
+fails with the built-in `StreamLimitExceeded` failure, exposing integer
+`limit` and `received` fields. `take first` intentionally cancels
 after the requested sample and succeeds, or returns a shorter list when the
 producer completes first. Neither construction creates an unbounded buffer.
 
@@ -114,9 +122,11 @@ fields, the condition remains an ordinary terminal runtime error. These
 failures never discard items or effects already observed by the consumer.
 
 Progress remains separate from stream data. The runtime does not convert plugin
-diagnostics or UI progress into program-visible items. Dedicated per-stream
-Studio/VS Code panels and lifecycle trace events are future tooling work; today
-the existing run Stop action cancels the whole run and its owned streams.
+diagnostics or UI progress into program-visible items. Studio and VS Code show
+runtime-owned stream identity, producer, item type, received/buffered counts,
+credit, elapsed time, terminal failures, and lifecycle history without reading
+an item. **Stop stream** ends only that producer and lets execution continue
+below its stream loop; the ordinary run Stop action still cancels the whole run.
 
 Lazy stream filters/maps, merge, and stream parameters/ownership transfer are
 reserved future syntax. The shipped surface is direct sequential consumption,
@@ -124,5 +134,6 @@ explicit close/early stop, bounded collect/take, stdio plugin streams, and
 command-adapter JSON-lines streams.
 
 See the runnable [stream examples](https://github.com/DonaldMurillo/system-one-playground/tree/main/examples/sos/streams) project for
-finite consumption, early stop, explicit close, bounded collection, sampling,
-and terminal failure handling.
+local streaming actions, Python and Node stdio producers, finite consumption,
+early stop, explicit close, bounded collection, sampling, and terminal failure
+handling.

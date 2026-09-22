@@ -68,8 +68,9 @@ show greeting
 
 These operations are pure: no filesystem, network, or model requests. Argument
 counts and types are checked. They work with native, browser WASM, and WASI builds.
-Broader filesystem, HTTP, process, time, and collection package APIs remain future
-work; existing canonical sentences retain their behavior.
+The filesystem package and its canonical English forms are documented in
+[Files and folders](sysonescript-files.md). Broader HTTP and time package APIs
+remain future work; existing canonical sentences retain their behavior.
 
 ## Go API
 

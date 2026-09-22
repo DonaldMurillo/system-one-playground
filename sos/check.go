@@ -2,8 +2,10 @@ package sos
 
 import (
 	"fmt"
+	"math"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -603,6 +605,54 @@ func analyze(p *Program) []Diagnostic {
 				if m[1] != "" {
 					checkExpr(s, m[1], false)
 				}
+			case "readFile":
+				checkExpr(s, m[1], false)
+				names[m[2]] = true
+				types[m[2]] = TypeRef{Name: "text"}
+			case "writeFile":
+				checkExpr(s, m[1], false)
+				checkExpr(s, m[3], false)
+				checkFileFormModifiers(s, add, checkExpr)
+			case "appendFile":
+				checkExpr(s, m[1], false)
+				checkExpr(s, m[2], false)
+			case "checkExists":
+				checkExpr(s, m[2], false)
+				names[m[3]] = true
+				types[m[3]] = TypeRef{Name: "boolean"}
+			case "inspectEntry":
+				checkExpr(s, m[2], false)
+				names[m[3]] = true
+				types[m[3]] = TypeRef{Name: "FileEntry"}
+			case "listEntries":
+				checkExpr(s, m[2], false)
+				names[m[3]] = true
+				types[m[3]] = TypeRef{Element: &TypeRef{Name: "FileEntry"}}
+			case "walkThrough":
+				checkExpr(s, m[1], false)
+				if limit, err := strconv.ParseFloat(m[2], 64); err == nil && limit <= 0 {
+					add(s, "walk through requires a positive entry bound")
+				}
+				names[m[3]] = true
+				types[m[3]] = TypeRef{Element: &TypeRef{Name: "FileEntry"}}
+				checkFileFormModifiers(s, add, checkExpr)
+			case "streamFiles", "watchFolder":
+				root := m[2]
+				if s.Kind == "watchFolder" {
+					root = m[1]
+				}
+				checkExpr(s, root, false)
+				names[m[3]] = true
+				delete(types, m[3])
+				checkFileFormModifiers(s, add, checkExpr)
+			case "copyEntry", "moveEntry":
+				checkExpr(s, m[2], false)
+				checkExpr(s, m[3], false)
+				checkFileFormModifiers(s, add, checkExpr)
+			case "createFoldersThrough", "removeFile", "removeEmptyFolder", "removeFolder":
+				checkExpr(s, m[1], false)
+			case "fsMatch", "fsExclude":
+				checkExpr(s, m[1], false)
 			case "handler":
 				if m[1] == "failure" {
 					_, binding, fields, typed := failureHandlerHeader(s.Text)
@@ -686,7 +736,28 @@ func analyze(p *Program) []Diagnostic {
 	walk(p.Statements)
 	ds = append(ds, checkActionContracts(p, actions, visibleDefs)...)
 	ds = append(ds, checkStreamOwnership(p, actions)...)
+	ds = append(ds, checkStreamSendPlacement(p.Statements)...)
 	return ds
+}
+
+func checkStreamSendPlacement(statements []*Statement) []Diagnostic {
+	var diagnostics []Diagnostic
+	var walk func([]*Statement, bool)
+	walk = func(items []*Statement, streaming bool) {
+		for _, statement := range items {
+			if statement.Kind == "send" && !streaming {
+				diagnostics = append(diagnostics, Diagnostic{statement.Line, 1, "send is only valid inside a streaming action"})
+			}
+			childStreaming := streaming
+			if statement.Kind == "to" {
+				decl, err := parseActionDecl(statement.Text)
+				childStreaming = err == nil && decl.Streaming
+			}
+			walk(statement.Body, childStreaming)
+		}
+	}
+	walk(statements, false)
+	return diagnostics
 }
 
 type streamOwnershipState struct {
@@ -705,7 +776,7 @@ func streamTarget(p *Program, actions map[string]*Statement, name string, explic
 		}
 		if fn := explicit.Actions[action]; fn != nil {
 			decl, err := parseActionDecl(fn.Text)
-			return err == nil, err == nil && decl.Streaming, false
+			return err == nil, err == nil && decl.Streaming, err == nil && decl.Streaming
 		}
 		return false, false, false
 	}
@@ -715,7 +786,7 @@ func streamTarget(p *Program, actions map[string]*Statement, name string, explic
 			return false, false, false
 		}
 		decl, err := parseActionDecl(fn.Text)
-		return err == nil, err == nil && decl.Streaming, false
+		return err == nil, err == nil && decl.Streaming, err == nil && decl.Streaming
 	}
 	alias, action, _ := strings.Cut(name, ".")
 	if mod := moduleAlias(p, alias); mod != nil {
@@ -764,7 +835,7 @@ func checkStreamOwnership(p *Program, actions map[string]*Statement) []Diagnosti
 		for i := 0; i < len(sts); i++ {
 			s := sts[i]
 			m := match(s.Kind, s.Text)
-			if binding := statementBindingName(s); binding != "" && s.Kind != "openStream" {
+			if binding := statementBindingName(s); binding != "" && s.Kind != "openStream" && !isFileHandleForm(s.Kind) {
 				if state := owned[binding]; state != nil && !state.consumed {
 					ds = append(ds, Diagnostic{s.Line, 1, "cannot overwrite active stream " + binding + "; consume or close it first"})
 				}
@@ -780,6 +851,16 @@ func checkStreamOwnership(p *Program, actions map[string]*Statement) []Diagnosti
 					ds = append(ds, Diagnostic{s.Line, 1, m[1] + " is not a streaming action"})
 					continue
 				}
+				if openFailureHandlerRecovers(s) {
+					ds = append(ds, Diagnostic{s.Line, 1, "an opening failure handler cannot recover and continue because no stream handle exists; finish, fail, stop, or pass the failure on"})
+					continue
+				}
+				if existing := owned[m[3]]; existing != nil && !existing.consumed {
+					ds = append(ds, Diagnostic{s.Line, 1, "stream " + m[3] + " is already active; consume or close it before reopening"})
+					continue
+				}
+				owned[m[3]] = &streamOwnershipState{line: s.Line}
+			case "streamFiles", "watchFolder":
 				if openFailureHandlerRecovers(s) {
 					ds = append(ds, Diagnostic{s.Line, 1, "an opening failure handler cannot recover and continue because no stream handle exists; finish, fail, stop, or pass the failure on"})
 					continue
@@ -810,6 +891,9 @@ func checkStreamOwnership(p *Program, actions map[string]*Statement) []Diagnosti
 					state.consumed = true
 				}
 			case "collectStream":
+				if limit, err := strconv.ParseFloat(strings.TrimSpace(m[1]), 64); err == nil && (limit <= 0 || limit != math.Trunc(limit) || limit > maxStreamMaterializationItems) {
+					ds = append(ds, Diagnostic{s.Line, 1, fmt.Sprintf("collect at most requires a positive bounded integer (at most %d)", maxStreamMaterializationItems)})
+				}
 				name := strings.TrimSpace(m[2])
 				state := owned[name]
 				if state == nil {
@@ -829,6 +913,15 @@ func checkStreamOwnership(p *Program, actions map[string]*Statement) []Diagnosti
 					} else {
 						state.consumed = true
 					}
+				}
+			case "keep", "sort", "group", "map", "for", "require":
+				index := 1
+				if s.Kind == "map" || s.Kind == "for" || s.Kind == "require" {
+					index = 2
+				}
+				name := strings.TrimSpace(m[index])
+				if owned[name] != nil {
+					ds = append(ds, Diagnostic{s.Line, 1, s.Kind + " requires a collection, but " + name + " is a stream; collect it with an explicit limit first"})
 				}
 			case "make":
 				expr := strings.TrimSpace(strings.TrimPrefix(m[2], "as "))
@@ -1022,6 +1115,12 @@ func checkActionContracts(p *Program, actions map[string]*Statement, defs map[st
 			for _, s := range stmts {
 				m := match(s.Kind, s.Text)
 				switch s.Kind {
+				case "send":
+					if !decl.Streaming {
+						add(s.Line, "send is only valid inside a streaming action")
+					} else if message := staticArgumentProblem(m[1], decl.StreamItem, knownTypes, defs, name, "stream item"); message != "" {
+						add(s.Line, "%s", message)
+					}
 				case "finish":
 					if decl.HasResult && m[1] == "" {
 						add(s.Line, "%s must finish with %s", name, decl.Result.String())
@@ -1089,6 +1188,9 @@ func checkActionContracts(p *Program, actions map[string]*Statement, defs map[st
 						streamName = strings.TrimSpace(m[3])
 					}
 					possible := streamFailures[streamName]
+					if s.Kind == "collectStream" {
+						possible = append(append([]string(nil), possible...), "StreamLimitExceeded")
+					}
 					checkFailureHandlers(s, possible, add)
 					visit(s.Body, true)
 					for _, failure := range possible {
@@ -1104,6 +1206,25 @@ func checkActionContracts(p *Program, actions map[string]*Statement, defs map[st
 							continue
 						}
 						add(s.Line, "%s may pass %s on; handle it or add it to \"may fail with\"", name, failure)
+					}
+				case "readFile", "writeFile", "appendFile", "checkExists", "inspectEntry", "listEntries", "walkThrough", "copyEntry", "moveEntry", "createFoldersThrough", "removeFile", "removeEmptyFolder", "removeFolder":
+					possible := fileFormFailures(s.Kind)
+					checkFailureHandlers(s, possible, add)
+					visit(s.Body, true)
+					for _, failure := range possible {
+						if !declared[failure] && !callHasFailureHandler(s, failure) {
+							add(s.Line, "%s may pass %s on; handle it or add it to \"may fail with\"", fileFormLabel(s.Kind), failure)
+						}
+					}
+				case "streamFiles", "watchFolder":
+					possible := fileFormFailures(s.Kind)
+					checkFailureHandlers(s, possible, add)
+					streamFailures[m[3]] = possible
+					visit(s.Body, true)
+					for _, failure := range possible {
+						if !declared[failure] && !callHasFailureHandler(s, failure) {
+							add(s.Line, "%s may pass %s on while opening a stream; handle it or add it to \"may fail with\"", fileFormLabel(s.Kind), failure)
+						}
 					}
 				case "handler":
 					if match(s.Kind, s.Text)[1] != "failure" {
@@ -1454,10 +1575,17 @@ func visibleFailureDefinitionsWithProblems(p *Program) (map[string]*FailureDef, 
 }
 
 func visibleFailuresFrom(local map[string]*FailureDef, modules map[string]*Module, localOwner string) (map[string]*FailureDef, []string) {
-	result := map[string]*FailureDef{}
+	result := builtInFailures()
 	owners := map[string]string{}
+	for name := range result {
+		owners[name] = "the SysOneScript runtime"
+	}
 	var problems []string
 	for name, definition := range local {
+		if owner, exists := owners[name]; exists {
+			problems = append(problems, fmt.Sprintf("failure %s is reserved by %s and cannot be redefined in %s", name, owner, localOwner))
+			continue
+		}
 		result[name] = definition
 		owners[name] = localOwner
 	}

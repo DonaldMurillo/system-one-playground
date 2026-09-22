@@ -114,9 +114,22 @@ collection loops and diagnoses copied, abandoned, or reused handles. Hover
 shows the item type and declared opening/terminal failures.
 Debugger Variables may show stream state, producer, received/buffered item
 counts, and available credit, but expanding that value never requests the next
-item. Dedicated active-stream panels, individual Cancel buttons, and stream
-lifecycle trace/progress events are not implemented. Use **Stop processes** to
-cancel the active run and all of its producers.
+item. Studio's **Streams** tab and VS Code's **Streams** view update live from
+the same non-consuming runtime snapshots. Each stream exposes **Stop stream**,
+which gracefully ends that stream and continues the program below its loop.
+The lifecycle view/output records open, reading, completion, stop, cancellation,
+and failure events. Use **Stop processes** to cancel the whole run and all of
+its producers.
+
+Filesystem constructions receive the same treatment. Completion and hover
+offer the canonical English forms (`list`, `walk through`, `stream ... under`,
+`watch`, `copy`, `move`, `remove`, explicit write policy) alongside the
+precise `std/files` module actions, always with parameter names rather than
+positional boolean hints, read/write/destructive effect labels, the reserved
+typed failures each operation may raise, and target availability. Traversal
+and watcher handles are owned streams: references, rename, and diagnostics
+follow lexical ownership, and the debugger shows traversal bounds and active
+watcher state without ever consuming an entry or a change.
 
 Project helpers and generators are configured in `.vscode/sysonescript.json`:
 

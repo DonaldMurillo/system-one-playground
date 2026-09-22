@@ -334,48 +334,63 @@ func (p *indexedPackage) hasAction(name string) bool {
 // opDocs describes the effect of every core statement kind. Effects are the
 // honest taxonomy: provider call, filesystem, output, control flow, memory.
 var opDocs = map[string]struct{ effect, binds string }{
-	"command":       {"defines a runnable command block", "the command name"},
-	"parameter":     {"declares a command line parameter", "the parameter name"},
-	"describe":      {"documentation prose; no runtime effect", ""},
-	"schema":        {"names a validation schema for values", "the schema name"},
-	"remember":      {"keeps a value in memory", "the called name"},
-	"find":          {"scans the filesystem and binds the matches", "a list of matches"},
-	"readEach":      {"reads a file line by line as JSON", "a list of parsed lines"},
-	"read":          {"reads a file into memory", "the parsed file content"},
-	"require":       {"validates every item against a schema", ""},
-	"keep":          {"filters a list", "the kept items"},
-	"sort":          {"sorts a list or table", "the ordered result"},
-	"group":         {"groups a table by a column", "the grouped table"},
-	"folder":        {"creates a directory if missing (filesystem write)", ""},
-	"make":          {"binds a value to a name", "the value"},
-	"for":           {"control flow: iterates a list", "the loop singular"},
-	"map":           {"control flow: maps isolated iterations with a bounded number of workers; collects returned results in input order", "the called list, or outcome records when collecting failures"},
-	"while":         {"control flow: repeats while a condition holds", ""},
-	"repeat":        {"control flow: repeats a fixed number of times", ""},
-	"when":          {"control flow: conditional block", ""},
-	"otherwise":     {"control flow: fallback block", ""},
-	"take":          {"selects bounded items; taking first items from a stream consumes it and cancels after the limit", "the selected list"},
-	"classify":      {"organizes items into named buckets", "the classified table"},
-	"evaluate":      {"evaluates a named question batch with Jev in one request", "the named answers"},
-	"judge":         {"judges values against a criterion", "the verdict"},
-	"score":         {"scores values against a criterion", "the scored table"},
-	"append":        {"appends a value to a list (mutation)", ""},
-	"save":          {"writes a file (filesystem write)", ""},
-	"show":          {"prints output", ""},
-	"stop":          {"stops the run", ""},
-	"to":            {"defines a handler block", ""},
-	"call":          {"calls an imported action", "the called result"},
-	"stream":        {"opens a bounded producer and takes ownership of its stream", "an owned, single-consumer stream handle"},
-	"streamFor":     {"consumes a stream sequentially and blocks until its terminal outcome", "the current stream item"},
-	"closeStream":   {"cancels an owned stream and waits for bounded shutdown", ""},
-	"stopReading":   {"cancels the source and exits the nearest stream loop successfully", ""},
-	"collectStream": {"consumes a stream into a list with an explicit overflow limit", "the bounded list"},
-	"sent":          {"calls vocabulary as a sentence: bare word or qualifier.word", "the called result"},
-	"handler":       {"registers an outcome handler", ""},
-	"ask":           {"configures the prompt of a provider call", ""},
-	"using":         {"selects the model for provider calls", ""},
-	"model":         {"overrides the model for this scope", ""},
-	"accept":        {"sets the acceptance probability threshold", ""},
+	"command":              {"defines a runnable command block", "the command name"},
+	"parameter":            {"declares a command line parameter", "the parameter name"},
+	"describe":             {"documentation prose; no runtime effect", ""},
+	"schema":               {"names a validation schema for values", "the schema name"},
+	"remember":             {"keeps a value in memory", "the called name"},
+	"find":                 {"scans the filesystem and binds the matches", "a list of matches"},
+	"readEach":             {"reads a file line by line as JSON", "a list of parsed lines"},
+	"read":                 {"reads a file into memory", "the parsed file content"},
+	"require":              {"validates every item against a schema", ""},
+	"keep":                 {"filters a list", "the kept items"},
+	"sort":                 {"sorts a list or table", "the ordered result"},
+	"group":                {"groups a table by a column", "the grouped table"},
+	"folder":               {"creates a directory if missing (filesystem write)", ""},
+	"readFile":             {"reads one regular file completely as text: UTF-8 only, invalid UTF-8 fails, up to 16 MiB (filesystem read)", "the file text"},
+	"writeFile":            {"creates or explicitly replaces one regular file; policy is create or replace and never implicit, and the atomic form writes a flushed temporary file in the destination folder before replacing (filesystem write)", "the called result"},
+	"appendFile":           {"appends to the end of one regular file (filesystem write)", "the called result"},
+	"checkExists":          {"reports whether the named entry exists: false only when absent, while permission, malformed-path, and I/O errors fail (filesystem read)", "the existence answer"},
+	"inspectEntry":         {"examines the path itself without following a final symbolic link unless explicitly requested (filesystem read)", "the typed FileEntry"},
+	"listEntries":          {"returns the immediate children that exist now, sorted by portable relative path; it does not recurse and fails rather than silently truncating (filesystem read)", "the immediate entries"},
+	"walkThrough":          {"recursively inspects the tree that exists now and returns an explicitly bounded list; it never waits for future changes (filesystem read)", "the bounded entry list"},
+	"createFoldersThrough": {"ensures every folder along a path exists, creating missing parents (filesystem write)", ""},
+	"copyEntry":            {"duplicates an entry while preserving the source; folder copy is recursive and follows the same link, exclusion, cancellation, and entry-limit rules as traversal (filesystem write)", ""},
+	"moveEntry":            {"relocates an entry; a cross-device fallback to copy plus removal only happens when explicitly permitted because it is not atomic (filesystem write)", ""},
+	"removeFile":           {"deletes one exact file; there is no force option that converts permission or I/O failures into success (destructive filesystem write)", ""},
+	"removeEmptyFolder":    {"deletes one empty folder (destructive filesystem write)", ""},
+	"removeFolder":         {"deletes one folder including its contents; the exact phrase is required so recursive deletion is never implied, and symbolic links are not followed (destructive filesystem write)", ""},
+	"streamFiles":          {"opens an owned traversal stream of FileEntry items in depth-first lexical order with backpressure; the handle may be consumed once and must be consumed or closed before its scope exits, and stop reading, close stream, cancellation, or scope cleanup stops the walk promptly (filesystem read)", "an owned, single-consumer traversal stream"},
+	"watchFolder":          {"opens an owned watcher stream of FileChange items that stays active and emits future changes without an implicit snapshot; ownership, credit, counters, cancellation, and terminal failures are separate for every invocation (filesystem read; native-only without a host adapter)", "an owned, single-consumer watcher stream"},
+	"make":                 {"binds a value to a name", "the value"},
+	"for":                  {"control flow: iterates a list", "the loop singular"},
+	"map":                  {"control flow: maps isolated iterations with a bounded number of workers; collects returned results in input order", "the called list, or outcome records when collecting failures"},
+	"while":                {"control flow: repeats while a condition holds", ""},
+	"repeat":               {"control flow: repeats a fixed number of times", ""},
+	"when":                 {"control flow: conditional block", ""},
+	"otherwise":            {"control flow: fallback block", ""},
+	"take":                 {"selects bounded items; taking first items from a stream consumes it and cancels after the limit", "the selected list"},
+	"classify":             {"organizes items into named buckets", "the classified table"},
+	"evaluate":             {"evaluates a named question batch with Jev in one request", "the named answers"},
+	"judge":                {"judges values against a criterion", "the verdict"},
+	"score":                {"scores values against a criterion", "the scored table"},
+	"append":               {"appends a value to a list (mutation)", ""},
+	"save":                 {"writes a file (filesystem write)", ""},
+	"show":                 {"prints output", ""},
+	"stop":                 {"stops the run", ""},
+	"to":                   {"defines a handler block", ""},
+	"call":                 {"calls an imported action", "the called result"},
+	"stream":               {"opens a bounded producer and takes ownership of its stream", "an owned, single-consumer stream handle"},
+	"streamFor":            {"consumes a stream sequentially and blocks until its terminal outcome", "the current stream item"},
+	"closeStream":          {"cancels an owned stream and waits for bounded shutdown", ""},
+	"stopReading":          {"cancels the source and exits the nearest stream loop successfully", ""},
+	"collectStream":        {"consumes a stream into a list with an explicit overflow limit", "the bounded list"},
+	"sent":                 {"calls vocabulary as a sentence: bare word or qualifier.word", "the called result"},
+	"handler":              {"registers an outcome handler", ""},
+	"ask":                  {"configures the prompt of a provider call", ""},
+	"using":                {"selects the model for provider calls", ""},
+	"model":                {"overrides the model for this scope", ""},
+	"accept":               {"sets the acceptance probability threshold", ""},
 }
 
 var (
@@ -384,7 +399,79 @@ var (
 	reNewImport     = regexp.MustCompile(`^\s*import\s+"([^"]*)"(?:\s+as\s+([A-Za-z_]\w*))?`)
 	reNewCallLine   = regexp.MustCompile(`^\s*call\s+([A-Za-z_]\w*)\.([A-Za-z_]\w*)(?:\s+with\s+.*?)?(?:\s+called\s+([A-Za-z_]\w*))?\s*$`)
 	reNewStreamLine = regexp.MustCompile(`^\s*stream\s+([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?)(?:\s+with\s+.*?)?\s+called\s+([A-Za-z_]\w*)\s*$`)
+	reNewWatchLine  = regexp.MustCompile(`^\s*watch\s+folder\s+".*?"\s+recursively\s+called\s+([A-Za-z_]\w*)`)
+	reNewWalkLine   = regexp.MustCompile(`^\s*walk\s+through\s+folder\s+".*?"\s+at\s+most\s+\d+\s+entries\s+called\s+([A-Za-z_]\w*)`)
 )
+
+// filesHoverDocs explains the canonical filesystem constructions while the
+// parser core does not yet classify them. Entries are ordered: the owned
+// traversal and watcher forms first (they extend the stream lifecycle hover),
+// then the remaining read/write/destructive forms. Each entry states the
+// effect label, parameter names, reserved typed failures, and target
+// availability the tooling contract requires. When the core classifies these
+// lines, EditorMeanings takes precedence and these rows stop firing.
+var filesHoverDocs = []struct {
+	re  *regexp.Regexp
+	doc func(code string, m []string) string
+}{
+	{regexp.MustCompile(`^stream\s+(files|folders|entries)\s+under\s+folder\s+".*?"\s+called\s+([A-Za-z_]\w*)`), func(code string, m []string) string {
+		return fmt.Sprintf("```sos\n%s\n```\n\n**Opens traversal stream** `%s` — a bounded, owned producer of `FileEntry` items in depth-first lexical order, with backpressure so traversal cannot outrun the consumer.\n\n**Effect:** filesystem read (`filesystem-read` capability; native and capable WASI hosts).\n\n**Defaults:** files and folders, no patterns, no exclusions, symbolic links not followed, stop on inaccessible entries. `stop reading`, `close stream`, cancellation, or scope cleanup stops the walk promptly.\n\n**May fail while opening or consuming:** `FileNotFound`, `FilePermissionDenied`, `InvalidFilePath`, `FileTraversalLimitExceeded`, `FileSystemUnavailable`.", code, m[2])
+	}},
+	{reNewWatchLine, func(code string, m []string) string {
+		return fmt.Sprintf("```sos\n%s\n```\n\n**Opens watcher** `%s` — an independently owned stream of `FileChange` items that stays active and emits future filesystem changes; it never emits an implicit snapshot.\n\n**Effect:** filesystem read (`filesystem-read` capability; native-only unless the host supplies a watcher adapter).\n\n**Change kinds:** `created`, `modified`, `removed`, `moved`, `overflowed`. An `overflowed` change means the consumer must rescan; the runtime never claims it observed dropped changes. Ownership, credit, counters, cancellation, and terminal failures are separate for every invocation: closing this watcher does not close another watcher from the same action.\n\n**May fail while opening or consuming:** `FileNotFound`, `FilePermissionDenied`, `InvalidFilePath`, `FileWatchOverflow`, `FileSystemUnavailable`.", code, m[1])
+	}},
+	{regexp.MustCompile(`^write\s+.+?\s+(atomically\s+)?to\s+file\s+".*?"\s*$`), func(code string, m []string) string {
+		plan := "The next line must state the policy: `only if it does not exist` (create) or `replacing an existing file` (replace). There is no implicit overwrite."
+		if strings.Contains(code, "atomically") {
+			plan = "Atomic write creates a temporary regular file in the destination folder, flushes and closes it, then atomically replaces the destination where the host supports it; a failure before replacement preserves the old file."
+		}
+		return fmt.Sprintf("```sos\n%s\n```\n\n**Effect:** filesystem write (`filesystem-write` capability; native and capable WASI hosts).\n\n%s\n\n**Parameters:** `contents`, `path`, `policy` (`create` or `replace`). Fallback: `call files.write_text%s with path, contents, policy called written`.\n\n**May fail with:** `FileNotFound`, `FileAlreadyExists`, `FilePermissionDenied`, `FileTooLarge`, `InvalidFileType`, `InvalidFilePath`, `FileSystemUnavailable`.", code, plan, map[bool]string{true: "_atomically"}[strings.Contains(code, "atomically")])
+	}},
+	{regexp.MustCompile(`^(only if it does not exist|replacing an existing file)\s*$`), func(code string, m []string) string {
+		policy := "create"
+		if m[1] == "replacing an existing file" {
+			policy = "replace"
+		}
+		return fmt.Sprintf("```sos\n%s\n```\n\n**Write policy modifier:** passes `policy` `%s` to the write above. Write policy is always explicit; there is no implicit overwrite.", code, policy)
+	}},
+	{regexp.MustCompile(`^append\s+line\s+to\s+file\s+".*?"\s*$`), func(code string, m []string) string {
+		return fmt.Sprintf("```sos\n%s\n```\n\n**Effect:** filesystem write — appends to the end of one regular file (`filesystem-write`; native and capable WASI hosts). Fallback: `call files.append_text with path, contents called written`.\n\n**May fail with:** `FileNotFound`, `FilePermissionDenied`, `InvalidFileType`, `InvalidFilePath`, `FileSystemUnavailable`.", code)
+	}},
+	{regexp.MustCompile(`^check\s+whether\s+(file|folder)\s+".*?"\s+exists\s+called\s+([A-Za-z_]\w*)`), func(code string, m []string) string {
+		return fmt.Sprintf("```sos\n%s\n```\n\n**Effect:** filesystem read — binds `%s` to true only when the named entry is absent; permission, malformed-path, and I/O errors fail instead of returning false (`filesystem-read`; native and capable WASI hosts).\n\n**May fail with:** `FilePermissionDenied`, `InvalidFilePath`, `FileSystemUnavailable`.", code, m[2])
+	}},
+	{regexp.MustCompile(`^inspect\s+entry\s+".*?"\s+called\s+([A-Za-z_]\w*)`), func(code string, m []string) string {
+		return fmt.Sprintf("```sos\n%s\n```\n\n**Effect:** filesystem read — binds `%s` to the typed `FileEntry` for the path itself, without following a final symbolic link unless explicitly requested (`filesystem-read`; native and capable WASI hosts).\n\n**May fail with:** `FileNotFound`, `FilePermissionDenied`, `InvalidFilePath`, `FileSystemUnavailable`.", code, m[1])
+	}},
+	{regexp.MustCompile(`^list\s+(entries|files|folders)\s+in\s+folder\s+".*?"\s+called\s+([A-Za-z_]\w*)`), func(code string, m []string) string {
+		return fmt.Sprintf("```sos\n%s\n```\n\n**Effect:** filesystem read — binds `%s` to the immediate children only (kind: %s), sorted by portable relative path; it does not recurse and fails rather than silently truncating (`filesystem-read`; native and capable WASI hosts).\n\n**May fail with:** `FileNotFound`, `FilePermissionDenied`, `InvalidFilePath`, `FileTraversalLimitExceeded`, `FileSystemUnavailable`.", code, m[2], m[1])
+	}},
+	{reNewWalkLine, func(code string, m []string) string {
+		return fmt.Sprintf("```sos\n%s\n```\n\n**Effect:** filesystem read — binds `%s` to a materialized, explicitly bounded list of `FileEntry` values for the tree that exists now; it never waits for future changes (`filesystem-read`; native and capable WASI hosts).\n\n**Defaults:** files and folders, no patterns, no exclusions, symbolic links not followed, stop on inaccessible entries. Modifier lines may add `including`, `matching`, `excluding`, `at most N folders deep`, and `without following symbolic links`.\n\n**May fail with:** `FileNotFound`, `FilePermissionDenied`, `InvalidFilePath`, `FileTraversalLimitExceeded`, `FileSystemUnavailable`.", code, m[1])
+	}},
+	{regexp.MustCompile(`^copy\s+(file|folder)\s+".*?"\s+to\s+".*?"\s*$`), func(code string, m []string) string {
+		scope := "It does not follow a symbolic-link source by default."
+		if m[1] == "folder" {
+			scope = "Folder copy is recursive and observes the same link, exclusion, cancellation, and entry-limit rules as traversal."
+		}
+		return fmt.Sprintf("```sos\n%s\n```\n\n**Effect:** filesystem write — duplicates the source while preserving it (capabilities: read and write; native and capable WASI hosts). %s The next line may require `only if the destination does not exist`.\n\n**May fail with:** `FileNotFound`, `FileAlreadyExists`, `FilePermissionDenied`, `InvalidFileType`, `InvalidFilePath`, `FileTraversalLimitExceeded`, `FileSystemUnavailable`.", code, scope)
+	}},
+	{regexp.MustCompile(`^move\s+(file|folder)\s+".*?"\s+to\s+".*?"\s*$`), func(code string, m []string) string {
+		return fmt.Sprintf("```sos\n%s\n```\n\n**Effect:** filesystem write — relocates the entry (capabilities: read and write; native and capable WASI hosts). Cross-device move may fall back to copy followed by removal only when explicitly permitted, because that fallback is not atomic.\n\n**May fail with:** `FileNotFound`, `FileAlreadyExists`, `FilePermissionDenied`, `InvalidFileType`, `InvalidFilePath`, `FileSystemUnavailable`.", code)
+	}},
+	{regexp.MustCompile(`^remove\s+(file\s+".*?"|empty\s+folder\s+".*?"|folder\s+".*?"\s+including\s+its\s+contents)\s*$`), func(code string, m []string) string {
+		kind := "one exact file"
+		if strings.HasPrefix(m[1], "empty") {
+			kind = "one empty folder"
+		} else if strings.HasPrefix(m[1], "folder") {
+			kind = "one folder and its contents — the phrase `including its contents` is required, because `remove entry` would conceal whether recursive deletion is possible"
+		}
+		return fmt.Sprintf("```sos\n%s\n```\n\n**Effect:** destructive filesystem write — deletes %s. Recursive removal does not follow symbolic links and applies an entry limit before deletion begins where the host can enumerate safely. There is no force option that converts permission or I/O failures into success (`filesystem-write`; native and capable WASI hosts).\n\n**May fail with:** `FileNotFound`, `FilePermissionDenied`, `InvalidFileType`, `InvalidFilePath`, `FileTraversalLimitExceeded`, `FileSystemUnavailable`.", code, kind)
+	}},
+	{regexp.MustCompile(`^create\s+folders\s+through\s+".*?"\s*$`), func(code string, m []string) string {
+		return fmt.Sprintf("```sos\n%s\n```\n\n**Effect:** filesystem write — ensures every folder along the path exists, creating missing parents (`filesystem-write`; native and capable WASI hosts). Compare `create folder ... if missing` for one folder.\n\n**May fail with:** `FileAlreadyExists` (when a non-folder entry blocks the path), `FilePermissionDenied`, `InvalidFilePath`, `FileSystemUnavailable`.", code)
+	}},
+}
 
 // newSyntaxHover explains package/export/import/call lines the core does not
 // classify yet, plus sentence calls that resolve in this document's
@@ -434,6 +521,11 @@ func (s *server) newSyntaxHover(uri, text, line string) (string, bool) {
 	}
 	if m := reNewCallLine.FindStringSubmatch(code); m != nil {
 		return s.qualifiedCallHover(code, m[1], m[2]), true
+	}
+	for _, row := range filesHoverDocs {
+		if m := row.re.FindStringSubmatch(code); m != nil {
+			return row.doc(code, m), true
+		}
 	}
 	if head := sentHead(code); head != "" {
 		if t := resolveSent(head, s.wordTargets(uri, vocabFilename(uri, s.workspaceRoot), text)); t != nil {

@@ -33,6 +33,13 @@ as pending analysis; **Analyze** or **Run** performs the configured requests.
 - `repo-assistant` is a multi-file Studio project.
 - `semlint` is a complete repository scanner and calibration CLI.
 
+## Filesystem and background services
+
+- `files` demonstrates the canonical filesystem surface: bounded `walk through`
+  and streaming `stream ... under` traversal, explicit write policy with atomic
+  replacement, copy/move with explicit overwrite wording, reserved typed
+  failures, and a recursive background watcher.
+
 ## External modules
 
 - `external-command` wraps an existing CLI without a shell.

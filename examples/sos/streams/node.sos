@@ -1,0 +1,6 @@
+import "example/streams-node" as node_events
+
+stream node_events.finite with 3 called incoming
+for each event from incoming:
+  show message of event
+

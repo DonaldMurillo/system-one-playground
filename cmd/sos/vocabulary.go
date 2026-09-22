@@ -173,6 +173,12 @@ func printLibraryEntries(w io.Writer, entries []sos.VocabularyEntry, path string
 		if len(e.Effects) > 0 {
 			fmt.Fprintf(w, "    effects: %s\n", strings.Join(e.Effects, ", "))
 		}
+		if len(e.PossibleFailures) > 0 {
+			fmt.Fprintf(w, "    may fail with: %s\n", strings.Join(e.PossibleFailures, ", "))
+		}
+		if len(e.Targets) > 0 {
+			fmt.Fprintf(w, "    targets: %s\n", strings.Join(e.Targets, ", "))
+		}
 	}
 }
 

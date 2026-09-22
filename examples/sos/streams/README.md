@@ -17,6 +17,9 @@ sos run close.sos
 sos run collect.sos
 sos run sample.sos
 sos run failure.sos
+sos run node.sos
+sos run local.sos
+sos run market-watch.sos
 ```
 
 `main.sos` watches a simulated deployment as delayed updates arrive from the
@@ -30,6 +33,22 @@ consumption. `collect.sos` materializes only under an overflow bound and
 `sample.sos` intentionally cancels after three items. `failure.sos` retains and
 prints the two items observed before handling the producer's declared terminal
 `ConnectionLost` failure.
+
+`node.sos` exercises the same credit-based protocol through a Node.js
+producer. Keeping both fixtures executable prevents the protocol from quietly
+depending on one language's buffering or process behavior.
+
+`market-watch.sos` is the complete live-feed example: its Node adapter remains
+alive for ten seconds and emits one typed quote each second. The SysOneScript
+program reacts as values arrive and computes the observed high without first
+building a list. The adapter uses deterministic offline prices so anyone can
+run it; its `emit` call is the seam where a production broker WebSocket or
+weather polling client would supply real updates.
+
+`local.sos` needs no plugin at all. It defines a streaming action in
+SysOneScript, sends typed progress records as work happens, and deliberately
+stops after the successful deployment. This demonstrates that a stream is a
+live, cancellable producer rather than another spelling of a list loop.
 
 The fixture honors item credit and acknowledges cancellation. Its stdout is
 protocol-only; program output still comes from `show`. Try replacing a bound
