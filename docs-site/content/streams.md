@@ -4,6 +4,11 @@ SysOneScript streams are bounded, cancellable, and single-consumer. They model
 an active producer rather than a list that happens to arrive slowly. Opening,
 ownership, consumption, and cancellation are therefore visible in source.
 
+Rebuilding over an existing bundled directory requires native atomic directory
+exchange (macOS, or Linux amd64/arm64 on a supporting filesystem). Other
+platforms preserve the existing bundle and require a new output path; the
+builder never removes a live bundle to imitate atomic replacement.
+
 ## Declare, open, and consume
 
 A streaming action declares its item type with `streaming`:

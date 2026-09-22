@@ -1,9 +1,8 @@
-//go:build linux
+//go:build linux && (amd64 || arm64)
 
 package sosbuild
 
 import (
-	"runtime"
 	"syscall"
 	"unsafe"
 )
@@ -21,10 +20,7 @@ func atomicSwapDirectories(a, b string) error {
 	if err != nil {
 		return err
 	}
-	number := uintptr(316)
-	if runtime.GOARCH == "arm64" {
-		number = 276
-	}
+	number := uintptr(renameAt2Syscall)
 	atFDCWD := ^uintptr(99)
 	_, _, errno := syscall.Syscall6(number, atFDCWD, uintptr(unsafe.Pointer(ap)), atFDCWD, uintptr(unsafe.Pointer(bp)), renameExchange, 0)
 	if errno != 0 {

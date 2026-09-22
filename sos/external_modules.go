@@ -462,7 +462,8 @@ func DoctorExternalModule(ctx context.Context, dir, modulePath string) error {
 	}
 	if d.Runtime.Kind == "command" {
 		for _, action := range d.Actions {
-			if _, err := exec.LookPath(action.Command.Program); err != nil {
+			program := d.resolveDefinitionProgram(action.Command.Program)
+			if _, err := exec.LookPath(program); err != nil {
 				return fmt.Errorf("module %s command %s: %w", d.Module.Path, action.Command.Program, err)
 			}
 		}
