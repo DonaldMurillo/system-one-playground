@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/http"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -963,6 +964,18 @@ func TestBatchAggregateItemBoundIsATypedFailure(t *testing.T) {
 	}
 }
 
+func TestBatchFlushReleasesKeyOrder(t *testing.T) {
+	policy := &batchPolicy{clock: &VirtualStreamClock{}, count: 1, keyOf: keyExtractor(nil), counters: &transformCounters{}, batches: map[any]*batchState{}}
+	for range 32 {
+		if err := policy.onItem(1.0, func(any) bool { return true }); err != nil {
+			t.Fatal(err)
+		}
+		if len(policy.keyOrder) != 0 {
+			t.Fatalf("flushed batch retained %d stale keys", len(policy.keyOrder))
+		}
+	}
+}
+
 func TestIdleTimeoutFailsWhenSourceGoesQuiet(t *testing.T) {
 	clock := &VirtualStreamClock{}
 	ch := make(chan any, 8)
@@ -1078,6 +1091,38 @@ func TestHandleSequentiallyPreservesOrderAndDetectsAbandonedObligations(t *testi
 	err := HandleSequentially(context.Background(), owned2, func(context.Context, any) error { return nil })
 	if failureKind(err) != "StreamObligationAbandoned" {
 		t.Fatalf("want abandoned obligation failure, got %v", err)
+	}
+}
+
+func TestHandlerFailureReportsUnsettledOwnedItem(t *testing.T) {
+	boom := errors.New("handler failed")
+	handlers := map[string]func(StreamHandle) error{
+		"sequential": func(up StreamHandle) error {
+			return HandleSequentially(context.Background(), up, func(context.Context, any) error { return boom })
+		},
+		"concurrent": func(up StreamHandle) error {
+			return HandleWithBoundConcurrency(context.Background(), up, 1, func(context.Context, any) error { return boom })
+		},
+		"latest": func(up StreamHandle) error {
+			return HandleLatest(context.Background(), up, func(context.Context, any) (any, error) { return nil, boom }, LatestOptions{})
+		},
+		"conflate": func(up StreamHandle) error {
+			return HandleConflating(context.Background(), up, func(context.Context, any) error { return boom }, ConflateOptions{})
+		},
+		"exclusive": func(up StreamHandle) error {
+			return HandleExclusively(context.Background(), up, func(context.Context, any) error { return boom }, ExclusiveOptions{Policy: BusyIgnore})
+		},
+	}
+	for name, handle := range handlers {
+		t.Run(name, func(t *testing.T) {
+			ch := make(chan any, 1)
+			ch <- NewOwnedItem(name, nil)
+			close(ch)
+			err := handle(openTestStream(ch))
+			if failureKind(err) != "StreamObligationAbandoned" || !errors.Is(err, boom) {
+				t.Fatalf("want obligation and original handler failure, got %v (%v)", err, FailureValue(err))
+			}
+		})
 	}
 }
 
@@ -1378,6 +1423,58 @@ func TestHandleWithBoundConcurrencyBoundsSiblingCleanup(t *testing.T) {
 	}
 }
 
+func TestBoundedConcurrentAbortSettlesActiveHTTPRequests(t *testing.T) {
+	registry := newHTTPServerRegistry()
+	firstID, firstObligation := registry.register(nil)
+	secondID, secondObligation := registry.register(nil)
+	first := map[string]any{"id": firstID, "__http_authority": firstObligation}
+	second := map[string]any{"id": secondID, "__http_authority": secondObligation}
+	items := make(chan any, 2)
+	items <- first
+	items <- second
+	close(items)
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	defer close(releaseFirst)
+	err := handleWithBoundConcurrencyCleanup(context.Background(), openTestStream(items), 2, 30*time.Millisecond, func(_ context.Context, item any) error {
+		if item.(map[string]any)["id"] == firstID {
+			close(firstStarted)
+			<-releaseFirst // A misbehaving sibling ignores cancellation.
+			return nil
+		}
+		<-firstStarted
+		return errors.New("second handler failed")
+	}, func(item any) error {
+		return registry.completeStatus(item, http.StatusServiceUnavailable)
+	})
+	if failureKind(err) != "StreamHandlerCleanupFailed" {
+		t.Fatalf("cleanup result = %v (%v)", err, FailureValue(err))
+	}
+	for _, obligation := range []*httpResponseObligation{firstObligation, secondObligation} {
+		select {
+		case <-obligation.done:
+		default:
+			t.Fatal("active HTTP request remained unanswered after sibling failure")
+		}
+		if obligation.response.status != http.StatusServiceUnavailable {
+			t.Fatalf("abort status = %d", obligation.response.status)
+		}
+	}
+}
+
+func TestBoundedAbortPreservesGenericOwnedItemPolicy(t *testing.T) {
+	r := &runtime{}
+	withoutPolicy := NewOwnedItem("job", nil)
+	if err := r.settleBoundedAbort(withoutPolicy); failureKind(err) != "StreamObligationAbandoned" || withoutPolicy.Settled() {
+		t.Fatalf("missing policy: settled=%v error=%v", withoutPolicy.Settled(), err)
+	}
+	var reason string
+	withPolicy := NewOwnedItem("job", func(value string) error { reason = value; return nil })
+	if err := r.settleBoundedAbort(withPolicy); err != nil || !withPolicy.Settled() || reason != "handler canceled" {
+		t.Fatalf("disposal: settled=%v reason=%q error=%v", withPolicy.Settled(), reason, err)
+	}
+}
+
 func TestIdleTimeoutResetsOnArrivalAtExactBoundaryUnderBackpressure(t *testing.T) {
 	clock := &VirtualStreamClock{}
 	ch := make(chan any, 8)
@@ -1470,6 +1567,175 @@ func TestHandleLatestCleanupDeadlineReportsCleanupFailure(t *testing.T) {
 	}
 	if FailureValue(err)["operation"] != "handle only the newest" {
 		t.Fatalf("payload=%v", FailureValue(err))
+	}
+}
+
+func TestHandleLatestRejectsPulledItemWhenPriorCleanupTimesOut(t *testing.T) {
+	ch := make(chan any)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	defer close(release)
+	oldItem := NewOwnedItem("old", nil)
+	newItem := NewOwnedItem("new", nil)
+	go func() {
+		ch <- oldItem
+		<-started
+		ch <- newItem
+		close(ch)
+	}()
+	err := HandleLatest(context.Background(), openTestStream(ch), func(ctx context.Context, item any) (any, error) {
+		if item == oldItem {
+			close(started)
+			<-release // deliberately ignore cancellation beyond the cleanup deadline
+		}
+		return nil, nil
+	}, LatestOptions{
+		CleanupDeadline: 30 * time.Millisecond,
+		Replacement: func(item *OwnedItem) error {
+			return item.Complete("rejected")
+		},
+	})
+	if failureKind(err) != "StreamHandlerCleanupFailed" {
+		t.Fatalf("cleanup failure = %v", err)
+	}
+	if !oldItem.Settled() || !newItem.Settled() {
+		t.Fatalf("pulled items left unresolved: old=%v new=%v", oldItem.Settled(), newItem.Settled())
+	}
+}
+
+func TestHandleLatestCancelsCompletedCleanupAlarms(t *testing.T) {
+	clock := &VirtualStreamClock{}
+	ch := make(chan any)
+	started := make(chan struct{})
+	go func() {
+		ch <- 1.0
+		<-started
+		ch <- 2.0
+		close(ch)
+	}()
+	err := HandleLatest(context.Background(), openTestStream(ch), func(ctx context.Context, item any) (any, error) {
+		if item == 1.0 {
+			close(started)
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		return nil, nil
+	}, LatestOptions{CleanupDeadline: time.Hour, Clock: clock})
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock.mu.Lock()
+	remaining := len(clock.alarms)
+	clock.mu.Unlock()
+	if remaining != 0 {
+		t.Fatalf("completed cleanup retained %d virtual alarm(s)", remaining)
+	}
+}
+
+type signalingOwnedSource struct {
+	item   any
+	pulled chan struct{}
+}
+
+func (s *signalingOwnedSource) next(context.Context) (any, bool, error) {
+	close(s.pulled)
+	return s.item, true, nil
+}
+func (*signalingOwnedSource) cancel(context.Context) error { return nil }
+
+func TestOwnershipSensitivePullerSettlesItemCanceledBeforeDelivery(t *testing.T) {
+	item := NewOwnedItem("request", nil)
+	source := &signalingOwnedSource{item: item, pulled: make(chan struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	dropped := make(chan struct{})
+	puller := newUpstreamPullerWithOptions(ctx, newStreamHandle(TypeRef{Name: "any"}, "test.source", source), 0, func(value any) {
+		_ = value.(*OwnedItem).Complete("canceled before delivery")
+		close(dropped)
+	})
+	puller.request()
+	<-source.pulled
+	cancel()
+	select {
+	case <-dropped:
+	case <-time.After(time.Second):
+		t.Fatal("pulled item was not settled after cancellation")
+	}
+	if !item.Settled() {
+		t.Fatal("pulled item remains owned")
+	}
+}
+
+func TestHandleLatestFailureSettlesActiveOwnedSibling(t *testing.T) {
+	ch := make(chan any)
+	started := make(chan struct{})
+	owned := NewOwnedItem("request-a", nil)
+	go func() {
+		ch <- owned
+		<-started
+		ch <- "request-b"
+		close(ch)
+	}()
+	err := HandleLatest(context.Background(), openTestStream(ch), func(ctx context.Context, item any) (any, error) {
+		if item == owned {
+			close(started)
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		return nil, errors.New("request-b failed")
+	}, LatestOptions{
+		Key: func(item any) (any, error) {
+			if ownedItem, ok := item.(*OwnedItem); ok {
+				return ownedItem.Value, nil
+			}
+			return item, nil
+		},
+		Concurrency:     2,
+		KeyLimit:        2,
+		CleanupDeadline: time.Second,
+		Replacement: func(item *OwnedItem) error {
+			return item.Complete("handler failed")
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "request-b failed") {
+		t.Fatalf("handler failure = %v", err)
+	}
+	if !owned.Settled() {
+		t.Fatal("active sibling's obligation was not settled")
+	}
+}
+
+func TestHandleLatestParentCancellationSettlesActiveOwnedItem(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch := make(chan any)
+	started := make(chan struct{})
+	owned := NewOwnedItem("request", nil)
+	go func() { ch <- owned }()
+	done := make(chan error, 1)
+	go func() {
+		done <- HandleLatest(ctx, openTestStream(ch), func(ctx context.Context, _ any) (any, error) {
+			close(started)
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}, LatestOptions{
+			CleanupDeadline: time.Second,
+			Replacement: func(item *OwnedItem) error {
+				return item.Complete("run canceled")
+			},
+		})
+	}()
+	<-started
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancel result = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("latest handling did not stop after parent cancellation")
+	}
+	if !owned.Settled() {
+		t.Fatal("active item remained unresolved after parent cancellation")
 	}
 }
 
@@ -1746,6 +2012,18 @@ func TestRuntimeStreamClockUsesInjectedVirtualClock(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("stream timer did not follow virtual time")
+	}
+}
+
+func TestRuntimeStreamAlarmCancellationReclaimsVirtualTimer(t *testing.T) {
+	virtual := NewVirtualClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+	_, cancel := streamAlarm(newRuntimeStreamClock(virtual), time.Hour)
+	if virtual.timerCount() != 1 {
+		t.Fatalf("armed timers = %d", virtual.timerCount())
+	}
+	cancel()
+	if virtual.timerCount() != 0 {
+		t.Fatalf("canceled timer retained: %d", virtual.timerCount())
 	}
 }
 

@@ -67,7 +67,10 @@ func parseTraversalSpec(opts Options, o traversalOptions) (traversalSpec, error)
 	if err != nil {
 		return traversalSpec{}, err
 	}
-	kinds := map[string]bool{fileKind: true, folderKind: true}
+	kinds := map[string]bool{}
+	if len(o.kinds) == 0 {
+		kinds[fileKind], kinds[folderKind] = true, true
+	}
 	for _, kind := range o.kinds {
 		switch kind {
 		case fileKind, folderKind, linkKind, otherKind:

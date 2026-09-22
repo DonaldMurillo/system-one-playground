@@ -462,7 +462,7 @@ func analyze(p *Program) []Diagnostic {
 				case "filterStream", "projectStream", "handleEachStream", "handleOneStream", "newestStream":
 					names[m[1]] = true
 				case "exhaustStream":
-					names[m[1]] = true
+					names[strings.ReplaceAll(m[1], " ", "_")] = true
 				case "conflateStream":
 					if policy := streamChild(s, "conflatePolicy"); policy != nil {
 						names[match("conflatePolicy", policy.Text)[1]] = true
@@ -967,7 +967,7 @@ func checkStreamOwnership(p *Program, actions map[string]*Statement) []Diagnosti
 					ds = append(ds, Diagnostic{s.Line, 1, "stream " + m[3] + " is already active; consume or close it before reopening"})
 					continue
 				}
-				owned[m[3]] = &streamOwnershipState{line: s.Line, obligations: streamActionObligations(p, "http.listen")}
+				owned[m[3]] = &streamOwnershipState{line: s.Line, obligations: []string{"http-response"}}
 			case "streamFiles", "watchFolder":
 				if openFailureHandlerRecovers(s) {
 					ds = append(ds, Diagnostic{s.Line, 1, "an opening failure handler cannot recover and continue because no stream handle exists; finish, fail, stop, or pass the failure on"})
@@ -1019,6 +1019,9 @@ func checkStreamOwnership(p *Program, actions map[string]*Statement) []Diagnosti
 					ds = append(ds, Diagnostic{s.Line, 1, name + " was already consumed"})
 				} else {
 					state.consumed = true
+					if ownsHTTPResponse(state.obligations) && !streamHandlerCompletesObligations(p, [][]*Statement{s.Body}, m[1], state.obligations) {
+						ds = append(ds, Diagnostic{s.Line, 1, "an owned source item must be completed, transferred, or explicitly rejected on every reachable handler path; the handler never uses " + m[1]})
+					}
 				}
 				previous := loopStream
 				loopStream = name
@@ -2168,6 +2171,15 @@ func streamActionObligations(p *Program, target string) []string {
 	return obligations
 }
 
+func ownsHTTPResponse(obligations []string) bool {
+	for _, obligation := range obligations {
+		if obligation == "http-response" {
+			return true
+		}
+	}
+	return false
+}
+
 func streamChild(s *Statement, kind string) *Statement {
 	for _, c := range s.Body {
 		if c.Kind == kind {
@@ -2199,24 +2211,14 @@ func streamSink(s *Statement, inline string) string {
 	return ""
 }
 
-// streamHandlerBodies returns the handler statement lists of a handling
-// construction: bodies under its policy lines (or directly under the header
-// for the bounded and sequential forms).
+// streamHandlerBodies returns exactly the statements the runtime executes for
+// an item. Policy continuation lines are metadata, not alternate code paths.
 func streamHandlerBodies(s *Statement) [][]*Statement {
-	var out [][]*Statement
 	switch s.Kind {
-	case "handleEachStream", "handleOneStream", "filterStream", "projectStream":
-		out = append(out, s.Body)
-	case "newestStream", "conflateStream", "exhaustStream":
-		out = append(out, s.Body)
-		for _, c := range s.Body {
-			switch c.Kind {
-			case "newestCancel", "cancelPolicy", "conflatePolicy", "exhaustPolicy":
-				out = append(out, c.Body)
-			}
-		}
+	case "handleEachStream", "handleOneStream", "filterStream", "projectStream", "newestStream", "conflateStream", "exhaustStream":
+		return [][]*Statement{streamHandlerStatements(s)}
 	}
-	return out
+	return nil
 }
 
 // streamCallTargets lists every module or local action invoked by a handler.
@@ -2255,6 +2257,9 @@ func streamActionMetadata(p *Program, target string) (effects, obligations []str
 	mod := moduleAlias(p, alias)
 	if mod == nil {
 		return nil, nil
+	}
+	if mod.Key == "std/http" && action == "listen" {
+		return []string{"network-listen"}, []string{"http-response"}
 	}
 	if mod.external != nil {
 		for _, a := range mod.external.Actions {
@@ -2318,17 +2323,40 @@ func statementMentionsBinding(text, item string) bool {
 // invoke an action that owns obligations or name one of the inherited
 // obligation names.
 func statementCompletesObligation(p *Program, s *Statement, item string, obligations []string) bool {
+	if s.Kind == "httpRespond" || s.Kind == "httpRespondComplete" {
+		if m := match(s.Kind, s.Text); m != nil {
+			return m[1] == item
+		}
+		return false
+	}
 	if s.Kind != "call" && s.Kind != "sent" {
 		return false
 	}
 	if !statementMentionsBinding(s.Text, item) {
 		return false
 	}
-	var target string
+	var target, argsText string
 	if s.Kind == "call" {
-		target = match("call", s.Text)[1]
+		if m := match("call", s.Text); m != nil {
+			target, argsText = m[1], m[2]
+		}
 	} else if m := matchSent(s.Text); m != nil {
-		target = m[1]
+		target, argsText = m[1], m[2]
+		if argsText == "" {
+			argsText = m[3]
+		}
+	}
+	if ownsHTTPResponse(obligations) {
+		alias, action, qualified := strings.Cut(target, ".")
+		if qualified {
+			if mod := moduleAlias(p, alias); mod != nil && mod.Key == "std/http" {
+				switch action {
+				case "respond_status", "respond_text", "respond_json", "respond":
+					args, err := splitExpressions(argsText)
+					return err == nil && len(args) > 0 && strings.TrimSpace(args[0]) == item
+				}
+			}
+		}
 	}
 	if len(streamActionObligations(p, target)) > 0 {
 		return true
@@ -2526,6 +2554,10 @@ func checkStreamConstruction(p *Program, s *Statement, m []string, owned map[str
 			diag(s.Line, "an owned source item must be completed, transferred, or explicitly rejected on every reachable handler path; the handler never uses %s", m[1])
 		}
 	case "newestStream":
+		sourceObligations := []string(nil)
+		if source := owned[m[3]]; source != nil {
+			sourceObligations = source.obligations
+		}
 		if streamChild(s, "newestCancel") == nil {
 			diag(s.Line, "latest-only handling must declare its cancellation line: \"when a newer %s arrives cancel the previous work\"", m[1])
 		}
@@ -2548,8 +2580,11 @@ func checkStreamConstruction(p *Program, s *Statement, m []string, owned map[str
 		if streamHandlerNonIdempotent(p, targets) && streamChild(s, "effectAck") == nil {
 			diag(s.Line, "the handler performs non-idempotent effects; cancellation does not reverse completed effects; add \"acknowledging completed effects are not reversed\"")
 		}
-		if streamHandlerOwnsObligations(p, targets) && streamChild(s, "cancelPolicy") == nil {
+		if (len(sourceObligations) > 0 || streamHandlerOwnsObligations(p, targets)) && streamChild(s, "cancelPolicy") == nil {
 			diag(s.Line, "the handler owns completion obligations; add \"canceling an older %s with status <code>\" so canceled items are completed", m[1])
+		}
+		if ownsHTTPResponse(sourceObligations) && !streamHandlerCompletesObligations(p, bodies, m[1], sourceObligations) {
+			diag(s.Line, "an owned source item must be completed, transferred, or explicitly rejected on every reachable handler path; the handler never uses %s", m[1])
 		}
 		if policy := streamChild(s, "cancelPolicy"); policy != nil {
 			if status := match("cancelPolicy", policy.Text)[2]; !validHTTPStatus(status) {
@@ -2573,6 +2608,9 @@ func checkStreamConstruction(p *Program, s *Statement, m []string, owned map[str
 		}
 		source := strings.ReplaceAll(m[1], " ", "_")
 		obligations := consume(source, s.Line)
+		if ownsHTTPResponse(obligations) && !streamHandlerCompletesObligations(p, streamHandlerBodies(s), source, obligations) {
+			diag(s.Line, "an owned source item must be completed, transferred, or explicitly rejected on every reachable handler path; the handler never uses %s", source)
+		}
 		if len(policies) == 1 {
 			pm := match("exhaustPolicy", policies[0].Text)
 			if pm[1] == "ignoring" && len(obligations) > 0 {

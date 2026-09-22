@@ -152,7 +152,7 @@ func classifyFileContinuation(text string) string {
 var fileContinuationChildren = map[string][]string{
 	"writeFile": {"fsPolicy"},
 
-	"copyEntry":   {"fsPolicy"},
+	"copyEntry":   {"fsPolicy", "fsExclude"},
 	"moveEntry":   {"fsPolicy"},
 	"walkThrough": {"fsInclude", "fsMatch", "fsExclude", "fsDepth", "fsLinks"},
 	"streamFiles": {"fsMatch", "fsExclude", "fsDepth", "fsLinks"},

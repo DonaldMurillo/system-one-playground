@@ -1,6 +1,7 @@
 # A background service: watch an inbox recursively and process each arriving
 # document. The watcher is an independently owned stream, so cancelling or
 # closing it never affects another watcher opened by the same program.
+import "std/path" as path
 
 create folder "incoming" if missing
 create folders through "processed/2026"
@@ -13,6 +14,8 @@ for each change from changes:
   when kind of change is "created":
     when entry_kind of change is "file":
       make destination "processed/2026/{relative_path of change}"
+      call path.directory with destination called parent
+      create folders through parent
       move file path of change to destination
         only if the destination does not exist
       make line "filed {relative_path of change}"

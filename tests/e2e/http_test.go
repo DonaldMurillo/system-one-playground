@@ -170,6 +170,178 @@ func TestHTTPExampleRejectsMalformedRequestWithoutCrashing(t *testing.T) {
 	}
 }
 
+func TestHTTPHandleEachKeepsListenerAfterRequestFailure(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	_ = listener.Close()
+	dir := t.TempDir()
+	writeScript(t, dir, "sos.toml", "version = 1\n[external]\nnetwork = true\n")
+	source := fmt.Sprintf(`listen for HTTP requests on loopback port %d called requests:
+  request deadline 3 seconds
+handle each request from requests one at a time:
+  read JSON body from request called payload
+  respond to request with status 202 and JSON payload
+`, port)
+	script := writeScript(t, dir, "main.sos", source)
+	command := exec.Command(sosBin, "run", script)
+	command.Dir = dir
+	var stdout, stderr bytes.Buffer
+	command.Stdout, command.Stderr = &stdout, &stderr
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = command.Process.Kill(); _, _ = command.Process.Wait() })
+	client := &http.Client{Timeout: 2 * time.Second}
+	endpoint := fmt.Sprintf("http://127.0.0.1:%d", port)
+	var response *http.Response
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		response, err = client.Post(endpoint, "application/json", strings.NewReader("{bad json}"))
+		if err == nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("first request: %v stderr=%s", err, stderr.String())
+	}
+	_, _ = io.Copy(io.Discard, response.Body)
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("first status=%d stderr=%s", response.StatusCode, stderr.String())
+	}
+	response, err = client.Post(endpoint, "application/json", strings.NewReader(`{"message":"still alive"}`))
+	if err != nil {
+		t.Fatalf("second request: %v stderr=%s", err, stderr.String())
+	}
+	body, readErr := io.ReadAll(response.Body)
+	_ = response.Body.Close()
+	if readErr != nil || response.StatusCode != http.StatusAccepted || !strings.Contains(string(body), "still alive") {
+		t.Fatalf("second status=%d body=%q read=%v stderr=%s", response.StatusCode, body, readErr, stderr.String())
+	}
+}
+
+func TestCanonicalHTTPForEachContinuesAfterRequestDeadline(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	_ = listener.Close()
+	dir := t.TempDir()
+	writeScript(t, dir, "sos.toml", "version = 1\n[external]\nnetwork = true\n")
+	source := fmt.Sprintf(`listen for HTTP requests on loopback port %d called requests:
+  request deadline 250 milliseconds
+make seen 0
+for each request from requests:
+  assign seen seen + 1
+  when seen is 1:
+    wait for 3 seconds
+  respond to request with status 200 and text "ready"
+  when seen is 2:
+    stop reading
+`, port)
+	script := writeScript(t, dir, "main.sos", source)
+	command := exec.Command(sosBin, "run", script)
+	command.Dir = dir
+	var stdout, stderr bytes.Buffer
+	command.Stdout, command.Stderr = &stdout, &stderr
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = command.Process.Kill(); _, _ = command.Process.Wait() })
+	client := &http.Client{Timeout: 2 * time.Second}
+	endpoint := fmt.Sprintf("http://127.0.0.1:%d", port)
+	var response *http.Response
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		response, err = client.Get(endpoint + "/slow")
+		if err == nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("slow request: %v stderr=%s", err, stderr.String())
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusGatewayTimeout {
+		t.Fatalf("slow status=%d stderr=%s", response.StatusCode, stderr.String())
+	}
+	response, err = client.Get(endpoint + "/ready")
+	if err != nil {
+		t.Fatalf("second request did not reach handler: %v stderr=%s", err, stderr.String())
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil || response.StatusCode != http.StatusOK || string(body) != "ready" {
+		t.Fatalf("second response status=%d body=%q error=%v stderr=%s", response.StatusCode, body, err, stderr.String())
+	}
+	if err := command.Wait(); err != nil {
+		t.Fatalf("server exit: %v stderr=%s", err, stderr.String())
+	}
+}
+
+func TestHTTPRateLimitRejectsExtraRequestPromptly(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	_ = listener.Close()
+	dir := t.TempDir()
+	writeScript(t, dir, "sos.toml", "version = 1\n[external]\nnetwork = true\n")
+	source := fmt.Sprintf(`listen for HTTP requests on loopback port %d called requests:
+  request deadline 3 seconds
+limit requests to one each second
+  keeping the first
+  rejecting excess requests with status 429
+  called limited
+for each request from limited:
+  respond to request with status 202
+`, port)
+	script := writeScript(t, dir, "main.sos", source)
+	command := exec.Command(sosBin, "run", script)
+	command.Dir = dir
+	var stdout, stderr bytes.Buffer
+	command.Stdout, command.Stderr = &stdout, &stderr
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = command.Process.Kill(); _, _ = command.Process.Wait() })
+	client := &http.Client{Timeout: 2 * time.Second}
+	endpoint := fmt.Sprintf("http://127.0.0.1:%d", port)
+	var response *http.Response
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		response, err = client.Get(endpoint)
+		if err == nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("first request: %v stderr=%s", err, stderr.String())
+	}
+	_, _ = io.Copy(io.Discard, response.Body)
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusAccepted {
+		t.Fatalf("first status=%d stderr=%s", response.StatusCode, stderr.String())
+	}
+	response, err = client.Get(endpoint)
+	if err != nil {
+		t.Fatalf("second request: %v stderr=%s", err, stderr.String())
+	}
+	_, _ = io.Copy(io.Discard, response.Body)
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("second status=%d stderr=%s", response.StatusCode, stderr.String())
+	}
+}
+
 func TestHTTPClientRequiresNetworkCapability(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("ok"))

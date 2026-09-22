@@ -92,3 +92,25 @@ make continued "yes"
 	}
 	t.Fatalf("missing files stream event: %#v", events)
 }
+
+func TestCanonicalWalkKindModifierFiltersEntries(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "nested"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "one.txt"), []byte("one"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p, diagnostics := LoadProgram(filepath.Join(dir, "main.sos"), "walk through folder \".\" at most 20 entries called files\n  including files\n")
+	if len(diagnostics) != 0 {
+		t.Fatal(diagnostics)
+	}
+	result, err := Run(context.Background(), p, Options{Dir: dir, Stdout: &strings.Builder{}, Stderr: &strings.Builder{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, ok := result.Variables["files"].([]any)
+	if !ok || len(entries) != 1 || entries[0].(map[string]any)["kind"] != "file" {
+		t.Fatalf("including files returned %#v", result.Variables["files"])
+	}
+}

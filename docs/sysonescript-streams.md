@@ -183,6 +183,9 @@ bound with `HandleWithBoundConcurrencyCleanup`; the simpler helper uses five
 seconds and reports `StreamHandlerCleanupFailed` on expiry. `handle each ... one at a time`
 (concat-map) is the ordered, capacity-one form; the checker may recommend a
 plain `for each` loop when no owned obligation or handler lifecycle is needed.
+For HTTP request streams, cancellation also completes the failed request and
+every active sibling with a bounded service-unavailable response, even when a
+handler ignores its canceled context until the cleanup deadline.
 
 ### Canceling, finishing, and rejecting while busy
 
@@ -194,6 +197,13 @@ but never undoes completed effects, the checker rejects it when a handler owns
 an obligation without a replacement policy, and requires an explicit
 `acknowledging completed effects are not reversed` marker on non-idempotent
 effects.
+
+If cleanup times out after a newer owned item is pulled but before its handler
+starts, the replacement policy settles that item and the run reports the
+cleanup failure. Cancellation/rejection policy lines describe the policy;
+only the handler's executable statements count toward response completion.
+If a handler fails or the run is canceled, active owned siblings and any item
+pulled but not yet delivered are settled through their declared policy.
 
 `handle updates one at a time keeping only the latest waiting update` (conflate)
 never cancels the active handler and retains at most one newer waiting item.

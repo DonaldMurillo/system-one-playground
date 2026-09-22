@@ -34,6 +34,31 @@ func TestScheduleWeekdayAtNine(t *testing.T) {
 	_ = ny
 }
 
+func TestCronHonorsDSTPolicies(t *testing.T) {
+	both, err := ScheduleFromCron("30 1 1 11 *", "America/New_York", SchedulePolicy{Ambiguous: AmbiguousBoth})
+	if err != nil {
+		t.Fatal(err)
+	}
+	instants, err := both.NextAfter(time.Date(2026, 11, 1, 4, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(instants) != 2 || !instants[0].Equal(time.Date(2026, 11, 1, 5, 30, 0, 0, time.UTC)) || !instants[1].Equal(time.Date(2026, 11, 1, 6, 30, 0, 0, time.UTC)) {
+		t.Fatalf("ambiguous cron instants = %v", instants)
+	}
+	nextValid, err := ScheduleFromCron("30 2 * * *", "America/New_York", SchedulePolicy{Nonexistent: NonexistentNextValid})
+	if err != nil {
+		t.Fatal(err)
+	}
+	instants, err = nextValid.NextAfter(time.Date(2026, 3, 8, 6, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(instants) != 1 || instants[0].In(nextValid.Zone).Day() != 8 || instants[0].In(nextValid.Zone).Hour() != 3 {
+		t.Fatalf("nonexistent cron instant = %v", instants)
+	}
+}
+
 func TestScheduleEveryHour(t *testing.T) {
 	rule, err := EveryHourAt(15, time.UTC, SchedulePolicy{})
 	if err != nil {

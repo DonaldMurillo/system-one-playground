@@ -163,7 +163,7 @@ go build -o vscode/bin/sos ./cmd/sos
 pnpm --dir vscode check
 pnpm --dir vscode test
 pnpm --dir vscode package
-code --install-extension vscode/sysonescript-vscode-0.4.0.vsix
+code --install-extension "vscode/sysonescript-vscode-$(node -p 'require("./vscode/package.json").version').vsix"
 ```
 
 Development checkouts can set `sysonescript.server.command` to an absolute path

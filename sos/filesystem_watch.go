@@ -47,6 +47,7 @@ type watchEntry struct {
 	kind     string
 	size     int64
 	modified time.Time
+	mode     os.FileMode
 	identity os.FileInfo
 }
 
@@ -101,7 +102,7 @@ func scanWatchSnapshot(ctx context.Context, spec traversalSpec) (map[string]watc
 		if len(out) >= maxListEntries {
 			return nil, fileFailure("FileTraversalLimitExceeded", fmt.Sprintf("watch snapshot exceeds %d entries", maxListEntries), map[string]any{"root": spec.rootDisplay, "limit": float64(maxListEntries)})
 		}
-		out[item.rel] = watchEntry{kind: item.kind, size: item.size, modified: item.modified, identity: item.identity}
+		out[item.rel] = watchEntry{kind: item.kind, size: item.size, modified: item.modified, mode: item.identity.Mode(), identity: item.identity}
 	}
 }
 
@@ -201,7 +202,7 @@ func diffWatchSnapshots(spec traversalSpec, previous, current map[string]watchEn
 		case before.kind != after.kind:
 			emit(changeRemoved, rel, before.kind)
 			emit(changeCreated, rel, after.kind)
-		case after.kind == fileKind && (before.size != after.size || !before.modified.Equal(after.modified)):
+		case (after.kind == fileKind && (before.size != after.size || !before.modified.Equal(after.modified))) || before.mode != after.mode:
 			emit(changeModified, rel, after.kind)
 		}
 	}
@@ -265,6 +266,7 @@ type fileWatchSource struct {
 
 	mu          sync.Mutex
 	queue       chan []watchChange
+	queuedItems int
 	pending     []watchChange
 	overflow    bool
 	terminalErr error
@@ -372,17 +374,19 @@ func (s *fileWatchSource) watch(ctx context.Context, backend nativeWatchBackend,
 		if len(changes) == 0 {
 			continue
 		}
+		s.mu.Lock()
 		select {
 		case s.queue <- changes:
+			s.queuedItems += len(changes)
 		case <-ctx.Done():
+			s.mu.Unlock()
 			return
 		default:
 			// The consumer is behind. Drop the observation and require a
 			// rescan instead of claiming the dropped changes were seen.
-			s.mu.Lock()
 			s.overflow = true
-			s.mu.Unlock()
 		}
+		s.mu.Unlock()
 	}
 }
 
@@ -434,6 +438,7 @@ func (s *fileWatchSource) next(ctx context.Context) (any, bool, error) {
 		select {
 		case batch := <-s.queue:
 			s.mu.Lock()
+			s.queuedItems -= len(batch)
 			s.pending = batch
 			s.mu.Unlock()
 		case <-s.endCh:
@@ -470,16 +475,7 @@ func (s *fileWatchSource) streamScope() (string, int, bool) {
 func (s *fileWatchSource) streamMetrics() (int, int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	buffered := len(s.pending)
-	for {
-		select {
-		case batch := <-s.queue:
-			s.pending = append(s.pending, batch...)
-			buffered += len(batch)
-		default:
-			return buffered, 0
-		}
-	}
+	return len(s.pending) + s.queuedItems, 0
 }
 
 // ---- scan/watch/reconcile ----
@@ -493,14 +489,17 @@ func reconcileFileChange(entries []any, change map[string]any) ([]any, error) {
 	rel, _ := change["relative_path"].(string)
 	path, _ := change["path"].(string)
 	entryKind, _ := change["entry_kind"].(string)
-	remove := func(target string) []any {
+	remove := func(target string, subtree bool) []any {
 		if target == "" {
 			return entries
 		}
 		kept := make([]any, 0, len(entries))
 		for _, item := range entries {
-			if record, ok := item.(map[string]any); ok && record["relative_path"] == target {
-				continue
+			if record, ok := item.(map[string]any); ok {
+				path, _ := record["relative_path"].(string)
+				if path == target || (subtree && strings.HasPrefix(path, target+"/")) {
+					continue
+				}
 			}
 			kept = append(kept, item)
 		}
@@ -514,7 +513,7 @@ func reconcileFileChange(entries []any, change map[string]any) ([]any, error) {
 		if kind == changeMoved {
 			previous, _ = change["previous_path"].(string)
 		}
-		kept := remove(previous)
+		kept := remove(previous, entryKind == folderKind)
 		name := rel
 		if index := strings.LastIndex(rel, "/"); index >= 0 {
 			name = rel[index+1:]
@@ -548,7 +547,7 @@ func reconcileFileChange(entries []any, change map[string]any) ([]any, error) {
 	case changeModified:
 		return entries, nil
 	case changeRemoved:
-		return remove(rel), nil
+		return remove(rel, entryKind == folderKind), nil
 	case changeOverflowed:
 		root, _ := change["path"].(string)
 		return nil, fileFailure("FileWatchOverflow", fmt.Sprintf("watch of %s overflowed; rescan the folder to restore a complete state", root), map[string]any{"root": root})

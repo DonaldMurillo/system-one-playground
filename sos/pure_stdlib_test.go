@@ -46,6 +46,17 @@ func timeOp(t *testing.T, name string) NativeOp {
 	return op
 }
 
+func TestStdTimeOperationsExposeToolingMetadata(t *testing.T) {
+	for name, op := range stdRegistry["std/time"] {
+		if op.Description == "" || len(op.Effects) == 0 {
+			t.Fatalf("std/time.%s is missing description or effects", name)
+		}
+		if doc := stdDocs["std/time."+name]; doc.description == "" {
+			t.Fatalf("std/time.%s is missing public documentation metadata", name)
+		}
+	}
+}
+
 func TestStdTimeDurationParsing(t *testing.T) {
 	op := timeOp(t, "parse_duration")
 	cases := []struct {

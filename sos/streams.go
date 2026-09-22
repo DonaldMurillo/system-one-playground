@@ -277,7 +277,7 @@ func (s *streamHandle) publish(event string) {
 }
 
 func (s *streamHandle) transition(event, state, reason string, err error) {
-	now := time.Now().UTC()
+	now := s.clock.Now().UTC()
 	s.mu.Lock()
 	if s.lifecycle == "completed" || s.lifecycle == "stopped" || s.lifecycle == "cancelled" || s.lifecycle == "failed" || s.lifecycle == "closed" {
 		s.mu.Unlock()
@@ -306,7 +306,7 @@ func (s *streamHandle) beginConsumption() error {
 	if !stopping {
 		s.lifecycle = "reading"
 	}
-	s.updatedAt = time.Now().UTC()
+	s.updatedAt = s.clock.Now().UTC()
 	s.mu.Unlock()
 	if !stopping {
 		s.publish("reading")
@@ -348,7 +348,7 @@ func (s *streamHandle) next(ctx context.Context) (any, bool, error) {
 	if ok {
 		s.mu.Lock()
 		s.itemsReceived++
-		s.updatedAt = time.Now().UTC()
+		s.updatedAt = s.clock.Now().UTC()
 		s.mu.Unlock()
 	} else {
 		s.transition("completed", "completed", "producer completed", nil)
@@ -369,7 +369,7 @@ func (s *streamHandle) closeWithReason(ctx context.Context, reason string) error
 	s.state = streamClosed
 	terminal := s.lifecycle == "completed" || s.lifecycle == "stopped" || s.lifecycle == "cancelled" || s.lifecycle == "failed"
 	stopping := s.stopRequested
-	s.updatedAt = time.Now().UTC()
+	s.updatedAt = s.clock.Now().UTC()
 	s.mu.Unlock()
 	s.cancelRead()
 	err := s.source.cancel(ctx)
@@ -393,7 +393,7 @@ func (s *streamHandle) requestStop() error {
 	}
 	s.stopRequested = true
 	s.lifecycle = "stopping"
-	s.updatedAt = time.Now().UTC()
+	s.updatedAt = s.clock.Now().UTC()
 	s.mu.Unlock()
 	if requester, ok := s.source.(streamStopRequester); ok {
 		if requester.requestStreamStop() == nil {
@@ -795,14 +795,25 @@ func newRuntimeStreamClock(clock Clock) StreamClock {
 func (c runtimeStreamClock) Now() time.Duration { return c.clock.Now().Sub(c.epoch) }
 
 func (c runtimeStreamClock) After(d time.Duration) <-chan time.Duration {
+	out, _ := c.Alarm(d)
+	return out
+}
+
+func (c runtimeStreamClock) Alarm(d time.Duration) (<-chan time.Duration, func()) {
 	timer := c.clock.NewTimer(d)
 	out := make(chan time.Duration, 1)
+	done := make(chan struct{})
+	var once sync.Once
 	go func() {
-		if firedAt, ok := <-timer.C(); ok {
-			out <- firedAt.Sub(c.epoch)
+		select {
+		case firedAt, ok := <-timer.C():
+			if ok {
+				out <- firedAt.Sub(c.epoch)
+			}
+		case <-done:
 		}
 	}()
-	return out
+	return out, func() { once.Do(func() { timer.Stop(); close(done) }) }
 }
 
 var streamClockEpoch = time.Now()
@@ -814,18 +825,27 @@ type MonotonicClock struct{}
 func (MonotonicClock) Now() time.Duration { return time.Since(streamClockEpoch) }
 
 func (MonotonicClock) After(d time.Duration) <-chan time.Duration {
+	out, _ := (MonotonicClock{}).Alarm(d)
+	return out
+}
+
+func (MonotonicClock) Alarm(d time.Duration) (<-chan time.Duration, func()) {
 	out := make(chan time.Duration, 1)
 	if d <= 0 {
 		out <- time.Since(streamClockEpoch)
-		return out
+		return out, func() {}
 	}
 	timer := time.NewTimer(d)
+	done := make(chan struct{})
+	var once sync.Once
 	go func() {
-		defer timer.Stop()
-		<-timer.C
-		out <- time.Since(streamClockEpoch)
+		select {
+		case <-timer.C:
+			out <- time.Since(streamClockEpoch)
+		case <-done:
+		}
 	}()
-	return out
+	return out, func() { once.Do(func() { timer.Stop(); close(done) }) }
 }
 
 type virtualAlarm struct {
@@ -851,12 +871,37 @@ func (c *VirtualStreamClock) Now() time.Duration {
 }
 
 func (c *VirtualStreamClock) After(d time.Duration) <-chan time.Duration {
+	out, _ := c.Alarm(d)
+	return out
+}
+
+func (c *VirtualStreamClock) Alarm(d time.Duration) (<-chan time.Duration, func()) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.seq++
 	alarm := &virtualAlarm{at: c.now + d, seq: c.seq, out: make(chan time.Duration, 1)}
 	c.alarms = append(c.alarms, alarm)
-	return alarm.out
+	c.mu.Unlock()
+	return alarm.out, func() {
+		c.mu.Lock()
+		for i, pending := range c.alarms {
+			if pending == alarm {
+				copy(c.alarms[i:], c.alarms[i+1:])
+				c.alarms[len(c.alarms)-1] = nil
+				c.alarms = c.alarms[:len(c.alarms)-1]
+				break
+			}
+		}
+		c.mu.Unlock()
+	}
+}
+
+func streamAlarm(clock StreamClock, d time.Duration) (<-chan time.Duration, func()) {
+	if cancelable, ok := clock.(interface {
+		Alarm(time.Duration) (<-chan time.Duration, func())
+	}); ok {
+		return cancelable.Alarm(d)
+	}
+	return clock.After(d), func() {}
 }
 
 // Advance moves the clock forward by d and returns the new elapsed time.
@@ -1037,6 +1082,13 @@ func settleOrAbandoned(operation string, item any, reason string) error {
 	return nil
 }
 
+func failedHandlerObligation(operation string, item any, handlerErr error) error {
+	if obligationErr := settleOrAbandoned(operation, item, "handler failed"); obligationErr != nil {
+		return errors.Join(obligationErr, handlerErr)
+	}
+	return handlerErr
+}
+
 // EffectSafety is the per-operation effect and cancellation metadata the
 // runtime attaches to handling policies.
 type EffectSafety struct {
@@ -1156,7 +1208,7 @@ func deriveStream(parent *streamHandle, operation string, itemType TypeRef, sour
 	// The derived stream owns an independent cancellation domain: closing
 	// or completing the consumed upstream must not cancel it. Propagation
 	// flows through the derived source's own cancel path instead.
-	child := newStreamHandleWithContext(context.Background(), itemType, parent.producer+"/"+operation, source)
+	child := newStreamHandleWithClock(context.Background(), parent.clock, itemType, parent.producer+"/"+operation, source)
 	child.binding = parent.binding
 	return child, nil
 }
@@ -1205,7 +1257,14 @@ type upstreamPuller struct {
 }
 
 func newUpstreamPuller(ctx context.Context, h *streamHandle) *upstreamPuller {
-	p := &upstreamPuller{items: make(chan upstreamEvent, 1), grant: make(chan struct{}, 1)}
+	return newUpstreamPullerWithOptions(ctx, h, 1, nil)
+}
+
+// An ownership-sensitive consumer uses an unbuffered delivery channel and a
+// drop callback. If cancellation wins after a source item was pulled, the
+// callback settles that item instead of leaving it hidden in a puller buffer.
+func newUpstreamPullerWithOptions(ctx context.Context, h *streamHandle, buffer int, onDrop func(any)) *upstreamPuller {
+	p := &upstreamPuller{items: make(chan upstreamEvent, buffer), grant: make(chan struct{}, 1)}
 	go func() {
 		for {
 			select {
@@ -1215,10 +1274,17 @@ func newUpstreamPuller(ctx context.Context, h *streamHandle) *upstreamPuller {
 				if !open {
 					return
 				}
-				value, ok, err := h.next(context.Background())
+				pullCtx := context.Background()
+				if onDrop != nil {
+					pullCtx = ctx
+				}
+				value, ok, err := h.next(pullCtx)
 				select {
 				case p.items <- upstreamEvent{value: value, ok: ok, err: err}:
 				case <-ctx.Done():
+					if ok && onDrop != nil {
+						onDrop(value)
+					}
 					return
 				}
 			}
@@ -1421,20 +1487,23 @@ func (s *policyStream) serve() {
 				}
 				continue
 			}
-			alarm := s.clock.After(wait)
+			alarm, cancelAlarm := streamAlarm(s.clock, wait)
 			// Publish only after the alarm is registered so virtual-clock
 			// observers can safely advance once they see the deadline.
 			s.counters.armedAt.Store(int64(deadline))
 			select {
 			case <-s.loopCtx.Done():
+				cancelAlarm()
 				s.stop(s.settleCancellation())
 				return
 			case event := <-s.puller.items:
+				cancelAlarm()
 				if err := s.apply(event); err != nil {
 					s.finishApply(err)
 					return
 				}
 			case <-alarm:
+				cancelAlarm()
 				// An arrival concurrent with the alarm wins
 				// deterministically: its arrival resets the deadline, so
 				// the timer cannot fire through a boundary item.
@@ -2260,6 +2329,14 @@ func (p *batchPolicy) onItem(value any, emit func(any) bool) error {
 func (p *batchPolicy) flush(key any, st *batchState, emit func(any) bool) error {
 	batch := append([]any(nil), st.items...)
 	delete(p.batches, key)
+	for i, candidate := range p.keyOrder {
+		if candidate == key {
+			copy(p.keyOrder[i:], p.keyOrder[i+1:])
+			p.keyOrder[len(p.keyOrder)-1] = nil
+			p.keyOrder = p.keyOrder[:len(p.keyOrder)-1]
+			break
+		}
+	}
 	p.held -= len(st.items)
 	for _, item := range batch {
 		p.bytes -= streamItemSize(item)
@@ -2557,8 +2634,7 @@ func HandleSequentially(ctx context.Context, up StreamHandle, handler StreamItem
 		handlerErr := handler(ctx, value)
 		counters.active.Add(-1)
 		if handlerErr != nil {
-			_ = settleOrAbandoned(handlerObligationOperation, value, "handler failed")
-			return handlerErr
+			return failedHandlerObligation(handlerObligationOperation, value, handlerErr)
 		}
 		if err := settleOrAbandoned(handlerObligationOperation, value, "handler returned without completing item"); err != nil {
 			return err
@@ -2577,6 +2653,13 @@ func HandleWithBoundConcurrency(ctx context.Context, up StreamHandle, limit int,
 // HandleWithBoundConcurrencyCleanup is HandleWithBoundConcurrency with an
 // explicit deadline for sibling cleanup after cancellation or failure.
 func HandleWithBoundConcurrencyCleanup(ctx context.Context, up StreamHandle, limit int, cleanupDeadline time.Duration, handler StreamItemHandler) error {
+	return handleWithBoundConcurrencyCleanup(ctx, up, limit, cleanupDeadline, handler, nil)
+}
+
+// abortItem completes host-owned items (such as HTTP response records) as soon
+// as a sibling failure cancels their handler, even if that handler ignores its
+// child context until the cleanup deadline.
+func handleWithBoundConcurrencyCleanup(ctx context.Context, up StreamHandle, limit int, cleanupDeadline time.Duration, handler StreamItemHandler, abortItem func(any) error) error {
 	if limit <= 0 {
 		return errStreamConcurrencyLimit(limit)
 	}
@@ -2590,6 +2673,15 @@ func HandleWithBoundConcurrencyCleanup(ctx context.Context, up StreamHandle, lim
 	defer cancel()
 	slots := make(chan struct{}, limit)
 	var wg sync.WaitGroup
+	type activeSlot struct{ item any }
+	var activeMu sync.Mutex
+	active := map[*activeSlot]struct{}{}
+	settleAborted := func(item any) error {
+		if abortItem != nil {
+			return abortItem(item)
+		}
+		return settleOrAbandoned(handlerObligationOperation, item, "handler canceled")
+	}
 	waitCleanup := func() error {
 		counters.cleanup.Store("cleaning")
 		defer counters.cleanup.Store("idle")
@@ -2607,6 +2699,20 @@ func HandleWithBoundConcurrencyCleanup(ctx context.Context, up StreamHandle, lim
 			return errStreamHandlerCleanup("handle each with bounded concurrency", "cleanup deadline exceeded")
 		}
 	}
+	abort := func(cause error) error {
+		cancel()
+		activeMu.Lock()
+		pending := make([]any, 0, len(active))
+		for slot := range active {
+			pending = append(pending, slot.item)
+		}
+		activeMu.Unlock()
+		var settlementErr error
+		for _, item := range pending {
+			settlementErr = errors.Join(settlementErr, settleAborted(item))
+		}
+		return errors.Join(cause, settlementErr, waitCleanup())
+	}
 	failures := make(chan error, limit)
 	type pullResult struct {
 		value any
@@ -2617,21 +2723,20 @@ func HandleWithBoundConcurrencyCleanup(ctx context.Context, up StreamHandle, lim
 		select {
 		case slots <- struct{}{}:
 		case err := <-failures:
-			cancel()
-			if cleanupErr := waitCleanup(); cleanupErr != nil {
-				return cleanupErr
-			}
-			return err
+			return abort(err)
 		case <-runCtx.Done():
-			if cleanupErr := waitCleanup(); cleanupErr != nil {
-				return cleanupErr
-			}
-			return runCtx.Err()
+			return abort(runCtx.Err())
 		}
-		pulled := make(chan pullResult, 1)
+		pulled := make(chan pullResult)
 		go func() {
-			value, ok, err := pullWithContext(runCtx, up)
-			pulled <- pullResult{value: value, ok: ok, err: err}
+			value, ok, err := up.next(runCtx)
+			select {
+			case pulled <- pullResult{value: value, ok: ok, err: err}:
+			case <-runCtx.Done():
+				if ok {
+					_ = settleAborted(value)
+				}
+			}
 		}()
 		var value any
 		var ok bool
@@ -2640,27 +2745,16 @@ func HandleWithBoundConcurrencyCleanup(ctx context.Context, up StreamHandle, lim
 		case result := <-pulled:
 			value, ok, err = result.value, result.ok, result.err
 		case handlerErr := <-failures:
-			cancel()
-			if cleanupErr := waitCleanup(); cleanupErr != nil {
-				return cleanupErr
-			}
-			return handlerErr
+			return abort(handlerErr)
 		case <-runCtx.Done():
-			if cleanupErr := waitCleanup(); cleanupErr != nil {
-				return cleanupErr
-			}
-			return runCtx.Err()
+			return abort(runCtx.Err())
 		}
 		if err != nil {
-			cancel()
-			if cleanupErr := waitCleanup(); cleanupErr != nil {
-				return cleanupErr
-			}
 			select {
 			case handlerErr := <-failures:
-				return handlerErr
+				return abort(handlerErr)
 			default:
-				return err
+				return abort(err)
 			}
 		}
 		if !ok {
@@ -2678,28 +2772,33 @@ func HandleWithBoundConcurrencyCleanup(ctx context.Context, up StreamHandle, lim
 					return nil
 				}
 			case handlerErr := <-failures:
-				cancel()
-				if cleanupErr := waitCleanup(); cleanupErr != nil {
-					return cleanupErr
-				}
-				return handlerErr
+				return abort(handlerErr)
 			case <-runCtx.Done():
-				if cleanupErr := waitCleanup(); cleanupErr != nil {
-					return cleanupErr
-				}
-				return runCtx.Err()
+				return abort(runCtx.Err())
 			}
 		}
+		admitted := &activeSlot{item: value}
+		activeMu.Lock()
+		active[admitted] = struct{}{}
+		activeMu.Unlock()
 		wg.Add(1)
 		go func(item any) {
 			defer wg.Done()
+			defer func() {
+				activeMu.Lock()
+				delete(active, admitted)
+				activeMu.Unlock()
+			}()
 			defer func() { <-slots }()
 			counters.active.Add(1)
 			defer counters.active.Add(-1)
 			if handlerErr := handler(runCtx, item); handlerErr != nil {
-				_ = settleOrAbandoned(handlerObligationOperation, item, "handler failed")
+				failure := failedHandlerObligation(handlerObligationOperation, item, handlerErr)
+				if abortItem != nil {
+					failure = errors.Join(failure, abortItem(item))
+				}
 				select {
-				case failures <- handlerErr:
+				case failures <- failure:
 				default:
 				}
 				return
@@ -2727,6 +2826,9 @@ type LatestOptions struct {
 	// Replacement is the explicit policy applied to an owned item whose
 	// handler is being canceled (for example, reject with status 409).
 	Replacement func(item *OwnedItem) error
+	// OnReplace also handles host-owned items whose obligation is tracked
+	// outside OwnedItem (for example HTTP request records).
+	OnReplace func(item any) error
 	// Effects declares handler effect metadata; non-idempotent effects
 	// require AcknowledgeEffects.
 	Effects            []EffectSafety
@@ -2793,6 +2895,8 @@ func HandleLatest(ctx context.Context, up StreamHandle, handler StreamValueHandl
 		done := make(chan struct{})
 		counters.cleanup.Store("cleaning")
 		defer counters.cleanup.Store("idle")
+		alarm, cancelAlarm := streamAlarm(clock, opts.CleanupDeadline)
+		defer cancelAlarm()
 		go func() {
 			waitAll()
 			close(done)
@@ -2800,10 +2904,11 @@ func HandleLatest(ctx context.Context, up StreamHandle, handler StreamValueHandl
 		select {
 		case <-done:
 			return nil
-		case <-clock.After(opts.CleanupDeadline):
+		case <-alarm:
 			return errStreamHandlerCleanup("handle only the newest", "cleanup deadline exceeded")
 		}
 	}
+	var replaceOwned func(any) error
 
 	start := func(key, value any) {
 		mu.Lock()
@@ -2829,9 +2934,27 @@ func HandleLatest(ctx context.Context, up StreamHandle, handler StreamValueHandl
 				// becomes visible.
 				return
 			}
-			if err != nil {
+			if runCtx.Err() != nil {
+				// The slot may disappear before abort snapshots active slots.
+				// Its own handler must settle the canceled obligation first.
+				if settlementErr := replaceOwned(value); settlementErr != nil {
+					select {
+					case failures <- settlementErr:
+					default:
+					}
+				}
+			} else if err != nil {
+				var settlementErr error
+				if opts.Replacement != nil || opts.OnReplace != nil {
+					settlementErr = replaceOwned(value)
+				}
 				select {
-				case failures <- err:
+				case failures <- errors.Join(failedHandlerObligation("handle only the newest", value, err), settlementErr):
+				default:
+				}
+			} else if obligationErr := settleOrAbandoned("handle only the newest", value, "handler returned without completing item"); obligationErr != nil {
+				select {
+				case failures <- obligationErr:
 				default:
 				}
 			} else if opts.OnResult != nil {
@@ -2849,7 +2972,10 @@ func HandleLatest(ctx context.Context, up StreamHandle, handler StreamValueHandl
 
 	// replaceOwned applies the explicit replacement policy to an owned item
 	// whose handler is about to be canceled.
-	replaceOwned := func(value any) error {
+	replaceOwned = func(value any) error {
+		if opts.OnReplace != nil {
+			return opts.OnReplace(value)
+		}
 		owned, ok := value.(*OwnedItem)
 		if !ok {
 			return nil
@@ -2862,6 +2988,34 @@ func HandleLatest(ctx context.Context, up StreamHandle, handler StreamValueHandl
 		}
 		return settleOrAbandoned("handle only the newest", owned, "canceled by newer item")
 	}
+	// Once pulled, an item is this handler's responsibility even if admission or
+	// cleanup fails before start. Apply the explicit rejection policy on every
+	// such exit so an HTTP caller is not left waiting for its request deadline.
+	rejectIncoming := func(value any, cause error) error {
+		return errors.Join(cause, replaceOwned(value))
+	}
+	settleActive := func() error {
+		mu.Lock()
+		activeSlots := make([]*latestSlot, 0, len(slots))
+		for _, slot := range slots {
+			activeSlots = append(activeSlots, slot)
+		}
+		mu.Unlock()
+		var settlementErr error
+		for _, slot := range activeSlots {
+			if owned, ok := slot.item.(*OwnedItem); ok && owned.Settled() {
+				continue
+			}
+			settlementErr = errors.Join(settlementErr, replaceOwned(slot.item))
+		}
+		return settlementErr
+	}
+	abort := func(cause error) error {
+		cancelAll()
+		settlementErr := settleActive()
+		cleanupErr := waitAllCleanup()
+		return errors.Join(cause, settlementErr, cleanupErr)
+	}
 
 	waitSlot := func(slot *latestSlot) error {
 		if opts.CleanupDeadline <= 0 {
@@ -2869,35 +3023,36 @@ func HandleLatest(ctx context.Context, up StreamHandle, handler StreamValueHandl
 		}
 		counters.cleanup.Store("cleaning")
 		defer counters.cleanup.Store("idle")
+		alarm, cancelAlarm := streamAlarm(clock, opts.CleanupDeadline)
+		defer cancelAlarm()
 		select {
 		case <-slot.done:
 			return nil
-		case <-clock.After(opts.CleanupDeadline):
+		case <-alarm:
 			return errStreamHandlerCleanup("handle only the newest", "cleanup deadline exceeded")
 		case <-runCtx.Done():
 			return runCtx.Err()
 		}
 	}
 
-	puller := newUpstreamPuller(runCtx, up)
+	puller := newUpstreamPullerWithOptions(runCtx, up, 0, func(value any) {
+		if err := replaceOwned(value); err != nil {
+			select {
+			case failures <- err:
+			default:
+			}
+		}
+	})
 	puller.request()
 	for {
 		select {
 		case <-runCtx.Done():
-			return runCtx.Err()
+			return abort(runCtx.Err())
 		case err := <-failures:
-			cancelAll()
-			if cleanupErr := waitAllCleanup(); cleanupErr != nil {
-				return cleanupErr
-			}
-			return err
+			return abort(err)
 		case event := <-puller.items:
 			if event.err != nil {
-				cancelAll()
-				if cleanupErr := waitAllCleanup(); cleanupErr != nil {
-					return cleanupErr
-				}
-				return event.err
+				return abort(event.err)
 			}
 			if !event.ok {
 				// Completion waits for every admitted handler to finish;
@@ -2917,16 +3072,9 @@ func HandleLatest(ctx context.Context, up StreamHandle, handler StreamValueHandl
 						return nil
 					}
 				case handlerErr := <-failures:
-					cancelAll()
-					if cleanupErr := waitAllCleanup(); cleanupErr != nil {
-						return cleanupErr
-					}
-					return handlerErr
+					return abort(handlerErr)
 				case <-runCtx.Done():
-					if cleanupErr := waitAllCleanup(); cleanupErr != nil {
-						return cleanupErr
-					}
-					return runCtx.Err()
+					return abort(runCtx.Err())
 				}
 			}
 			key, kerr := keyOf(event.value)
@@ -2934,21 +3082,13 @@ func HandleLatest(ctx context.Context, up StreamHandle, handler StreamValueHandl
 				key, kerr = scalarKey(key)
 			}
 			if kerr != nil {
-				cancelAll()
-				if cleanupErr := waitAllCleanup(); cleanupErr != nil {
-					return cleanupErr
-				}
-				return kerr
+				return abort(rejectIncoming(event.value, kerr))
 			}
 			mu.Lock()
 			_, known := keys[key]
 			if opts.KeyLimit > 0 && !known && len(keys) >= opts.KeyLimit {
 				mu.Unlock()
-				cancelAll()
-				if cleanupErr := waitAllCleanup(); cleanupErr != nil {
-					return cleanupErr
-				}
-				return errStreamKeyLimit("handle only the newest", opts.KeyLimit)
+				return abort(rejectIncoming(event.value, errStreamKeyLimit("handle only the newest", opts.KeyLimit)))
 			}
 			if !known {
 				keys[key] = true
@@ -2957,11 +3097,7 @@ func HandleLatest(ctx context.Context, up StreamHandle, handler StreamValueHandl
 			mu.Unlock()
 			hadSlot := slot != nil
 			if !hadSlot && int(active.Load()) >= concurrency {
-				cancelAll()
-				if cleanupErr := waitAllCleanup(); cleanupErr != nil {
-					return cleanupErr
-				}
-				return errStreamConcurrencyLimit(concurrency)
+				return abort(rejectIncoming(event.value, errStreamConcurrencyLimit(concurrency)))
 			}
 			if slot != nil {
 				counters.waiting.Store(1)
@@ -2969,11 +3105,7 @@ func HandleLatest(ctx context.Context, up StreamHandle, handler StreamValueHandl
 				case <-slot.done:
 				default:
 					if err := replaceOwned(slot.item); err != nil {
-						cancelAll()
-						if cleanupErr := waitAllCleanup(); cleanupErr != nil {
-							return cleanupErr
-						}
-						return err
+						return abort(rejectIncoming(event.value, err))
 					}
 					// Supersede first: bump the key's generation so the
 					// canceled handler's later result is stale even if it
@@ -2984,7 +3116,7 @@ func HandleLatest(ctx context.Context, up StreamHandle, handler StreamValueHandl
 					mu.Unlock()
 					slot.cancel()
 					if err := waitSlot(slot); err != nil {
-						return err
+						return abort(rejectIncoming(event.value, err))
 					}
 				}
 				counters.waiting.Store(0)
@@ -3047,7 +3179,7 @@ func HandleConflating(ctx context.Context, up StreamHandle, handler StreamItemHa
 				defer close(done)
 				if err := handler(runCtx, item); err != nil {
 					select {
-					case failures <- err:
+					case failures <- failedHandlerObligation("conflate", item, err):
 					default:
 					}
 					return
@@ -3129,7 +3261,7 @@ func HandleConflating(ctx context.Context, up StreamHandle, handler StreamItemHa
 					waiting, hasWaiting = nil, false
 					if err := handler(runCtx, item); err != nil {
 						cancel()
-						return err
+						return failedHandlerObligation("conflate", item, err)
 					}
 					if err := settleOrAbandoned("conflate", item, "handler returned without completing item"); err != nil {
 						cancel()
@@ -3259,7 +3391,7 @@ func HandleExclusively(ctx context.Context, up StreamHandle, handler StreamItemH
 					defer counters.active.Add(-1)
 					if err := handler(runCtx, item); err != nil {
 						select {
-						case failures <- err:
+						case failures <- failedHandlerObligation("exhaust", item, err):
 						default:
 						}
 						return

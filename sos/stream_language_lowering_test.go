@@ -3,6 +3,7 @@ package sos
 import (
 	"bytes"
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -72,12 +73,81 @@ func TestMultiwordExhaustNoun(t *testing.T) {
 	if ds := Check(src); len(ds) != 0 {
 		t.Fatalf("multiword exhaust noun rejected: %v", firstMessage(ds))
 	}
-	if out, err := runStreamProgram(t, src); err != nil || out != "handled\n" {
+	if out, err := runStreamProgram(t, strings.Replace(src, "show \"handled\"", "show refresh_request", 1)); err != nil || out != "tick\n" {
 		t.Fatalf("multiword exhaust runtime mismatch: out=%q err=%v", out, err)
 	}
 	// Colon variant also parses.
 	if kind := classifyLine("handle one request at a time:"); kind != "exhaustStream" {
 		t.Fatalf("colon exhaust header classified as %q", kind)
+	}
+}
+
+func TestHTTPHandlerObligationsResolveTechnicalAliases(t *testing.T) {
+	check := func(source string) []Diagnostic {
+		_, diagnostics := LoadProgram(filepath.Join(t.TempDir(), "main.sos"), source)
+		return diagnostics
+	}
+	for _, alias := range []string{"http", "web"} {
+		prefix := "import \"std/http\" as " + alias + "\nstream " + alias + ".listen with {\"address\": \"127.0.0.1:0\"} called requests\n"
+		handler := "handle each request from requests one at a time:\n"
+		respond := prefix + handler + "  call " + alias + ".respond_status with request, 204\n"
+		if ds := check(respond); len(ds) != 0 {
+			t.Fatalf("%s response rejected: %v", alias, firstMessage(ds))
+		}
+		unanswered := prefix + handler + "  show \"unanswered\"\n"
+		if ds := check(unanswered); !hasDiagnostic(ds, "an owned source item must be completed") {
+			t.Fatalf("%s unanswered request accepted: %v", alias, firstMessage(ds))
+		}
+		wrongRequest := prefix + handler + "  call " + alias + ".respond_status with other, 204 called request\n"
+		if ds := check(wrongRequest); !hasDiagnostic(ds, "an owned source item must be completed") {
+			t.Fatalf("%s response to another item accepted: %v", alias, firstMessage(ds))
+		}
+	}
+}
+
+func TestHTTPPolicyBodiesAreNotExecutableHandlerPaths(t *testing.T) {
+	check := func(source string) []Diagnostic {
+		_, diagnostics := LoadProgram(filepath.Join(t.TempDir(), "main.sos"), source)
+		return diagnostics
+	}
+	prefix := "import \"std/http\" as web\nstream web.listen with {\"address\": \"127.0.0.1:0\"} called requests\n"
+	latest := "handle only the newest request from requests:\n  when a newer request arrives cancel the previous work\n  acknowledging completed effects are not reversed\n  canceling an older request with status 409:\n"
+	respond := "  call web.respond_status with request, 204\n"
+	if ds := check(prefix + latest + respond); len(ds) != 0 {
+		t.Fatalf("valid latest HTTP handler rejected: %v", firstMessage(ds))
+	}
+	if ds := check(prefix + latest + "    call web.respond_status with request, 204\n"); !hasDiagnostic(ds, "an owned source item must be completed") {
+		t.Fatalf("response hidden under ignored latest policy accepted: %v", firstMessage(ds))
+	}
+	exhaust := "handle one request at a time\n  rejecting new requests with status 429 while busy:\n"
+	exhaustPrefix := strings.Replace(prefix, "called requests", "called request", 1)
+	if ds := check(exhaustPrefix + exhaust + respond); len(ds) != 0 {
+		t.Fatalf("valid exhaust HTTP handler rejected: %v", firstMessage(ds))
+	}
+	if ds := check(exhaustPrefix + exhaust + "    call web.respond_status with request, 204\n"); !hasDiagnostic(ds, "an owned source item must be completed") {
+		t.Fatalf("response hidden under ignored exhaust policy accepted: %v", firstMessage(ds))
+	}
+}
+
+func TestCanonicalHTTPResponseMustTargetOwnedRequest(t *testing.T) {
+	check := func(source string) []Diagnostic {
+		_, diagnostics := LoadProgram(filepath.Join(t.TempDir(), "main.sos"), source)
+		return diagnostics
+	}
+	prefix := "listen for HTTP requests on loopback port 8080 called requests:\n  request deadline 3 seconds\nhandle each request from requests one at a time:\n"
+	if ds := check(prefix + "  respond to request with status 204\n"); len(ds) != 0 {
+		t.Fatalf("valid response rejected: %v", firstMessage(ds))
+	}
+	wrong := prefix + "  respond to requests with status 200 and text request\n"
+	if ds := check(wrong); !hasDiagnostic(ds, "an owned source item must be completed") {
+		t.Fatalf("response to wrong binding accepted: %v", firstMessage(ds))
+	}
+	loop := strings.Replace(prefix, "handle each request from requests one at a time:", "for each request from requests:", 1)
+	if ds := check(loop + "  respond to request with status 204\n"); len(ds) != 0 {
+		t.Fatalf("valid sequential HTTP loop rejected: %v", firstMessage(ds))
+	}
+	if ds := check(loop + "  respond to requests with status 200 and text request\n"); !hasDiagnostic(ds, "an owned source item must be completed") {
+		t.Fatalf("sequential HTTP loop response to wrong binding accepted: %v", firstMessage(ds))
 	}
 }
 

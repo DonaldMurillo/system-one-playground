@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -147,8 +149,8 @@ func TestHTTPTimeoutReportsConfiguredDuration(t *testing.T) {
 
 func TestHTTPRedirectStripsAuthorizationAcrossOrigins(t *testing.T) {
 	destination := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "" {
-			t.Errorf("authorization leaked: %q", r.Header.Get("Authorization"))
+		if r.Header.Get("Authorization") != "" || r.Header.Get("X-Api-Key") != "" {
+			t.Errorf("sensitive headers leaked: %#v", r.Header)
 		}
 		_, _ = w.Write([]byte("ok"))
 	}))
@@ -159,10 +161,22 @@ func TestHTTPRedirectStripsAuthorizationAcrossOrigins(t *testing.T) {
 	defer source.Close()
 
 	result, err := callHTTP(t, "request", httpOptions(source.Client()), map[string]any{
-		"url": source.URL, "headers": map[string]any{"authorization": "Bearer secret"}, "follow_redirects": true,
+		"url": source.URL, "headers": map[string]any{"authorization": "Bearer secret", "x-api-key": "secret"}, "follow_redirects": true,
 	})
 	if err != nil || result.(map[string]any)["body"] != "ok" {
 		t.Fatalf("result=%#v error=%v", result, err)
+	}
+}
+
+func TestHTTPCompleteResponseRejectsInvalidUTF8(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte{0xff})
+	}))
+	defer server.Close()
+	_, err := callHTTP(t, "request", httpOptions(server.Client()), map[string]any{"url": server.URL})
+	var failure *typedFailure
+	if !errors.As(err, &failure) || failure.kind != "InvalidHttpResponse" {
+		t.Fatalf("want InvalidHttpResponse, got %v", err)
 	}
 }
 
@@ -222,6 +236,201 @@ func TestHTTPListenerOwnsBodyAndExactlyOneResponse(t *testing.T) {
 	}
 }
 
+func TestCompletedHTTPResponseWinsOverDeadlineFallback(t *testing.T) {
+	registry := newHTTPServerRegistry()
+	_, obligation := registry.register(nil)
+	response := httpResponse{status: http.StatusAccepted, headers: make(http.Header), body: []byte("accepted")}
+	response.headers.Set("Content-Type", "text/plain")
+	if err := obligation.complete(response); err != nil {
+		t.Fatal(err)
+	}
+	// This is the state of the timeout branch when both completion and the
+	// request deadline are ready. It must emit the completed response.
+	recorder := httptest.NewRecorder()
+	if writeHTTPFallback(recorder, obligation, http.StatusGatewayTimeout, "deadline") {
+		t.Fatal("fallback displaced the completed application response")
+	}
+	if recorder.Code != http.StatusAccepted || recorder.Body.String() != "accepted" || recorder.Header().Get("Content-Type") != "text/plain" {
+		t.Fatalf("response = %#v", recorder.Result())
+	}
+	_, pending := registry.obligation(obligation.id, obligation)
+	if pending != nil {
+		t.Fatalf("completed obligation is inaccessible before release: %v", pending)
+	}
+
+	_, lateObligation := registry.register(nil)
+	lateRecorder := httptest.NewRecorder()
+	if !writeHTTPFallback(lateRecorder, lateObligation, http.StatusGatewayTimeout, "deadline") {
+		t.Fatal("fallback did not settle pending request")
+	}
+	if lateRecorder.Code != http.StatusGatewayTimeout || lateRecorder.Body.String() != "deadline\n" {
+		t.Fatalf("fallback response = %#v", lateRecorder.Result())
+	}
+	select {
+	case <-lateObligation.done:
+	default:
+		t.Fatal("fallback left the response obligation open")
+	}
+	if err := lateObligation.complete(response); err == nil {
+		t.Fatal("application response overwrote a committed deadline fallback")
+	}
+}
+
+func TestHTTPHandlerContextFollowsRequestCancellation(t *testing.T) {
+	requestCtx, cancelRequest := context.WithCancel(context.Background())
+	defer cancelRequest()
+	obligation := &httpResponseObligation{context: requestCtx}
+	ctx, matched, cleanup := httpRequestHandlerContext(context.Background(), map[string]any{"__http_authority": obligation})
+	defer cleanup()
+	if matched != requestCtx || ctx.Err() != nil {
+		t.Fatalf("request context was not attached: matched=%v err=%v", matched, ctx.Err())
+	}
+	cancelRequest()
+	select {
+	case <-ctx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("handler remained active after request cancellation")
+	}
+}
+
+func TestHTTPListenerDeadlineCancelsAdmittedHandlerAndSettlesResponse(t *testing.T) {
+	registry := newHTTPServerRegistry()
+	source := &httpListenerSource{
+		ctx: context.Background(), registry: registry,
+		requests: make(chan map[string]any), admission: make(chan struct{}, 1),
+	}
+	options := httpListenerOptions{maxBodyBytes: 1024, requestDeadline: 200 * time.Millisecond}
+	recorder := httptest.NewRecorder()
+	finished := make(chan struct{})
+	go func() {
+		source.handleRequest(recorder, httptest.NewRequest(http.MethodGet, "/pending", nil), options)
+		close(finished)
+	}()
+	var request map[string]any
+	select {
+	case request = <-source.requests:
+	case <-time.After(time.Second):
+		t.Fatal("HTTP request was not admitted")
+	}
+	handlerCtx, _, cleanup := httpRequestHandlerContext(context.Background(), request)
+	defer cleanup()
+	select {
+	case <-handlerCtx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("request deadline did not cancel the admitted handler")
+	}
+	<-finished
+	if recorder.Code != http.StatusGatewayTimeout {
+		t.Fatalf("deadline response = %d", recorder.Code)
+	}
+	authority := request["__http_authority"].(*httpResponseObligation)
+	select {
+	case <-authority.done:
+	default:
+		t.Fatal("deadline left the response obligation open")
+	}
+}
+
+func TestHTTPListenerWritesDeadlineResponseOverSocket(t *testing.T) {
+	registry := newHTTPServerRegistry()
+	source, err := openHTTPListener(context.Background(), registry, httpListenerOptions{
+		address: "127.0.0.1:0", maxBodyBytes: 1024, requestDeadline: 100 * time.Millisecond, shutdown: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.cancel(context.Background())
+	client := &http.Client{Timeout: time.Second}
+	responseDone := make(chan struct {
+		response *http.Response
+		err      error
+	}, 1)
+	go func() {
+		response, err := client.Get("http://" + source.listener.Addr().String() + "/pending")
+		responseDone <- struct {
+			response *http.Response
+			err      error
+		}{response, err}
+	}()
+	if _, ok, err := source.next(context.Background()); err != nil || !ok {
+		t.Fatalf("request admission: ok=%v err=%v", ok, err)
+	}
+	result := <-responseDone
+	if result.err != nil {
+		t.Fatalf("deadline response was not delivered: %v", result.err)
+	}
+	defer result.response.Body.Close()
+	if result.response.StatusCode != http.StatusGatewayTimeout {
+		t.Fatalf("deadline status = %d", result.response.StatusCode)
+	}
+}
+
+func TestHTTPHandlerContinuesAfterResponseUntilBodyFinishes(t *testing.T) {
+	registry := newHTTPServerRegistry()
+	source, err := openHTTPListener(context.Background(), registry, httpListenerOptions{
+		address: "127.0.0.1:0", maxBodyBytes: 1024, requestDeadline: time.Second, shutdown: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.cancel(context.Background())
+	responseDone := make(chan error, 1)
+	go func() {
+		response, err := http.Get("http://" + source.listener.Addr().String() + "/work")
+		if err == nil {
+			_ = response.Body.Close()
+			if response.StatusCode != http.StatusOK {
+				err = fmt.Errorf("status %d", response.StatusCode)
+			}
+		}
+		responseDone <- err
+	}()
+	item, ok, err := source.next(context.Background())
+	if err != nil || !ok {
+		t.Fatalf("request admission: ok=%v err=%v", ok, err)
+	}
+	handlerCtx, _, cleanup := httpRequestHandlerContext(context.Background(), item)
+	defer cleanup()
+	if err := registry.completeStatus(item, http.StatusOK); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-responseDone; err != nil {
+		t.Fatal(err)
+	}
+	// ServeHTTP has returned. The handler body may still be running.
+	time.Sleep(10 * time.Millisecond)
+	if err := handlerCtx.Err(); err != nil {
+		t.Fatalf("successful response canceled post-response work: %v", err)
+	}
+	cleanup()
+	if handlerCtx.Err() == nil {
+		t.Fatal("handler completion did not release request context")
+	}
+}
+
+func TestConcurrentHTTPFailureTracesSerializeCallbacks(t *testing.T) {
+	var active, overlapped atomic.Int32
+	r := &runtime{shared: &executionState{}, result: &Result{}, opts: Options{OnTrace: func(Trace) {
+		if active.Add(1) > 1 {
+			overlapped.Store(1)
+		}
+		time.Sleep(10 * time.Millisecond)
+		active.Add(-1)
+	}}}
+	done := make(chan struct{}, 2)
+	for i := 0; i < 2; i++ {
+		go func(index int) {
+			r.recordHTTPRuntimeFailure(index, fmt.Errorf("request failed"))
+			done <- struct{}{}
+		}(i)
+	}
+	<-done
+	<-done
+	if overlapped.Load() != 0 || len(r.result.Traces) != 2 {
+		t.Fatalf("callback overlap=%d traces=%d", overlapped.Load(), len(r.result.Traces))
+	}
+}
+
 func TestHTTPListenerRejectsOversizedBodiesBeforeAdmission(t *testing.T) {
 	registry := newHTTPServerRegistry()
 	source, err := openHTTPListener(context.Background(), registry, httpListenerOptions{
@@ -263,7 +472,7 @@ func TestHTTPListenerOptionsBoundHeadersAndSocketDeadlines(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer source.cancel(context.Background())
-	if source.server.MaxHeaderBytes != 4096 || source.server.ReadHeaderTimeout != deadline || source.server.ReadTimeout != deadline || source.server.WriteTimeout != deadline {
+	if source.server.MaxHeaderBytes != 4096 || source.server.ReadHeaderTimeout != deadline || source.server.ReadTimeout != deadline || source.server.WriteTimeout != deadline+httpResponseWriteGrace {
 		t.Fatalf("server limits=%+v", source.server)
 	}
 
@@ -418,5 +627,32 @@ func TestHTTPUnansweredRequestGetsSafeResponseAndTypedFailure(t *testing.T) {
 		}
 	default:
 		t.Fatal("unanswered request was not completed")
+	}
+}
+
+func TestHTTPReplacementPreservesAlreadySentResponse(t *testing.T) {
+	registry := newHTTPServerRegistry()
+	id, obligation := registry.register(nil)
+	request := map[string]any{"id": id, "__http_authority": obligation}
+	if err := obligation.complete(httpResponse{status: http.StatusAccepted, headers: make(http.Header)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.completeStatus(request, http.StatusConflict); err != nil {
+		t.Fatalf("replacement after response: %v", err)
+	}
+	if obligation.response.status != http.StatusAccepted {
+		t.Fatalf("replacement overwrote response: %d", obligation.response.status)
+	}
+	if err := obligation.complete(httpResponse{status: http.StatusOK}); err == nil {
+		t.Fatal("explicit duplicate response must still fail")
+	}
+
+	id, obligation = registry.register(nil)
+	request = map[string]any{"id": id, "__http_authority": obligation}
+	if err := registry.completeStatus(request, http.StatusConflict); err != nil {
+		t.Fatalf("replacement of unanswered request: %v", err)
+	}
+	if obligation.response.status != http.StatusConflict {
+		t.Fatalf("unanswered request not rejected: %d", obligation.response.status)
 	}
 }

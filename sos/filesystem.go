@@ -750,6 +750,14 @@ func copyFolderAction(ctx context.Context, opts Options, args []any) (any, error
 		return nil, fileFailure("InvalidFileType", "folder copy requires a folder source",
 			map[string]any{"path": sourceDisplay, "expected": folderKind, "actual": classifyMode(source.Mode())})
 	}
+	if rel, relErr := filepath.Rel(sourceResolved, destResolved); relErr == nil && (rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))) {
+		return nil, fileFailure("InvalidFilePath", "folder destination must be outside its source", map[string]any{"path": destDisplay, "reason": "destination is inside source"})
+	}
+	if parent, parentErr := filepath.EvalSymlinks(filepath.Dir(destResolved)); parentErr == nil {
+		if rel, relErr := filepath.Rel(sourceResolved, filepath.Join(parent, filepath.Base(destResolved))); relErr == nil && (rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))) {
+			return nil, fileFailure("InvalidFilePath", "folder destination must be outside its source", map[string]any{"path": destDisplay, "reason": "destination resolves inside source"})
+		}
+	}
 	if existing, err := os.Lstat(destResolved); err == nil {
 		if !existing.IsDir() {
 			return nil, fileFailure("InvalidFileType", "folder copy requires a folder destination",

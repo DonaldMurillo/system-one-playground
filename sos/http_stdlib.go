@@ -263,9 +263,9 @@ func performHTTPRequest(parent context.Context, opts Options, request httpReques
 			return httpFailure("HttpRedirectRejected", "HTTPS redirect downgrade rejected", map[string]any{"reason": "HTTPS to HTTP downgrade"})
 		}
 		if !sameHTTPOrigin(prior, next.URL) {
-			for _, name := range []string{"Authorization", "Cookie", "Proxy-Authorization"} {
-				next.Header.Del(name)
-			}
+			// Caller-supplied extension headers may also contain credentials.
+			// Do not guess from header names across a trust boundary.
+			next.Header = make(http.Header)
 		}
 		return nil
 	}
@@ -280,6 +280,9 @@ func performHTTPRequest(parent context.Context, opts Options, request httpReques
 	}
 	if int64(len(body)) > request.maxBytes {
 		return nil, httpFailure("HttpBodyTooLarge", fmt.Sprintf("HTTP response exceeds %d byte limit", request.maxBytes), map[string]any{"limit": float64(request.maxBytes), "observed": float64(len(body))})
+	}
+	if !utf8.Valid(body) {
+		return nil, httpFailure("InvalidHttpResponse", "HTTP response body is not valid UTF-8", map[string]any{"reason": "response body is not valid UTF-8"})
 	}
 	headers := make(map[string]any, len(response.Header))
 	for name, values := range response.Header {

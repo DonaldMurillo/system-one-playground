@@ -423,19 +423,37 @@ func cronValue(s string, names map[string]int) (int, error) {
 // NextAfter returns the next cron occurrence strictly after t.
 func (s *CronSchedule) NextAfter(t time.Time) ([]time.Time, error) {
 	local := t.In(s.Zone)
-	// Start scanning at the next minute boundary.
-	minute := time.Date(local.Year(), local.Month(), local.Day(), local.Hour(), local.Minute(), 0, 0, s.Zone)
-	for range 60 * 24 * 800 {
-		minute = minute.Add(time.Minute)
-		if s.matches(minute) {
-			return []time.Time{resolveCronMinute(s, minute)}, nil
+	day := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, time.UTC)
+	for range 800 {
+		if s.dayMatches(day) {
+			for hour := range 24 {
+				if !s.Hours[hour] {
+					continue
+				}
+				for minute := range 60 {
+					if !s.Minutes[minute] {
+						continue
+					}
+					instants := s.resolveMinute(day, hour, minute)
+					future := instants[:0]
+					for _, instant := range instants {
+						if instant.After(t) {
+							future = append(future, instant)
+						}
+					}
+					if len(future) > 0 {
+						return future, nil
+					}
+				}
+			}
 		}
+		day = day.AddDate(0, 0, 1)
 	}
 	return nil, invalidSchedule("no future occurrence exists for cron " + s.expr)
 }
 
-func (s *CronSchedule) matches(m time.Time) bool {
-	if !s.Minutes[m.Minute()] || !s.Hours[m.Hour()] || !s.Months[int(m.Month())] {
+func (s *CronSchedule) dayMatches(m time.Time) bool {
+	if !s.Months[int(m.Month())] {
 		return false
 	}
 	dom := s.Days[m.Day()]
@@ -447,18 +465,21 @@ func (s *CronSchedule) matches(m time.Time) bool {
 }
 
 // resolveCronMinute applies the DST policies to a matched local minute.
-func resolveCronMinute(s *CronSchedule, m time.Time) time.Time {
-	candidates, exists := resolveLocal(s.Zone, m.Year(), m.Month(), m.Day(), m.Hour(), m.Minute(), 0, 0)
+func (s *CronSchedule) resolveMinute(day time.Time, hour, minute int) []time.Time {
+	candidates, exists := resolveLocal(s.Zone, day.Year(), day.Month(), day.Day(), hour, minute, 0, 0)
 	if !exists {
 		if s.Policy.Nonexistent == NonexistentSkip {
-			// The matcher should have skipped this minute; fall back to the
-			// next valid instant for safety.
-			return nextValidLocal(s.Zone, m.Year(), m.Month(), m.Day(), m.Hour(), m.Minute())
+			return nil
 		}
-		return nextValidLocal(s.Zone, m.Year(), m.Month(), m.Day(), m.Hour(), m.Minute())
+		return []time.Time{nextValidLocal(s.Zone, day.Year(), day.Month(), day.Day(), hour, minute)}
 	}
-	if len(candidates) == 2 && s.Policy.Ambiguous == AmbiguousSecond {
-		return candidates[1]
+	if len(candidates) == 2 {
+		switch s.Policy.Ambiguous {
+		case AmbiguousFirst:
+			return candidates[:1]
+		case AmbiguousSecond:
+			return candidates[1:]
+		}
 	}
-	return candidates[0]
+	return candidates
 }

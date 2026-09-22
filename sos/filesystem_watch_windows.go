@@ -103,6 +103,13 @@ func (b *windowsBackend) read() {
 			continue
 		}
 		if filled == 0 {
+			// Windows can report an overflowing notification buffer as a
+			// successful read with zero bytes. A rescan is mandatory.
+			select {
+			case b.triggers <- nativeWatchEvent{overflow: true}:
+			case <-b.done:
+				return
+			}
 			continue
 		}
 		select {

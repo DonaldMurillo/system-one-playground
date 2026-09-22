@@ -20,6 +20,9 @@ const (
 	defaultHTTPMaxHeaderBytes  = 32 << 10
 	absoluteHTTPMaxHeaderBytes = 1 << 20
 	defaultHTTPIdleTimeout     = 60 * time.Second
+	// Keep the socket writable long enough to send a timeout response after
+	// the application request deadline has fired.
+	httpResponseWriteGrace = time.Second
 )
 
 type httpServerRegistry struct {
@@ -37,13 +40,15 @@ type httpResponse struct {
 }
 
 type httpResponseObligation struct {
-	mu       sync.Mutex
-	id       string
-	done     chan struct{}
-	response httpResponse
-	finished bool
-	body     []byte
-	bodyRead bool
+	mu            sync.Mutex
+	id            string
+	done          chan struct{}
+	context       context.Context
+	finishHandler func()
+	response      httpResponse
+	finished      bool
+	body          []byte
+	bodyRead      bool
 }
 
 func newHTTPServerRegistry() *httpServerRegistry {
@@ -102,15 +107,11 @@ func (r *httpServerRegistry) ensureResponded(value any) error {
 	if obligation == nil || obligation != authority {
 		return nil
 	}
-	obligation.mu.Lock()
-	finished := obligation.finished
-	obligation.mu.Unlock()
-	if finished {
-		return nil
-	}
 	response := httpResponse{status: http.StatusInternalServerError, headers: make(http.Header), body: []byte("Internal Server Error\n")}
 	response.headers.Set("Content-Type", "text/plain; charset=utf-8")
-	_ = obligation.complete(response)
+	if !obligation.completeFallback(response) {
+		return nil
+	}
 	path, _ := request["path"].(string)
 	return httpFailure("UnansweredHttpRequest", "HTTP request handler finished without sending a response", map[string]any{"request_id": id, "path": path})
 }
@@ -154,6 +155,54 @@ func (r *httpServerRegistry) completeUnhandledFailure(value any, failure error) 
 	response.headers.Set("Content-Type", "application/json")
 	response.headers.Set("Cache-Control", "no-store")
 	_ = obligation.complete(response)
+	return true
+}
+
+func (r *httpServerRegistry) completeStatus(value any, status int) error {
+	request, ok := value.(map[string]any)
+	if !ok {
+		return nil
+	}
+	id, _ := request["id"].(string)
+	authority, _ := request["__http_authority"].(*httpResponseObligation)
+	if id == "" || authority == nil {
+		return nil
+	}
+	r.mu.Lock()
+	obligation := r.active[id]
+	r.mu.Unlock()
+	if obligation == nil || obligation != authority {
+		return nil
+	}
+	response := httpResponse{status: status, headers: make(http.Header)}
+	response.headers.Set("Cache-Control", "no-store")
+	return obligation.completeIfPending(response)
+}
+
+// completeIfPending is for runtime rejection/cancellation policies. A handler
+// may already have responded while doing follow-up work; replacement must not
+// turn that successfully completed request into an error.
+func (o *httpResponseObligation) completeIfPending(response httpResponse) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.finished {
+		return nil
+	}
+	o.response, o.finished = response, true
+	close(o.done)
+	return nil
+}
+
+// completeFallback chooses the fallback atomically against an application
+// response. A response completed first must never be overwritten by a timeout.
+func (o *httpResponseObligation) completeFallback(response httpResponse) bool {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.finished {
+		return false
+	}
+	o.response, o.finished = response, true
+	close(o.done)
 	return true
 }
 
@@ -353,7 +402,7 @@ func openHTTPListener(parent context.Context, registry *httpServerRegistry, opti
 	source.server = &http.Server{
 		ReadHeaderTimeout: options.requestDeadline,
 		ReadTimeout:       options.requestDeadline,
-		WriteTimeout:      options.requestDeadline,
+		WriteTimeout:      options.requestDeadline + httpResponseWriteGrace,
 		IdleTimeout:       defaultHTTPIdleTimeout,
 		MaxHeaderBytes:    options.maxHeaderBytes,
 		Handler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -393,39 +442,83 @@ func (s *httpListenerSource) handleRequest(writer http.ResponseWriter, request *
 	id, obligation := s.registry.register(body)
 	releaseReason := "responded"
 	defer func() { s.registry.release(id, releaseReason) }()
-	requestContext, cancel := context.WithTimeout(request.Context(), options.requestDeadline)
-	defer cancel()
+	// net/http cancels request.Context when ServeHTTP returns, including after
+	// a successful response. Detach that automatic return cancellation so
+	// post-response handler work can finish, while still observing real client
+	// disconnects until the response has been written.
+	requestContext, cancel := context.WithTimeout(context.WithoutCancel(request.Context()), options.requestDeadline)
+	stopClient := context.AfterFunc(request.Context(), cancel)
+	stopShutdown := context.AfterFunc(s.ctx, cancel)
+	finishHandler := func() { stopClient(); stopShutdown(); cancel() }
+	obligation.context = requestContext
+	obligation.finishHandler = finishHandler
+	applicationResponse := false
+	defer func() {
+		if applicationResponse {
+			stopClient()
+		} else {
+			finishHandler()
+		}
+	}()
 	value := serverHTTPRequestValue(id, obligation, request)
 	select {
 	case s.requests <- value:
 	case <-requestContext.Done():
 		releaseReason = "disconnected"
-		http.Error(writer, "Request canceled", http.StatusRequestTimeout)
+		writeHTTPFallback(writer, obligation, http.StatusRequestTimeout, "Request canceled")
 		return
 	case <-s.ctx.Done():
 		releaseReason = "shutdown"
-		http.Error(writer, "Server shutting down", http.StatusServiceUnavailable)
+		writeHTTPFallback(writer, obligation, http.StatusServiceUnavailable, "Server shutting down")
 		return
 	}
 	select {
 	case <-obligation.done:
-		obligation.mu.Lock()
-		response := obligation.response
-		obligation.mu.Unlock()
-		for name, values := range response.headers {
-			for _, value := range values {
-				writer.Header().Add(name, value)
-			}
-		}
-		writer.WriteHeader(response.status)
-		_, _ = writer.Write(response.body)
+		writeHTTPObligationResponse(writer, obligation)
+		applicationResponse = true
 	case <-requestContext.Done():
-		releaseReason = "disconnected"
-		http.Error(writer, "Request deadline exceeded", http.StatusGatewayTimeout)
+		if writeHTTPFallback(writer, obligation, http.StatusGatewayTimeout, "Request deadline exceeded") {
+			releaseReason = "disconnected"
+		} else {
+			applicationResponse = true
+		}
 	case <-s.ctx.Done():
-		releaseReason = "shutdown"
-		http.Error(writer, "Server shutting down", http.StatusServiceUnavailable)
+		if writeHTTPFallback(writer, obligation, http.StatusServiceUnavailable, "Server shutting down") {
+			releaseReason = "shutdown"
+		} else {
+			applicationResponse = true
+		}
 	}
+}
+
+// writeHTTPFallback settles the obligation before writing, so racing handler
+// completion and timeout/shutdown choose exactly one response under its lock.
+// It returns true only when the fallback won.
+func writeHTTPFallback(writer http.ResponseWriter, obligation *httpResponseObligation, status int, message string) bool {
+	response := httpResponse{status: status, headers: make(http.Header), body: []byte(message + "\n")}
+	response.headers.Set("Content-Type", "text/plain; charset=utf-8")
+	response.headers.Set("X-Content-Type-Options", "nosniff")
+	fallbackWon := obligation.completeFallback(response)
+	writeHTTPObligationResponse(writer, obligation)
+	return fallbackWon
+}
+
+func writeHTTPObligationResponse(writer http.ResponseWriter, obligation *httpResponseObligation) bool {
+	obligation.mu.Lock()
+	if !obligation.finished {
+		obligation.mu.Unlock()
+		return false
+	}
+	response := obligation.response
+	obligation.mu.Unlock()
+	for name, values := range response.headers {
+		for _, value := range values {
+			writer.Header().Add(name, value)
+		}
+	}
+	writer.WriteHeader(response.status)
+	_, _ = writer.Write(response.body)
+	return true
 }
 
 func serverHTTPRequestValue(id string, authority *httpResponseObligation, request *http.Request) map[string]any {

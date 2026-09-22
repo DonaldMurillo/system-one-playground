@@ -149,6 +149,9 @@ func TestRepeatingTimerCombinePolicy(t *testing.T) {
 	if !next["scheduled_for"].(time.Time).Equal(timerTestStart.Add(40 * time.Second)) {
 		t.Fatalf("next scheduled_for = %v", next["scheduled_for"])
 	}
+	if next["missed"] != int64(0) {
+		t.Fatalf("next delivery inherited earlier missed ticks: %v", next["missed"])
+	}
 }
 
 func TestRepeatingTimerSkipPolicy(t *testing.T) {
@@ -195,6 +198,33 @@ func TestRepeatingTimerBoundedCatchUpPolicy(t *testing.T) {
 	snap := timer.Snapshot()
 	if snap.CaughtUp != 2 || snap.Missed != 1 || snap.Combined != 1 {
 		t.Fatalf("snapshot = %+v", snap)
+	}
+}
+
+func TestRepeatingTimersSharePendingCatchUpLimit(t *testing.T) {
+	clock := NewVirtualClock(timerTestStart)
+	governor := NewTimerGovernor(TimerLimits{MaxPendingCatchUp: 3})
+	policy := MissedTickPolicy{Mode: MissedCatchUp, Max: 3}
+	first, err := NewRepeatingTimer(clock, 10*time.Second, false, policy, governor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Stop()
+	second, err := NewRepeatingTimer(clock, 10*time.Second, false, policy, governor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Stop()
+	clock.Advance(35 * time.Second)
+	if _, more, err := first.Next(context.Background()); err != nil || !more {
+		t.Fatalf("first catch-up: more=%v err=%v", more, err)
+	}
+	if _, _, err := second.Next(context.Background()); err == nil {
+		t.Fatal("run-wide pending catch-up limit was ignored")
+	}
+	first.Stop()
+	if _, more, err := second.Next(context.Background()); err != nil || !more {
+		t.Fatalf("pending capacity was not released: more=%v err=%v", more, err)
 	}
 }
 

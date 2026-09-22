@@ -90,6 +90,8 @@ breakpoints, logpoints, continue/pause/stop/restart controls, stepping,
 call-stack frames, locals, read-only expression evaluation, and runtime/trace
 output. The runtime supplies source locations and snapshots; the extension is
 not simulating a debugger from terminal text.
+Stopping a debug session intentionally cancels its run and reports a clean
+stopped session, without a spurious `context canceled` application error.
 
 Use **SysOneScript: Set Jev Token** to store `TYPESAFE_API_KEY` in VS Code's
 encrypted SecretStorage. The value is injected into the language server,

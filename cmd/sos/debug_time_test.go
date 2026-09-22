@@ -3,7 +3,9 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"strings"
 
@@ -11,6 +13,17 @@ import (
 
 	"github.com/DonaldMurillo/system-one-playground/sos"
 )
+
+func TestDebuggerTreatsClientCancellationAsCleanStop(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if !debugRunStoppedByClient(ctx, context.Canceled) || !debugRunStoppedByClient(ctx, errors.Join(context.Canceled, errors.New("stream closed"))) {
+		t.Fatal("client cancellation was reported as an application failure")
+	}
+	if debugRunStoppedByClient(context.Background(), context.Canceled) || debugRunStoppedByClient(ctx, errors.New("invalid script")) {
+		t.Fatal("unrelated application failure was suppressed")
+	}
+}
 
 func newTestDAPServer(out *bytes.Buffer) *dapServer {
 	server := &dapServer{in: bufio.NewReader(strings.NewReader("")), out: out, errOut: io.Discard, seq: 1}

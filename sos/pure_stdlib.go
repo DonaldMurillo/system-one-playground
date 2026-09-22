@@ -140,7 +140,12 @@ func registerTime(name, description, effect string, params []NativeParam, result
 	if targets == nil {
 		targets = []string{"native", "wasm", "wasip1"}
 	}
-	stdRegistry["std/time"][name] = NativeOp{Name: name, Params: params, Result: result, Fn: fn, PossibleFailures: failures, Targets: targets}
+	effects := []string{}
+	if effect != "" {
+		effects = append(effects, effect)
+	}
+	stdRegistry["std/time"][name] = NativeOp{Name: name, Params: params, Result: result, Fn: fn, PossibleFailures: failures, Targets: targets, Description: description, Effects: effects}
+	stdDocs["std/time."+name] = stdDoc{result, description, effects}
 }
 
 // registerTimeCtx registers a context-aware std/time operation so waits

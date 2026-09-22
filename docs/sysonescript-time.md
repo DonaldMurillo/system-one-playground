@@ -64,7 +64,9 @@ one full interval unless the source says `now and every`.
 When a consumer falls behind, the default `combining missed ticks` policy
 retains one pending tick and folds the rest into its `missed` count. Explicit
 alternatives are `skipping missed ticks` and `catching up at most 3 ticks`;
-there is no unbounded catch-up mode.
+there is no unbounded catch-up mode. `missed` describes only the schedule
+positions combined into that delivery, not the timer's lifetime total.
+The pending catch-up bound is shared by all timers in a run.
 
 ## Calendar schedules
 
@@ -80,7 +82,8 @@ explicit policy (`skip it` or `use the next valid time` for gaps; `run only at
 the first occurrence` by default for overlaps). A schedule never depends on the
 host locale. Cron expressions remain available for interoperability through
 `std/time.schedule_from_cron`, which validates the expression and rejects
-unsupported extensions instead of reinterpreting them.
+unsupported extensions instead of reinterpreting them. Cron schedules obey
+the same explicit gap and overlap policies as readable calendar schedules.
 
 Without durable state a schedule starts at `the next scheduled time`. With the
 future state library you can `remember progress as "hourly-report"` and `run

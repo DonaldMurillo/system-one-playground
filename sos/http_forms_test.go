@@ -302,7 +302,8 @@ func TestHTTPCanonicalReadJSONBodyTypeMismatchIsIsolated(t *testing.T) {
 		t.Fatalf("request failed: %v", err)
 	}
 	if response.StatusCode != http.StatusBadRequest {
-		t.Fatalf("invalid request status=%d, want 400", response.StatusCode)
+		body, _ := io.ReadAll(response.Body)
+		t.Fatalf("invalid request status=%d body=%q, want 400", response.StatusCode, body)
 	}
 	_ = response.Body.Close()
 	response, err = http.Post("http://"+address, "application/json", strings.NewReader(`{"message":"ok"}`))

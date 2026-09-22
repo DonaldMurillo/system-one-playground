@@ -12,6 +12,18 @@ import (
 
 const watchTestInterval = 12 * time.Millisecond
 
+func TestFileWatchMetricsDoNotConsumeQueuedChanges(t *testing.T) {
+	source := &fileWatchSource{queue: make(chan []watchChange, 2), queuedItems: 3, pending: []watchChange{{rel: "pending"}}}
+	source.queue <- []watchChange{{rel: "one"}, {rel: "two"}}
+	source.queue <- []watchChange{{rel: "three"}}
+	for range 3 {
+		buffered, credit := source.streamMetrics()
+		if buffered != 4 || credit != 0 || len(source.queue) != 2 || len(source.pending) != 1 {
+			t.Fatalf("snapshot consumed watcher data: buffered=%d credit=%d queued=%d pending=%d", buffered, credit, len(source.queue), len(source.pending))
+		}
+	}
+}
+
 // watchFor drains the watcher until keep returns true or the deadline passes.
 func watchFor(t *testing.T, source *fileWatchSource, deadline time.Duration, keep func([]map[string]any) bool) ([]map[string]any, error) {
 	t.Helper()
@@ -345,6 +357,29 @@ func TestReconcileFoldsChangesIntoAScan(t *testing.T) {
 	var failure *typedFailure
 	if !errors.As(err, &failure) || failure.kind != "FileWatchOverflow" || failure.value["root"] == nil {
 		t.Fatalf("overflow fold = %#v", err)
+	}
+}
+
+func TestReconcileRemovedFolderPrunesDescendants(t *testing.T) {
+	entries := []any{
+		map[string]any{"relative_path": "inbox", "kind": "folder"},
+		map[string]any{"relative_path": "inbox/nested/file.txt", "kind": "file"},
+		map[string]any{"relative_path": "keep.txt", "kind": "file"},
+	}
+	result, err := reconcileFileChange(entries, map[string]any{"kind": "removed", "entry_kind": "folder", "relative_path": "inbox"})
+	if err != nil || len(result) != 1 || result[0].(map[string]any)["relative_path"] != "keep.txt" {
+		t.Fatalf("removed subtree remained: %#v, %v", result, err)
+	}
+}
+
+func TestWatchDiffReportsAttributeOnlyChange(t *testing.T) {
+	stamp := time.Date(2026, 9, 22, 0, 0, 0, 0, time.UTC)
+	before := map[string]watchEntry{"file.txt": {kind: fileKind, size: 3, modified: stamp, mode: 0o644}}
+	after := map[string]watchEntry{"file.txt": {kind: fileKind, size: 3, modified: stamp, mode: 0o600}}
+	spec := traversalSpec{root: "/r", kinds: map[string]bool{fileKind: true}}
+	changes := diffWatchSnapshots(spec, before, after, stamp)
+	if len(changes) != 1 || changes[0].kind != changeModified {
+		t.Fatalf("attribute-only change ignored: %#v", changes)
 	}
 }
 

@@ -68,9 +68,27 @@ func (l TimerLimits) pendingCatchUp() int64 {
 // pending catch-up ticks. Every timer constructor draws from the same
 // governor so exceeding a bound fails visibly and nothing is evicted.
 type TimerGovernor struct {
-	mu     sync.Mutex
-	limits TimerLimits
-	active int
+	mu      sync.Mutex
+	limits  TimerLimits
+	active  int
+	pending int64
+}
+
+func (g *TimerGovernor) reservePending(count int64) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	limit := g.limits.pendingCatchUp()
+	if count > limit-g.pending {
+		return timerLimitExceeded(int(limit), "pending catch-up ticks")
+	}
+	g.pending += count
+	return nil
+}
+
+func (g *TimerGovernor) releasePending(count int64) {
+	g.mu.Lock()
+	g.pending -= count
+	g.mu.Unlock()
 }
 
 // NewTimerGovernor creates the run-wide governor. Zero limits fall back to
@@ -307,6 +325,7 @@ func (t *RepeatingTimer) Next(ctx context.Context) (map[string]any, bool, error)
 	if len(t.pendingCatchUp) > 0 {
 		pending := t.pendingCatchUp[0]
 		t.pendingCatchUp = t.pendingCatchUp[1:]
+		t.governor.releasePending(1)
 		t.seq++
 		t.caughtUp++
 		t.emitted++
@@ -327,16 +346,14 @@ func (t *RepeatingTimer) Next(ctx context.Context) (map[string]any, bool, error)
 		if t.stopped {
 			return nil, false, nil
 		}
+		missed := int64(0)
 		if last > k {
-			t.missed += last - k
-			t.combined += last - k
+			missed = last - k
+			t.missed += missed
+			t.combined += missed
 			k = last
 		}
 		t.next = k + 1
-		missed := k - t.first - t.seq
-		if missed < 0 {
-			missed = 0
-		}
 		t.seq++
 		t.emitted++
 		return newTimeTick(t.seq, t.position(k), now, missed), true, nil
@@ -378,11 +395,15 @@ func (t *RepeatingTimer) Next(ctx context.Context) (map[string]any, bool, error)
 			t.mu.Unlock()
 			return nil, false, nil
 		}
-		t.next = last + 1
 		oldest := k
 		if last-k+1 > t.policy.Max {
 			oldest = last - t.policy.Max + 1
 		}
+		if err := t.governor.reservePending(last - oldest + 1); err != nil {
+			t.mu.Unlock()
+			return nil, false, err
+		}
+		t.next = last + 1
 		combined := oldest - k
 		if combined > 0 {
 			t.missed += combined
@@ -411,6 +432,8 @@ func (t *RepeatingTimer) Stop() {
 	}
 	t.stopped = true
 	close(t.stopCh)
+	t.governor.releasePending(int64(len(t.pendingCatchUp)))
+	t.pendingCatchUp = nil
 	if t.deliver != nil {
 		t.deliver()
 	}

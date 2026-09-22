@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -1216,27 +1217,39 @@ func (r *runtime) execute(s *Statement) error {
 				return fmt.Errorf("stream item must be %s; received %s", stream.itemType.String(), valueTypeName(item))
 			}
 			r.env[m[1]] = item
-			e = r.block(s.Body)
-			var stopped stopReadingValue
-			if errors.As(e, &stopped) {
-				return stream.closeWithReason(r.ctx, "stop reading")
-			}
-			if e != nil {
-				var exit interface{ ExitCode() int }
-				var replayErr *ReplayIntegrityError
-				if !errors.As(e, &exit) && !errors.As(e, &replayErr) && !fatalParallel(e) && r.opts.httpServers != nil && r.opts.httpServers.completeUnhandledFailure(item, e) {
-					r.recordHTTPRuntimeFailure(s.Line, e)
-					continue
+			keepReading, iterationErr := func() (bool, error) {
+				parentCtx := r.ctx
+				handlerCtx, requestCtx, cleanup := httpRequestHandlerContext(parentCtx, item)
+				r.ctx = handlerCtx
+				defer func() { r.ctx = parentCtx; cleanup() }()
+				e := r.block(s.Body)
+				var stopped stopReadingValue
+				if errors.As(e, &stopped) {
+					return false, stream.closeWithReason(parentCtx, "stop reading")
 				}
-				_ = stream.close(context.Background())
-				return e
-			}
-			var responseErr error
-			if r.opts.httpServers != nil {
-				responseErr = r.opts.httpServers.ensureResponded(item)
-			}
-			if responseErr != nil {
-				r.recordHTTPRuntimeFailure(s.Line, responseErr)
+				if e != nil && requestCtx != nil && requestCtx.Err() != nil && parentCtx.Err() == nil {
+					// The response deadline/disconnect already settled this request.
+					return true, nil
+				}
+				if e != nil {
+					var exit interface{ ExitCode() int }
+					var replayErr *ReplayIntegrityError
+					if !errors.As(e, &exit) && !errors.As(e, &replayErr) && !fatalParallel(e) && r.opts.httpServers != nil && r.opts.httpServers.completeUnhandledFailure(item, e) {
+						r.recordHTTPRuntimeFailure(s.Line, e)
+						return true, nil
+					}
+					_ = stream.close(context.Background())
+					return false, e
+				}
+				if r.opts.httpServers != nil {
+					if responseErr := r.opts.httpServers.ensureResponded(item); responseErr != nil {
+						r.recordHTTPRuntimeFailure(s.Line, responseErr)
+					}
+				}
+				return true, nil
+			}()
+			if !keepReading {
+				return iterationErr
 			}
 		}
 	case "collectStream":
@@ -1787,10 +1800,12 @@ func (r *runtime) recordHTTPRuntimeFailure(line int, err error) {
 	if errors.As(err, &failure) {
 		trace.Answer = failure.value
 	}
+	r.shared.traceMu.Lock()
 	r.result.Traces = append(r.result.Traces, trace)
 	if r.opts.OnTrace != nil {
 		r.opts.OnTrace(trace)
 	}
+	r.shared.traceMu.Unlock()
 }
 
 func fileFormModifiers(s *Statement) (policy, include, exclude string, depth int, follow bool) {
@@ -1813,6 +1828,21 @@ func fileFormModifiers(s *Statement) (policy, include, exclude string, depth int
 		}
 	}
 	return
+}
+
+func fileWalkKinds(s *Statement) string {
+	for _, child := range s.Body {
+		if child.Kind != "fsInclude" {
+			continue
+		}
+		switch child.Text {
+		case "including files":
+			return `["file"]`
+		case "including folders":
+			return `["folder"]`
+		}
+	}
+	return "[]"
 }
 
 func quotedText(value string) string { return strconv.Quote(value) }
@@ -1865,7 +1895,7 @@ func (r *runtime) executeFileForm(s *Statement, m []string) error {
 	case "listEntries":
 		return call("list", []string{m[2], quotedText(m[1])}, m[3])
 	case "walkThrough":
-		return call("walk", []string{m[1], m[2], include, exclude, "[]", strconv.Itoa(depth), boolExpr}, m[3])
+		return call("walk", []string{m[1], m[2], include, exclude, fileWalkKinds(s), strconv.Itoa(depth), boolExpr}, m[3])
 	case "streamFiles":
 		kinds := "[]"
 		if m[1] == "files" {
@@ -2152,7 +2182,9 @@ func (r *runtime) externalTrace(mod *Module, action string, started time.Time, e
 	}
 	r.result.Traces = append(r.result.Traces, trace)
 	if r.opts.OnTrace != nil {
+		r.shared.traceMu.Lock()
 		r.opts.OnTrace(trace)
+		r.shared.traceMu.Unlock()
 	}
 }
 
@@ -2559,10 +2591,7 @@ func (r *runtime) executeStreamTransformation(s *Statement, m []string) error {
 			status, _ := strconv.Atoi(match("rejectExcess", rejection.Text)[1])
 			opts.OnDrop = func(item any) error {
 				up.rejected.Add(1)
-				if owned, ok := item.(*OwnedItem); ok {
-					return owned.Complete(fmt.Sprintf("status %d", status))
-				}
-				return nil
+				return r.completeStreamItemStatus(item, status)
 			}
 		}
 		derived, err = Throttle(up, allowance, window, opts, clock)
@@ -2734,6 +2763,76 @@ func (r *runtime) runStreamBlock(ctx context.Context, name string, item any, bod
 	return err
 }
 
+func (r *runtime) runRequestStreamBlock(ctx context.Context, name string, item any, body []*Statement, line int) error {
+	parentCtx := ctx
+	ctx, requestCtx, cleanup := httpRequestHandlerContext(ctx, item)
+	defer cleanup()
+	err := r.runStreamBlock(ctx, name, item, body)
+	if r.opts.httpServers == nil {
+		return err
+	}
+	if err != nil {
+		if requestCtx != nil && requestCtx.Err() != nil && parentCtx.Err() == nil {
+			// A single client deadline/disconnect does not stop the listener.
+			return nil
+		}
+		var exit interface{ ExitCode() int }
+		var replayErr *ReplayIntegrityError
+		if ctx.Err() == nil && !errors.As(err, &exit) && !errors.As(err, &replayErr) && !fatalParallel(err) && r.opts.httpServers.completeUnhandledFailure(item, err) {
+			r.recordHTTPRuntimeFailure(line, err)
+			return nil
+		}
+		return err
+	}
+	if responseErr := r.opts.httpServers.ensureResponded(item); responseErr != nil {
+		r.recordHTTPRuntimeFailure(line, responseErr)
+	}
+	return nil
+}
+
+func httpRequestHandlerContext(parent context.Context, item any) (context.Context, context.Context, func()) {
+	request, ok := item.(map[string]any)
+	if !ok {
+		return parent, nil, func() {}
+	}
+	authority, ok := request["__http_authority"].(*httpResponseObligation)
+	if !ok || authority.context == nil {
+		return parent, nil, func() {}
+	}
+	requestCtx := authority.context
+	merged, cancel := context.WithCancel(parent)
+	stop := context.AfterFunc(requestCtx, cancel)
+	if requestCtx.Err() != nil {
+		cancel()
+	}
+	return merged, requestCtx, func() {
+		stop()
+		cancel()
+		if authority.finishHandler != nil {
+			authority.finishHandler()
+		}
+	}
+}
+
+func (r *runtime) completeStreamItemStatus(item any, status int) error {
+	if owned, ok := item.(*OwnedItem); ok {
+		return owned.Complete(fmt.Sprintf("status %d", status))
+	}
+	if r.opts.httpServers != nil {
+		return r.opts.httpServers.completeStatus(item, status)
+	}
+	return nil
+}
+
+func (r *runtime) settleBoundedAbort(item any) error {
+	if request, ok := item.(map[string]any); ok {
+		if _, ok := request["__http_authority"].(*httpResponseObligation); ok {
+			return r.completeStreamItemStatus(item, http.StatusServiceUnavailable)
+		}
+	}
+	return settleOrAbandoned(handlerObligationOperation, item, "handler canceled")
+}
+
 type languageTransformSource struct {
 	up    *streamHandle
 	apply func(context.Context, any) (any, bool, error)
@@ -2767,7 +2866,7 @@ func (r *runtime) executeStreamHandler(s *Statement, m []string) error {
 	name := m[1]
 	body := streamHandlerStatements(s)
 	handler := func(ctx context.Context, item any) error {
-		return r.runStreamBlock(ctx, name, item, body)
+		return r.runRequestStreamBlock(ctx, name, item, body, s.Line)
 	}
 	if s.Kind == "handleOneStream" {
 		return HandleSequentially(r.ctx, up, handler)
@@ -2783,7 +2882,7 @@ func (r *runtime) executeStreamHandler(s *Statement, m []string) error {
 	if limit <= 0 {
 		return fmt.Errorf("the handling policy is ambiguous: add \"with at most N at once\" or \"one at a time\"")
 	}
-	return HandleWithBoundConcurrency(r.ctx, up, limit, handler)
+	return handleWithBoundConcurrencyCleanup(r.ctx, up, limit, defaultHandlerCleanupDeadline, handler, r.settleBoundedAbort)
 }
 
 // executeStreamPolicy runs the remaining handling policies over the consumed
@@ -2817,10 +2916,10 @@ func (r *runtime) executeStreamPolicy(s *Statement, m []string) error {
 		}
 		if policy := streamChild(s, "cancelPolicy"); policy != nil {
 			status, _ := strconv.Atoi(match("cancelPolicy", policy.Text)[2])
-			opts.Replacement = func(item *OwnedItem) error { return item.Complete(fmt.Sprintf("status %d", status)) }
+			opts.OnReplace = func(item any) error { return r.completeStreamItemStatus(item, status) }
 		}
 		return HandleLatest(r.ctx, up, func(ctx context.Context, item any) (any, error) {
-			return nil, r.runStreamBlock(ctx, name, item, body)
+			return nil, r.runRequestStreamBlock(ctx, name, item, body, s.Line)
 		}, opts)
 	case "conflateStream":
 		name := m[1]
@@ -2829,10 +2928,10 @@ func (r *runtime) executeStreamPolicy(s *Statement, m []string) error {
 		}
 		body := streamHandlerStatements(s)
 		return HandleConflating(r.ctx, up, func(ctx context.Context, item any) error {
-			return r.runStreamBlock(ctx, name, item, body)
+			return r.runRequestStreamBlock(ctx, name, item, body, s.Line)
 		}, ConflateOptions{})
 	case "exhaustStream":
-		name := m[1]
+		name := strings.ReplaceAll(m[1], " ", "_")
 		body := streamHandlerStatements(s)
 		policy := BusyIgnore
 		var reject func(item any) error
@@ -2845,15 +2944,12 @@ func (r *runtime) executeStreamPolicy(s *Statement, m []string) error {
 				code, _ := strconv.Atoi(pm[2])
 				policy = BusyReject
 				reject = func(item any) error {
-					if owned, ok := item.(*OwnedItem); ok {
-						return owned.Complete(fmt.Sprintf("status %d", code))
-					}
-					return nil
+					return r.completeStreamItemStatus(item, code)
 				}
 			}
 		}
 		return HandleExclusively(r.ctx, up, func(ctx context.Context, item any) error {
-			return r.runStreamBlock(ctx, name, item, body)
+			return r.runRequestStreamBlock(ctx, name, item, body, s.Line)
 		}, ExclusiveOptions{Policy: policy, Reject: reject})
 	case "filterStream", "projectStream":
 		name := m[1]

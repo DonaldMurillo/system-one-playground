@@ -498,7 +498,8 @@ func (s *dapServer) start() error {
 				s.output("console", "Jev trace: "+string(data)+"\n")
 			},
 		})
-		if runErr != nil {
+		stoppedByClient := debugRunStoppedByClient(ctx, runErr)
+		if runErr != nil && !stoppedByClient {
 			s.output("stderr", "SysOneScript error: "+runErr.Error()+"\n")
 			s.session.mu.Lock()
 			breakOnException := s.session.breakOnException && !s.session.terminated
@@ -513,13 +514,19 @@ func (s *dapServer) start() error {
 		}
 		s.session.terminate()
 		exitCode := 0
-		if runErr != nil {
+		if runErr != nil && !stoppedByClient {
 			exitCode = 1
 		}
 		s.event("exited", map[string]any{"exitCode": exitCode})
 		s.event("terminated", map[string]any{})
 	}()
 	return nil
+}
+
+// A DAP terminate/disconnect cancels the run context intentionally. The
+// adapter reports a clean stopped session, not an application failure.
+func debugRunStoppedByClient(ctx context.Context, runErr error) bool {
+	return errors.Is(ctx.Err(), context.Canceled) && errors.Is(runErr, context.Canceled)
 }
 
 type dapOutput struct {

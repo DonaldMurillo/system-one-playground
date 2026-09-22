@@ -281,6 +281,10 @@ function setPanelRun(action, value) {
   updateRunningUI()
 }
 
+function updateRunningUI() {
+  extensionState?.tree?.refresh()
+}
+
 function runPanelProcess(action, args, cwd, label, commandOverride, onClose, extraEnvironment = {}) {
 	const state = extensionState
   const command = commandOverride || runnerCommand()
@@ -1418,6 +1422,7 @@ function activate(context) {
 		const state = extensionState
 		if (!state) return
 		state.debugSessions.add(session)
+		updateRunningUI()
 		endPendingDebugStream(state, session.configuration.__sysoneLaunchId, 0, false)
 		if (state.disposed || (session.configuration.__sysoneEpoch ?? -1) < state.debugEpoch) {
 			state.stoppedDebugSessions.add(session.id)

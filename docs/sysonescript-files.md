@@ -125,7 +125,9 @@ The stream emits entries in stable depth-first lexical order, and backpressure
 prevents traversal from outrunning the consumer. `stop reading`, `close
 stream`, run cancellation, or scope cleanup stops the walk promptly.
 
-Defaults are: include files and folders; no include patterns; no exclusions;
+`including files` and `including folders` restrict which entry kinds are
+emitted. A folder-only walk does not emit files, even when a file matches a
+pattern. Defaults are: include files and folders; no include patterns; no exclusions;
 do not follow symbolic links; stop on inaccessible entries; no depth
 restriction for the streaming form; and an explicit entry bound required for
 materialization. Patterns containing `/` match slash-separated relative
@@ -193,7 +195,9 @@ remove folder "generated" including its contents
 File copy preserves contents and ordinary permission bits where supported and
 does not follow a symbolic-link source by default. Folder copy is recursive,
 must say `copy folder`, and observes the same link, exclusion, cancellation,
-and entry-limit rules as traversal. Cross-device move may fall back to copy
+and entry-limit rules as traversal; `excluding [...]` also works on a folder
+copy. The destination cannot be the source folder or any of its descendants.
+Cross-device move may fall back to copy
 followed by removal only when explicitly permitted, because that fallback is
 not atomic.
 

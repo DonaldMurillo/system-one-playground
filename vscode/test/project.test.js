@@ -77,6 +77,18 @@ test('discovers external module definitions without launching them', () => {
   assert.deepEqual(readExternalModules(root), [{ path:'local/weather', definition:path.join(root,'modules/weather/module.sos.toml') }])
 })
 
+test('discovers external modules when no custom config home is set', () => {
+  const root = fixture()
+  fs.writeFileSync(path.join(root, 'sos.toml'), '[[module.external]]\npath="local/default-home"\ndefinition="modules/default/module.sos.toml"\n')
+  const previous = process.env.SOS_CONFIG_HOME
+  delete process.env.SOS_CONFIG_HOME
+  try {
+    assert.ok(readExternalModules(root).some(module => module.path === 'local/default-home' && module.definition === path.join(root, 'modules/default/module.sos.toml')))
+  } finally {
+    process.env.SOS_CONFIG_HOME = previous
+  }
+})
+
 test('external module discovery accepts TOML literal strings and hashes inside values', () => {
   const root = fixture()
   fs.writeFileSync(path.join(root, 'sos.toml'), `version=1

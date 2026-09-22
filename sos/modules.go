@@ -588,15 +588,16 @@ func resolveModulesLoaded(filename string, source string) (*Program, []Diagnosti
 	libBindings := l.configBindings(root)
 	libBindings = withoutSourceOverrides(bindings, libBindings)
 	vocab := buildFileVocab(append(bindings, libBindings...), entryActions(p), func(line int, format string, args ...any) { l.diag(line, format, args...) })
+	aliases := map[string]*Module{}
+	for alias, mod := range vocab.aliases {
+		aliases[alias] = mod
+	}
+	lowerTimeStatements(p.Statements, stdTimeAlias(&ModuleTable{Aliases: aliases}))
 	fixed := map[int]string{}
 	reclassifySent(p.Statements, vocab, fixed)
 	ds = dropReclassifiedDiagnostics(ds, fixed)
 	if !ok || len(l.diags) > 0 {
 		return p, append(ds, l.diags...), nil
-	}
-	aliases := map[string]*Module{}
-	for alias, mod := range vocab.aliases {
-		aliases[alias] = mod
 	}
 	p.Modules = &ModuleTable{Aliases: aliases, ByKey: l.cache, Order: l.order, entryRefs: refs, vocab: vocab, libraries: libMeta(libBindings)}
 	return p, ds, l

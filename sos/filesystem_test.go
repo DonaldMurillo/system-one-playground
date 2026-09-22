@@ -452,6 +452,11 @@ func TestCopyFolderRecursive(t *testing.T) {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 	op := stdRegistry["std/files"]["copy_folder"]
+	_, selfErr := op.ContextFn(context.Background(), Options{Dir: dir}, []any{"src", "src/nested/copy", "replace", []any{}})
+	mustFileFailure(t, selfErr, "InvalidFilePath")
+	if _, statErr := os.Stat(filepath.Join(dir, "src", "nested", "copy")); !os.IsNotExist(statErr) {
+		t.Fatalf("self-copy created destination before failing: %v", statErr)
+	}
 
 	if _, err := op.ContextFn(context.Background(), Options{Dir: dir}, []any{"src", "dest", "create", []any{"skip"}}); err != nil {
 		t.Fatal(err)
