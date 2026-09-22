@@ -5,6 +5,7 @@ import (
 	"context"
 	"github.com/DonaldMurillo/system-one-playground/sosconfig"
 	"io"
+	"time"
 )
 
 var Version = "0.4.0"
@@ -85,6 +86,41 @@ type DebugFrame struct {
 type Debugger interface {
 	BeforeStatement(context.Context, DebugFrame, []DebugFrame, map[string]any) error
 }
+
+// StreamEvent is a non-consuming snapshot of one owned stream. Hosts can use
+// these events to present live progress without reading from the producer.
+// Failure contains only the runtime's public, structured failure value.
+type StreamEvent struct {
+	ID                 string         `json:"id"`
+	Line               int            `json:"line"`
+	Event              string         `json:"event"`
+	State              string         `json:"state"`
+	Binding            string         `json:"binding"`
+	Producer           string         `json:"producer"`
+	ItemType           string         `json:"itemType"`
+	ItemsReceived      int            `json:"itemsReceived"`
+	ItemsBuffered      int            `json:"itemsBuffered"`
+	CreditAvailable    int            `json:"creditAvailable"`
+	StartedAt          time.Time      `json:"startedAt"`
+	UpdatedAt          time.Time      `json:"updatedAt"`
+	EndedAt            *time.Time     `json:"endedAt,omitempty"`
+	Failure            map[string]any `json:"failure,omitempty"`
+	Reason             string         `json:"reason,omitempty"`
+	ClockKind          string         `json:"clockKind,omitempty"`
+	VirtualTime        *time.Time     `json:"virtualTime,omitempty"`
+	Interval           time.Duration  `json:"interval,omitempty"`
+	Schedule           string         `json:"schedule,omitempty"`
+	TimeZone           string         `json:"timeZone,omitempty"`
+	NextScheduledAt    *time.Time     `json:"nextScheduledAt,omitempty"`
+	EmittedTicks       int64          `json:"emittedTicks,omitempty"`
+	MissedTicks        int64          `json:"missedTicks,omitempty"`
+	Policy             string         `json:"policy,omitempty"`
+	CombinedTicks      int64          `json:"combinedTicks,omitempty"`
+	SkippedTicks       int64          `json:"skippedTicks,omitempty"`
+	CaughtUpTicks      int64          `json:"caughtUpTicks,omitempty"`
+	CheckpointIdentity string         `json:"checkpointIdentity,omitempty"`
+}
+
 type Options struct {
 	CommandPath []string
 	Dir         string
@@ -106,10 +142,16 @@ type Options struct {
 	Resolution *Analysis
 	Locked     bool
 	OnTrace    func(Trace)
+	// Streams enables safe per-stream inspection and targeted cancellation.
+	// OnStreamEvent receives immutable snapshots and must return promptly.
+	Streams       *StreamController
+	OnStreamEvent func(StreamEvent)
 	// SourcePath gives runtime diagnostics and debugger stops a stable source
 	// identity. It is optional for embedders that execute in-memory programs.
 	SourcePath string
-	// Debugger pauses before executable statements when a debug adapter is
+	// Clock overrides the runtime's shared timing source (host by default).
+	// Test harnesses inject a deterministic virtual clock.
+	Clock Clock
 	// attached. It is nil for ordinary runs.
 	Debugger Debugger
 }
@@ -121,6 +163,7 @@ type Result struct {
 	Traces    []Trace        `json:"traces"`
 	Steps     int            `json:"steps"`
 	Failure   map[string]any `json:"failure,omitempty"`
+	Streams   []StreamEvent  `json:"streams,omitempty"`
 }
 
 // StopError is explicit application termination requested by `stop`. It is

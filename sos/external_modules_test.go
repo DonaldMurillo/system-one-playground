@@ -113,6 +113,35 @@ working_directory_parameter="root"
 	}
 }
 
+func TestExternalDefinitionAcceptsReadableParameterCommandBindings(t *testing.T) {
+	definition, err := decodeExternalModuleDefinition("module.sos.toml", []byte(`schema=1
+[module]
+path="test/bindings"
+version="1.0.0"
+[runtime]
+kind="command"
+[capabilities]
+process=true
+[[action]]
+name="run"
+[[action.parameter]]
+name="root"
+type="text"
+[action.command]
+program="tool"
+arguments=["${parameter.root}"]
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := definition.ValidateInterface(); err != nil {
+		t.Fatal(err)
+	}
+	if got := commandParameterName("${parameter.root}"); got != "root" {
+		t.Fatalf("parameter name=%q", got)
+	}
+}
+
 func TestExternalDefinitionRejectsStreamStdinModeWithoutParameter(t *testing.T) {
 	_, err := decodeExternalModuleDefinition("module.sos.toml", []byte(`schema=1
 [module]
@@ -338,6 +367,22 @@ type="stream of integer"
 	}
 }
 
+func TestStdioStreamProtocolRejectsBufferedItemsBeyondCredit(t *testing.T) {
+	responses := strings.Join([]string{
+		`{"jsonrpc":"2.0","id":1,"result":{"streamId":"s1","itemType":"integer"}}`,
+		`{"jsonrpc":"2.0","method":"stream.item","params":{"streamId":"s1","sequence":0,"value":1}}`,
+		`{"jsonrpc":"2.0","method":"stream.item","params":{"streamId":"s1","sequence":1,"value":2}}`,
+	}, "\n") + "\n"
+	client := protocolClient(responses)
+	stream, err := client.openStream(context.Background(), "follow", nil, "integer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := stream.next(context.Background()); err == nil || !strings.Contains(err.Error(), "exceeded its stream credit") || !client.poisoned.Load() {
+		t.Fatalf("over-credit error=%v poisoned=%v", err, client.poisoned.Load())
+	}
+}
+
 func TestStdioStreamProtocolConvertsDeclaredTerminalFailure(t *testing.T) {
 	definition, err := decodeExternalModuleDefinition("module.sos.toml", []byte(`schema=1
 [module]
@@ -453,6 +498,54 @@ func TestStdioStreamProtocolCancelWaitsForTerminalAcknowledgement(t *testing.T) 
 	}
 }
 
+func TestStdioStreamToolingStopInterruptsBlockedReadWithoutPoisoningSession(t *testing.T) {
+	reader, writer := io.Pipe()
+	writes := &writeBuffer{}
+	client := &stdioClient{in: writes, out: bufio.NewReader(reader)}
+	client.mu.Lock()
+	stream := &stdioProtocolStream{client: client, id: "s1", action: "follow", itemType: TypeRef{Name: "text"}, stopped: make(chan struct{}), shutdown: time.Second}
+	result := make(chan error, 1)
+	go func() {
+		_, more, err := stream.next(context.Background())
+		if more {
+			err = fmt.Errorf("unexpected item")
+		}
+		result <- err
+	}()
+	time.Sleep(10 * time.Millisecond)
+	if err := stream.requestStreamStop(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(writes.String(), `"method":"stream.cancel"`) {
+		t.Fatalf("writes=%q", writes.String())
+	}
+	if _, err := io.WriteString(writer, `{"jsonrpc":"2.0","method":"stream.end","params":{"streamId":"s1","lastSequence":-1}}`+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("tooling stop did not unblock the stream read")
+	}
+	if client.poisoned.Load() {
+		t.Fatal("graceful tooling stop poisoned the reusable plugin session")
+	}
+}
+
+func TestStdioStreamToolingStopBoundsABlockedCancelWrite(t *testing.T) {
+	writer := &blockingWriteCloser{closed: make(chan struct{})}
+	client := &stdioClient{in: writer, out: bufio.NewReader(strings.NewReader(""))}
+	stream := &stdioProtocolStream{client: client, id: "s1", action: "follow", itemType: TypeRef{Name: "text"}, stopped: make(chan struct{}), shutdown: 20 * time.Millisecond}
+	started := time.Now()
+	err := stream.requestStreamStop()
+	if !errors.Is(err, context.DeadlineExceeded) || time.Since(started) > time.Second {
+		t.Fatalf("blocked cancel error=%v duration=%v", err, time.Since(started))
+	}
+}
+
 func TestStdioStreamProtocolCancelDiscardsAlreadyCreditedItem(t *testing.T) {
 	definition := &ExternalModuleDefinition{}
 	definition.Module.Path = "test/streams"
@@ -514,11 +607,8 @@ func TestStdioStreamTerminalPoisonsTrailingProtocolFrames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, more, err := stream.next(context.Background()); err != nil || more {
-		t.Fatalf("terminal = more %v err %v", more, err)
-	}
-	if err := client.call(context.Background(), "invoke", nil, nil); err == nil || !strings.Contains(err.Error(), "response id mismatch") || !client.poisoned.Load() {
-		t.Fatalf("trailing frame was allowed into a later call: %v", err)
+	if _, more, err := stream.next(context.Background()); err == nil || more || !strings.Contains(err.Error(), "after stream s1 ended") || !client.poisoned.Load() {
+		t.Fatalf("terminal = more %v err %v poisoned=%v", more, err, client.poisoned.Load())
 	}
 }
 
@@ -1399,7 +1489,7 @@ stdout="json-lines"
 		t.Fatal(err)
 	}
 	runner := &runtime{ctx: context.Background(), env: map[string]any{"bad": map[string]any{"name": "ok", "extra": true}}, imports: map[string]*Module{"ext": module}}
-	if _, err := runner.openExternalStream("ext.follow", []string{"bad"}); err == nil || !strings.Contains(err.Error(), "unavailable") {
+	if _, err := runner.openExternalStream("ext.follow", "events", 1, []string{"bad"}); err == nil || !strings.Contains(err.Error(), "unavailable") {
 		t.Fatalf("target restriction was not enforced before launch: %v", err)
 	}
 	definition.Actions[0].Targets = nil
@@ -1408,7 +1498,7 @@ stdout="json-lines"
 		t.Fatal(err)
 	}
 	runner.imports["ext"] = module
-	if _, err := runner.openExternalStream("ext.follow", []string{"bad"}); err == nil || !strings.Contains(err.Error(), "argument filter must be Filter") {
+	if _, err := runner.openExternalStream("ext.follow", "events", 1, []string{"bad"}); err == nil || !strings.Contains(err.Error(), "argument filter must be Filter") {
 		t.Fatalf("record argument was not safely validated before launch: %v", err)
 	}
 }

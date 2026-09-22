@@ -121,7 +121,9 @@ test('maps SysOneScript operators to keyword styling across themes', () => {
 
 test('keeps project actions in the panel instead of duplicating title buttons', () => {
   const manifest = require('../package.json')
-  assert.deepEqual(manifest.contributes.menus['view/title'].map(item => item.command), ['sysonescript.refresh'])
+  const projectTitles = manifest.contributes.menus['view/title'].filter(item => item.when.includes('sysonescript.project')).map(item => item.command)
+  assert.deepEqual(projectTitles, ['sysonescript.refresh'])
+  assert.deepEqual(manifest.contributes.menus['view/title'].filter(item => item.when.includes('sysonescript.streams')).map(item => item.command), ['sysonescript.refreshStreams', 'sysonescript.showStreamsOutput'])
 })
 
 test('contributes an additive language icon for active icon themes', () => {

@@ -33,12 +33,16 @@
   "activationEvents": [
     "onLanguage:sos",
     "onView:sysonescript.project",
+    "onView:sysonescript.streams",
     "onCommand:sysonescript.selectEntrypoint",
     "onCommand:sysonescript.runProject",
     "onCommand:sysonescript.runFile",
     "onCommand:sysonescript.debugFile",
     "onCommand:sysonescript.debugProject",
     "onCommand:sysonescript.showRunOutput",
+    "onCommand:sysonescript.stopStream",
+    "onCommand:sysonescript.refreshStreams",
+    "onCommand:sysonescript.showStreamsOutput",
     "onCommand:sysonescript.checkProject",
     "onCommand:sysonescript.buildProject",
     "onCommand:sysonescript.explainFile",
@@ -65,6 +69,8 @@
     "lsp-client.js",
     "project.js",
     "semantic.js",
+    "streams.js",
+    "streams-server.js",
     "bin/**",
     "icon.png",
     "icons/**",
@@ -77,7 +83,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "check": "node --check extension.js && node --check lsp-client.js && node --check project.js && node --check semantic.js && node --check test/*.js",
+    "check": "node --check extension.js && node --check lsp-client.js && node --check project.js && node --check semantic.js && node --check streams.js && node --check streams-server.js && node --check test/*.js",
     "test": "node --test test/*.test.js",
     "prepackage": "node test/build-runtime.js",
     "package": "pnpm exec vsce package --no-dependencies --allow-unused-files-pattern",
@@ -177,6 +183,11 @@
           "id": "sysonescript.project",
           "name": "Project",
           "contextualTitle": "SysOneScript Project"
+        },
+        {
+          "id": "sysonescript.streams",
+          "name": "Streams",
+          "contextualTitle": "SysOneScript Streams"
         }
       ]
     },
@@ -280,6 +291,21 @@
       {
         "command": "sysonescript.showRunOutput",
         "title": "SysOneScript: Show Run Output",
+        "category": "SysOneScript"
+      },
+      {
+        "command": "sysonescript.stopStream",
+        "title": "SysOneScript: Stop Stream",
+        "category": "SysOneScript"
+      },
+      {
+        "command": "sysonescript.refreshStreams",
+        "title": "SysOneScript: Refresh Streams",
+        "category": "SysOneScript"
+      },
+      {
+        "command": "sysonescript.showStreamsOutput",
+        "title": "SysOneScript: Show Stream Lifecycle",
         "category": "SysOneScript"
       },
       {
@@ -420,11 +446,32 @@
           "command": "sysonescript.refresh",
           "when": "view == sysonescript.project",
           "group": "navigation@1"
+        },
+        {
+          "command": "sysonescript.refreshStreams",
+          "when": "view == sysonescript.streams",
+          "group": "navigation@1"
+        },
+        {
+          "command": "sysonescript.showStreamsOutput",
+          "when": "view == sysonescript.streams",
+          "group": "navigation@2"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "sysonescript.stopStream",
+          "when": "view == sysonescript.streams && viewItem == stream",
+          "group": "inline"
         }
       ],
       "commandPalette": [
         {
           "command": "sysonescript.canonicalizeLine",
+          "when": "false"
+        },
+        {
+          "command": "sysonescript.stopStream",
           "when": "false"
         },
         {

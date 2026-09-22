@@ -675,14 +675,18 @@ func LoadProgramFromGraph(filename string, source string, g *ModuleGraph) (*Prog
 	}
 	libBindings = withoutSourceOverrides(bindings, libBindings)
 	vocab := buildFileVocab(append(bindings, libBindings...), entryActions(p), func(line int, format string, args ...any) { gr.diag(line, format, args...) })
+	aliases := map[string]*Module{}
+	for alias, mod := range vocab.aliases {
+		aliases[alias] = mod
+	}
+	// Canonical English time statements lower to std/time calls exactly as
+	// ParseWithVocabulary does for interpreted runs, so standalone artifacts
+	// and the interpreter execute one shared program shape.
+	lowerTimeStatements(p.Statements, stdTimeAlias(&ModuleTable{Aliases: aliases}))
 	fixed := map[int]string{}
 	reclassifySent(p.Statements, vocab, fixed)
 	if !ok || len(gr.diags) > 0 {
 		return p, append(ds, gr.diags...)
-	}
-	aliases := map[string]*Module{}
-	for alias, mod := range vocab.aliases {
-		aliases[alias] = mod
 	}
 	p.Modules = &ModuleTable{Aliases: aliases, ByKey: gr.built, Order: gr.order, entryRefs: refs, vocab: vocab, libraries: libMeta(libBindings)}
 	if deferred == 0 {

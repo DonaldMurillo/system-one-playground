@@ -10,7 +10,52 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/DonaldMurillo/system-one-playground/sos"
 )
+
+func TestStreamEndpointsTrackRunGenerationAndRejectStaleControl(t *testing.T) {
+	s, ts := newTestServer(t)
+	res, first := post(t, ts, s.Token(), "/api/run", `{"source":"show \"ok\""}`)
+	if res.StatusCode != http.StatusOK || first["runId"].(float64) != 1 {
+		t.Fatalf("first run: %d %#v", res.StatusCode, first)
+	}
+	res, poll, _ := get(t, ts, s.Token(), "/api/streams?since=0")
+	if res.StatusCode != http.StatusOK || poll["runId"].(float64) != 1 || poll["running"] != false {
+		t.Fatalf("poll: %d %#v", res.StatusCode, poll)
+	}
+	_, second := post(t, ts, s.Token(), "/api/run", `{"source":"show \"again\""}`)
+	if second["runId"].(float64) != 2 {
+		t.Fatalf("second run=%#v", second)
+	}
+
+	s.mu.Lock()
+	s.cancel = func() {}
+	s.streams = sos.NewStreamController()
+	s.mu.Unlock()
+	t.Cleanup(func() { s.mu.Lock(); s.cancel = nil; s.mu.Unlock() })
+	res, stale := post(t, ts, s.Token(), "/api/streams/stop", `{"id":"stream-1","runId":1}`)
+	if res.StatusCode != http.StatusConflict || errKind(t, stale) != "stale" {
+		t.Fatalf("stale stop: %d %#v", res.StatusCode, stale)
+	}
+	res, missing := post(t, ts, s.Token(), "/api/streams/stop", `{"id":"stream-1","runId":2}`)
+	if res.StatusCode != http.StatusNotFound || errKind(t, missing) != "stream" {
+		t.Fatalf("missing stop: %d %#v", res.StatusCode, missing)
+	}
+}
+
+func TestStreamEndpointReportsTruncatedLifecycleHistory(t *testing.T) {
+	s, ts := newTestServer(t)
+	s.mu.Lock()
+	s.runSeq = 3
+	s.streamLog = []sos.StreamEvent{{ID: "stream-1", Event: "opened"}}
+	s.streamEventsTruncated = true
+	s.mu.Unlock()
+	res, body, _ := get(t, ts, s.Token(), "/api/streams?since=0")
+	if res.StatusCode != http.StatusOK || body["eventsTruncated"] != true || body["next"].(float64) != 1 {
+		t.Fatalf("poll: %d %#v", res.StatusCode, body)
+	}
+}
 
 func TestEmbeddedStudioBundleIncludesStreamLanguageSupport(t *testing.T) {
 	var javascript strings.Builder
@@ -29,7 +74,7 @@ func TestEmbeddedStudioBundleIncludesStreamLanguageSupport(t *testing.T) {
 		t.Fatal(err)
 	}
 	bundle := javascript.String()
-	for _, phrase := range []string{`"stream","streaming","close","collect"`, `"using","reading"`, `"off","at","most","running"`} {
+	for _, phrase := range []string{`"stream","streaming","send","close","collect"`, `"using","reading"`, `"off","at","most","running"`} {
 		if !strings.Contains(bundle, phrase) {
 			t.Errorf("embedded Studio bundle lacks stream lexer word %q; rebuild studio/webdist", phrase)
 		}
@@ -454,5 +499,33 @@ func TestNewNormalizesNestedFolderToProjectRoot(t *testing.T) {
 	}
 	if server.Dir() != root {
 		t.Fatalf("server root = %q, want %q", server.Dir(), root)
+	}
+}
+
+func TestCapabilitiesEndpointReportsTimingDiagnostics(t *testing.T) {
+	s, ts := newTestServer(t)
+	defer ts.Close()
+	resp, body, _ := get(t, ts, s.Token(), "/api/capabilities")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d body=%v", resp.StatusCode, body)
+	}
+	if body["os"] == "" || body["arch"] == "" {
+		t.Fatalf("platform missing: %#v", body)
+	}
+	clocks, _ := body["clocks"].([]any)
+	kinds := map[string]bool{}
+	for _, raw := range clocks {
+		clock, _ := raw.(map[string]any)
+		kinds[clock["kind"].(string)] = true
+	}
+	if !kinds["host"] || !kinds["virtual"] {
+		t.Fatalf("host and virtual clock kinds required: %#v", body["clocks"])
+	}
+	zones, _ := body["timeZoneDatabase"].(map[string]any)
+	if zones["available"] != true {
+		t.Fatalf("sample zone must resolve on the test host: %#v", zones)
+	}
+	if body["calendarSchedules"] != true {
+		t.Fatalf("calendar schedules must be supported when zones resolve: %#v", body)
 	}
 }

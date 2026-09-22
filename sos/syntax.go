@@ -3,9 +3,12 @@ package sos
 import (
 	"errors"
 	"fmt"
-	"github.com/DonaldMurillo/system-one-playground/sosconfig"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
+
+	"github.com/DonaldMurillo/system-one-playground/sosconfig"
 )
 
 var forms = []struct{ kind, pattern string }{
@@ -47,6 +50,7 @@ var forms = []struct{ kind, pattern string }{
 	{"score", `^score (.+) by (.+) called ([A-Za-z_]\w*):$`},
 	{"append", `^append (.+) to (\w+)$`},
 	{"save", `^save (.+) as (json|text) (?:in (.+)|under (.+) named (.+))$`},
+	{"send", `^send (.+)$`},
 	{"show", `^(?:show|print|emit) (.+)$`},
 	{"rethrow", `^rethrow$`},
 	{"passFailure", `^pass failure on$`},
@@ -61,8 +65,32 @@ var forms = []struct{ kind, pattern string }{
 	{"handler", `^on (failure|success|uncertain|existing)(?::| (.+))$`},
 	{"ask", `^ask (.+)$`},
 	{"using", `^using (.+)$`},
+	{"formatTime", `^format (.+) as (?:an? )?(RFC3339 with nanoseconds|RFC3339 nanoseconds|RFC3339Nano|RFC3339|ISO local date and time|ISO date and time|ISO date|HTTP date)(?: in time zone ("[^"\n]*"))? called ([A-Za-z_]\w*)$`},
 	{"model", `^model (.+)$`},
 	{"accept", `^accept probability at least (.+)$`},
+	{"wait", `^wait (for|until) (.+)$`},
+	{"readTimestamp", `^read timestamp from (.+) as (RFC3339 with nanoseconds|RFC3339 nanoseconds|RFC3339Nano|RFC3339|ISO local date and time|ISO date and time|ISO date|HTTP date)(?: in time zone ("[^"\n]*"))? called ([A-Za-z_]\w*)$`},
+	{"findTime", `^find the time (.+) calendar (days?|weeks?|months?|years?) after (.+) in time zone ("[^"\n]*") called ([A-Za-z_]\w*)$`},
+	{"timerOneShot", `^stream one tick after (.+) called ([A-Za-z_]\w*)$`},
+	{"timerEvery", `^stream a tick (now and )?every (.+) called ([A-Za-z_]\w*)$`},
+	{"timerPolicy", `^(combining missed ticks|skipping missed ticks|catching up at most (\d+) ticks)$`},
+	{"scheduleStream", `^stream scheduled times$`},
+	{"scheduleRuleHour", `^every hour$`},
+	{"scheduleRuleAt", `^every (weekday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday) at (\d{1,2}):(\d{2})$`},
+	{"scheduleRuleMonth", `^on the (first|last) day of each month at (\d{1,2}):(\d{2})$`},
+	{"scheduleZone", `^in time zone (.+)$`},
+	{"scheduleRemember", `^remembering progress as ("[^"\n]*")$`},
+	{"scheduleCatchup", `^(start with the next scheduled time|run once immediately if a scheduled time was missed|catch up at most (\d+) missed scheduled times|catching up at most (\d+) ticks)$`},
+	{"scheduleNotExist", `^when a scheduled local time does not exist$`},
+	{"scheduleOccursTwice", `^when a scheduled local time occurs twice$`},
+	{"scheduleDSTChoice", `^(skip it|use the next valid time|run only at the first occurrence|run only at the second occurrence|run at both occurrences)$`},
+	{"scheduleCalled", `^called ([A-Za-z_]\w*)$`},
+	{"findCalendar", `^find the time (.+) calendar (days?|weeks?|months?|years?) after (.+)$`},
+	{"dayNotExist", `^when the day does not exist$`},
+	{"dayPolicy", `^(use the last day of the month|fail)$`},
+	{"deadline", `^allow at most (.+) for:$`},
+	{"stopStream", `^stop stream ([A-Za-z_]\w*)$`},
+	{"advanceTime", `^advance test time by (.+)$`},
 }
 var patterns = map[string]*regexp.Regexp{}
 
@@ -91,7 +119,7 @@ func match(kind, text string) []string {
 }
 
 func Keywords() []string {
-	return []string{"stream", "streaming", "from", "close stream", "stop reading", "collect at most", "finish", "fail", "recover", "pass failure on", "capture", "rethrow", "map", "evaluate", "describe", "choices", "read", "keep", "sort", "group", "save", "show", "make", "assign", "remember", "find", "for each", "when", "otherwise", "classify", "jev", "called", "where", "by", "as", "optional", "into", "on failure", "may fail with", "returning", "to", "call", "return", "while", "repeat", "judge", "score", "create folder", "take", "append", "require", "expect", "define", "failure", "command", "option", "argument", "switch", "using", "ask", "accept", "model", "on uncertain", "on existing", "package", "import", "export"}
+	return []string{"stream", "streaming", "from", "send", "close stream", "stop reading", "collect at most", "finish", "fail", "recover", "pass failure on", "capture", "rethrow", "map", "evaluate", "describe", "choices", "read", "keep", "sort", "group", "save", "show", "make", "assign", "remember", "find", "for each", "when", "otherwise", "classify", "jev", "called", "where", "by", "as", "optional", "into", "on failure", "may fail with", "returning", "to", "call", "return", "while", "repeat", "judge", "score", "create folder", "take", "append", "require", "expect", "define", "failure", "command", "option", "argument", "switch", "using", "ask", "accept", "model", "on uncertain", "on existing", "package", "import", "export", "wait", "format", "in time zone", "allow at most", "stop stream", "advance test time", "stream one tick", "stream a tick", "stream scheduled times"}
 }
 func classifyLine(text string) string {
 	for _, f := range forms {
@@ -100,6 +128,127 @@ func classifyLine(text string) string {
 		}
 	}
 	return ""
+}
+
+// timeFormatNames maps source-level named formats to the canonical std/time
+// format identifiers. Parsing and formatting are strict: unknown names fail.
+var timeFormatNames = map[string]string{
+	"RFC3339":                  FormatRFC3339,
+	"RFC3339Nano":              FormatRFC3339Nano,
+	"RFC3339 nanoseconds":      FormatRFC3339Nano,
+	"RFC3339 with nanoseconds": FormatRFC3339Nano,
+	"ISO date":                 FormatISODate,
+	"ISO date and time":        FormatISOLocal,
+	"ISO local date and time":  FormatISOLocal,
+	"HTTP date":                FormatHTTPDate,
+}
+
+// timeStatementAliases are canonical English time statements lowered to
+// std/time calls so checking, canonicalization, and execution share one
+// implementation with the technical fallbacks.
+func stdTimeAlias(modules *ModuleTable) string {
+	if modules != nil {
+		aliases := make([]string, 0, len(modules.Aliases))
+		for alias, mod := range modules.Aliases {
+			if mod != nil && mod.Key == "std/time" {
+				aliases = append(aliases, alias)
+			}
+		}
+		sort.Strings(aliases)
+		if len(aliases) > 0 {
+			return aliases[0]
+		}
+	}
+	return "time"
+}
+
+// timeDurationArgument quotes a bare readable/compact duration literal so the
+// call evaluates text; composed expressions pass through unchanged.
+func timeDurationArgument(arg string) string {
+	arg = strings.TrimSpace(arg)
+	if arg == "" {
+		return arg
+	}
+	if _, err := ParseDurationValue(arg); err == nil {
+		return `"` + arg + `"`
+	}
+	return arg
+}
+
+// timeCountArgument renders a count word ("one", "two") or number as a quoted
+// integer literal for the add_calendar call.
+func timeCountArgument(word string) string {
+	word = strings.TrimSpace(strings.ToLower(word))
+	if n, err := strconv.Atoi(word); err == nil {
+		return strconv.Itoa(n)
+	}
+	names := []string{"zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"}
+	for i, name := range names {
+		if name == word {
+			return strconv.Itoa(i)
+		}
+	}
+	return word
+}
+
+var timeRememberPhrases = []struct {
+	re      *regexp.Regexp
+	action  string
+	zoneArg bool
+}{
+	{regexp.MustCompile(`^(?:the current time|now)$`), "now", false},
+	{regexp.MustCompile(`^today's date in time zone ("[^"\n]*")$`), "today", true},
+}
+
+func lowerTimeStatements(stmts []*Statement, alias string) {
+	for _, s := range stmts {
+		lowerTimeStatements(s.Body, alias)
+		switch s.Kind {
+		case "wait":
+			m := match("wait", s.Text)
+			arg := m[2]
+			action := "sleep"
+			if m[1] == "until" {
+				action = "wait_until"
+			} else {
+				arg = timeDurationArgument(arg)
+			}
+			s.Kind, s.Text = "call", "call "+alias+"."+action+" with "+arg
+		case "formatTime", "readTimestamp":
+			m := match(s.Kind, s.Text)
+			format := timeFormatNames[m[2]]
+			zone := m[3]
+			if zone == "" {
+				zone = `""`
+			}
+			action := "format"
+			if s.Kind == "readTimestamp" {
+				action = "parse"
+			}
+			s.Kind, s.Text = "call", "call "+alias+"."+action+" with "+m[1]+`, "`+format+`", `+zone+" called "+m[4]
+		case "findTime":
+			m := match("findTime", s.Text)
+			args := m[3] + ", " + timeCountArgument(m[1]) + `, "` + strings.TrimSuffix(m[2], "s") + `", ` + m[4] + `, ""`
+			s.Kind, s.Text = "call", "call "+alias+".add_calendar with "+args+" called "+m[5]
+		case "remember":
+			m := match("remember", s.Text)
+			if len(m) < 3 {
+				continue
+			}
+			for _, phrase := range timeRememberPhrases {
+				pm := phrase.re.FindStringSubmatch(strings.TrimSpace(m[1]))
+				if pm == nil {
+					continue
+				}
+				call := "call " + alias + "." + phrase.action
+				if len(pm) > 1 {
+					call += " with " + pm[1]
+				}
+				s.Kind, s.Text = "call", call+" called "+m[2]
+				break
+			}
+		}
+	}
 }
 
 // joinWrappedActionHeaders normalizes formatter-produced action signatures
@@ -257,7 +406,7 @@ func Parse(source string) (*Program, []Diagnostic) {
 	var validate func([]*Statement)
 	validate = func(sts []*Statement) {
 		for _, s := range sts {
-			block := semanticCriterionDeclRe.MatchString(s.Text) || s.Kind == "map" || s.Kind == "for" || s.Kind == "streamFor" || s.Kind == "while" || s.Kind == "repeat" || s.Kind == "when" || s.Kind == "otherwise" || s.Kind == "to" || s.Kind == "command" || s.Kind == "schema" || s.Kind == "define" || s.Kind == "failure" || (s.Kind == "fail" && strings.HasSuffix(s.Text, ":")) || s.Kind == "classify" || s.Kind == "score" || strings.HasSuffix(s.Text, "with:") || strings.HasSuffix(s.Text, "jev:") || s.Kind == "handler" && strings.HasSuffix(s.Text, ":")
+			block := semanticCriterionDeclRe.MatchString(s.Text) || s.Kind == "map" || s.Kind == "for" || s.Kind == "streamFor" || s.Kind == "while" || s.Kind == "repeat" || s.Kind == "when" || s.Kind == "otherwise" || s.Kind == "to" || s.Kind == "command" || s.Kind == "schema" || s.Kind == "define" || s.Kind == "failure" || (s.Kind == "fail" && strings.HasSuffix(s.Text, ":")) || s.Kind == "classify" || s.Kind == "score" || strings.HasSuffix(s.Text, "with:") || strings.HasSuffix(s.Text, "jev:") || s.Kind == "handler" && strings.HasSuffix(s.Text, ":") || s.Kind == "deadline" || s.Kind == "scheduleStream" || s.Kind == "timerEvery" || s.Kind == "findCalendar" || s.Kind == "scheduleNotExist" || s.Kind == "scheduleOccursTwice" || s.Kind == "dayNotExist"
 			if block && len(s.Body) == 0 && s.Kind != "failure" {
 				ds = append(ds, Diagnostic{s.Line, 1, "expected an indented body"})
 			}

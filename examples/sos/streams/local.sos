@@ -1,0 +1,22 @@
+# A streaming action produces values over time without an external plugin.
+define DeploymentUpdate:
+  stage as text
+  message as text
+
+to watch_deployment streaming DeploymentUpdate:
+  send {"stage": "queued", "message": "release accepted"}
+  send {"stage": "building", "message": "container image built"}
+  send {"stage": "testing", "message": "smoke tests passed"}
+  send {"stage": "deployed", "message": "traffic is live"}
+  # This item is never observed because the consumer stops reading.
+  send {"stage": "cleanup", "message": "old containers removed"}
+  finish
+
+show "Watching a live deployment..."
+stream watch_deployment called updates
+for each update from updates:
+  show "[{stage of update}] {message of update}"
+  when stage of update is "deployed":
+    show "Deployment succeeded; canceling the remaining feed"
+    stop reading
+show "Caller continued after the stream stopped"

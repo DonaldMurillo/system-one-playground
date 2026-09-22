@@ -2,8 +2,10 @@ package sos
 
 import (
 	"fmt"
+	"math"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -145,6 +147,11 @@ func analyze(p *Program) []Diagnostic {
 			switch base {
 			case "true", "false", "on", "off", "null", "now", "empty", "list", "record", "not", "count", "length", "of", "words", "first", "last", "items", "and", "or", "is", "contains", "plus", "minus", "times":
 				continue
+			}
+			if i > 0 && isDurationUnit(base) {
+				if _, err := strconv.ParseFloat(tokens[i-1].text, 64); err == nil {
+					continue
+				}
 			}
 			add(s, fmt.Sprintf("unknown name %q", base))
 		}
@@ -377,6 +384,23 @@ func analyze(p *Program) []Diagnostic {
 				continue
 			case "stopReading":
 				// Stream-loop placement is validated by the ownership pass.
+			case "deadline":
+				checkTimeStatement(s, checkExpr, add)
+				walk(s.Body)
+			case "timerOneShot", "timerEvery", "scheduleStream", "findCalendar", "advanceTime", "stopStream":
+				if binding := checkTimeStatement(s, checkExpr, add); binding != "" {
+					names[binding] = true
+					delete(types, binding)
+				}
+				continue
+			case "timerPolicy":
+				add(s, "tick policies are only valid inside a repeating timer declaration")
+			case "scheduleRuleHour", "scheduleRuleAt", "scheduleRuleMonth", "scheduleZone", "scheduleRemember", "scheduleCatchup", "scheduleCalled":
+				add(s, "schedule details are only valid inside a scheduled times declaration")
+			case "scheduleNotExist", "scheduleOccursTwice", "scheduleDSTChoice":
+				add(s, "daylight-saving policies are only valid inside a time declaration")
+			case "dayNotExist", "dayPolicy":
+				add(s, "invalid-day policies are only valid inside a calendar arithmetic declaration")
 			case "remember":
 				checkExpr(s, m[1], false)
 				names[m[2]] = true
@@ -686,7 +710,28 @@ func analyze(p *Program) []Diagnostic {
 	walk(p.Statements)
 	ds = append(ds, checkActionContracts(p, actions, visibleDefs)...)
 	ds = append(ds, checkStreamOwnership(p, actions)...)
+	ds = append(ds, checkStreamSendPlacement(p.Statements)...)
 	return ds
+}
+
+func checkStreamSendPlacement(statements []*Statement) []Diagnostic {
+	var diagnostics []Diagnostic
+	var walk func([]*Statement, bool)
+	walk = func(items []*Statement, streaming bool) {
+		for _, statement := range items {
+			if statement.Kind == "send" && !streaming {
+				diagnostics = append(diagnostics, Diagnostic{statement.Line, 1, "send is only valid inside a streaming action"})
+			}
+			childStreaming := streaming
+			if statement.Kind == "to" {
+				decl, err := parseActionDecl(statement.Text)
+				childStreaming = err == nil && decl.Streaming
+			}
+			walk(statement.Body, childStreaming)
+		}
+	}
+	walk(statements, false)
+	return diagnostics
 }
 
 type streamOwnershipState struct {
@@ -705,7 +750,7 @@ func streamTarget(p *Program, actions map[string]*Statement, name string, explic
 		}
 		if fn := explicit.Actions[action]; fn != nil {
 			decl, err := parseActionDecl(fn.Text)
-			return err == nil, err == nil && decl.Streaming, false
+			return err == nil, err == nil && decl.Streaming, err == nil && decl.Streaming
 		}
 		return false, false, false
 	}
@@ -715,7 +760,7 @@ func streamTarget(p *Program, actions map[string]*Statement, name string, explic
 			return false, false, false
 		}
 		decl, err := parseActionDecl(fn.Text)
-		return err == nil, err == nil && decl.Streaming, false
+		return err == nil, err == nil && decl.Streaming, err == nil && decl.Streaming
 	}
 	alias, action, _ := strings.Cut(name, ".")
 	if mod := moduleAlias(p, alias); mod != nil {
@@ -756,6 +801,9 @@ func checkStreamOwnership(p *Program, actions map[string]*Statement) []Diagnosti
 		return false, false
 	}
 	var walk func([]*Statement, map[string]*streamOwnershipState, bool, bool)
+	// loopStream names the stream whose for-each loop is currently being
+	// walked so a handler may stop that stream from inside the loop.
+	loopStream := ""
 	walk = func(sts []*Statement, owned map[string]*streamOwnershipState, inStreamLoop, closeScope bool) {
 		initial := map[string]bool{}
 		for name := range owned {
@@ -789,6 +837,38 @@ func checkStreamOwnership(p *Program, actions map[string]*Statement) []Diagnosti
 					continue
 				}
 				owned[m[3]] = &streamOwnershipState{line: s.Line}
+			case "timerOneShot", "timerEvery":
+				name := m[2]
+				if s.Kind == "timerEvery" {
+					name = m[3]
+				}
+				if existing := owned[name]; existing != nil && !existing.consumed {
+					ds = append(ds, Diagnostic{s.Line, 1, "stream " + name + " is already active; consume or close it before reopening"})
+					continue
+				}
+				owned[name] = &streamOwnershipState{line: s.Line}
+			case "scheduleStream":
+				called := ""
+				for _, child := range s.Body {
+					if child.Kind == "scheduleCalled" {
+						called = match("scheduleCalled", child.Text)[1]
+					}
+				}
+				if called == "" {
+					continue
+				}
+				if existing := owned[called]; existing != nil && !existing.consumed {
+					ds = append(ds, Diagnostic{s.Line, 1, "stream " + called + " is already active; consume or close it before reopening"})
+					continue
+				}
+				owned[called] = &streamOwnershipState{line: s.Line}
+			case "stopStream":
+				state := owned[m[1]]
+				if state == nil {
+					ds = append(ds, Diagnostic{s.Line, 1, m[1] + " is not an owned stream"})
+				} else if state.consumed && loopStream != m[1] {
+					ds = append(ds, Diagnostic{s.Line, 1, m[1] + " was already consumed"})
+				}
 			case "streamFor":
 				name := strings.TrimSpace(m[2])
 				state := owned[name]
@@ -799,7 +879,10 @@ func checkStreamOwnership(p *Program, actions map[string]*Statement) []Diagnosti
 				} else {
 					state.consumed = true
 				}
+				previous := loopStream
+				loopStream = name
 				walk(s.Body, owned, true, true)
+				loopStream = previous
 			case "closeStream":
 				state := owned[m[1]]
 				if state == nil {
@@ -810,6 +893,9 @@ func checkStreamOwnership(p *Program, actions map[string]*Statement) []Diagnosti
 					state.consumed = true
 				}
 			case "collectStream":
+				if limit, err := strconv.ParseFloat(strings.TrimSpace(m[1]), 64); err == nil && (limit <= 0 || limit != math.Trunc(limit) || limit > maxStreamMaterializationItems) {
+					ds = append(ds, Diagnostic{s.Line, 1, fmt.Sprintf("collect at most requires a positive bounded integer (at most %d)", maxStreamMaterializationItems)})
+				}
 				name := strings.TrimSpace(m[2])
 				state := owned[name]
 				if state == nil {
@@ -829,6 +915,15 @@ func checkStreamOwnership(p *Program, actions map[string]*Statement) []Diagnosti
 					} else {
 						state.consumed = true
 					}
+				}
+			case "keep", "sort", "group", "map", "for", "require":
+				index := 1
+				if s.Kind == "map" || s.Kind == "for" || s.Kind == "require" {
+					index = 2
+				}
+				name := strings.TrimSpace(m[index])
+				if owned[name] != nil {
+					ds = append(ds, Diagnostic{s.Line, 1, s.Kind + " requires a collection, but " + name + " is a stream; collect it with an explicit limit first"})
 				}
 			case "make":
 				expr := strings.TrimSpace(strings.TrimPrefix(m[2], "as "))
@@ -1022,6 +1117,12 @@ func checkActionContracts(p *Program, actions map[string]*Statement, defs map[st
 			for _, s := range stmts {
 				m := match(s.Kind, s.Text)
 				switch s.Kind {
+				case "send":
+					if !decl.Streaming {
+						add(s.Line, "send is only valid inside a streaming action")
+					} else if message := staticArgumentProblem(m[1], decl.StreamItem, knownTypes, defs, name, "stream item"); message != "" {
+						add(s.Line, "%s", message)
+					}
 				case "finish":
 					if decl.HasResult && m[1] == "" {
 						add(s.Line, "%s must finish with %s", name, decl.Result.String())
@@ -1089,6 +1190,9 @@ func checkActionContracts(p *Program, actions map[string]*Statement, defs map[st
 						streamName = strings.TrimSpace(m[3])
 					}
 					possible := streamFailures[streamName]
+					if s.Kind == "collectStream" {
+						possible = append(append([]string(nil), possible...), "StreamLimitExceeded")
+					}
 					checkFailureHandlers(s, possible, add)
 					visit(s.Body, true)
 					for _, failure := range possible {
@@ -1454,10 +1558,23 @@ func visibleFailureDefinitionsWithProblems(p *Program) (map[string]*FailureDef, 
 }
 
 func visibleFailuresFrom(local map[string]*FailureDef, modules map[string]*Module, localOwner string) (map[string]*FailureDef, []string) {
-	result := map[string]*FailureDef{}
+	result := builtInFailures()
 	owners := map[string]string{}
+	for name := range result {
+		owners[name] = "the SysOneScript runtime"
+	}
+	for name, def := range reservedTimeFailures() {
+		if result[name] == nil {
+			result[name] = def
+			owners[name] = "the SysOneScript runtime"
+		}
+	}
 	var problems []string
 	for name, definition := range local {
+		if owner, exists := owners[name]; exists {
+			problems = append(problems, fmt.Sprintf("failure %s is reserved by %s and cannot be redefined in %s", name, owner, localOwner))
+			continue
+		}
 		result[name] = definition
 		owners[name] = localOwner
 	}
@@ -1561,12 +1678,23 @@ func sentTargetResolve(v *fileVocab, name string) (*Module, string) {
 	return mod, action
 }
 
-// moduleAlias resolves an import alias in the entry file's scope.
 func moduleAlias(p *Program, alias string) *Module {
-	if p == nil || p.Modules == nil {
+	if p == nil {
 		return nil
 	}
-	return p.Modules.Aliases[alias]
+	if p.Modules != nil {
+		if mod := p.Modules.Aliases[alias]; mod != nil {
+			return mod
+		}
+	}
+	// std/time is core language surface: it stays reachable under its default
+	// alias even without an explicit import, so canonical English time
+	// statements and technical fallbacks share one implementation.
+	if alias == "time" {
+		mod, _ := stdModule("std/time")
+		return mod
+	}
+	return nil
 }
 
 // checkSource parses and analyzes with an optional import graph so qualified
@@ -1767,4 +1895,170 @@ func actionBodyBinds(stmts []*Statement, wanted string) bool {
 		}
 	}
 	return false
+}
+
+// checkTimeStatement validates one canonical timing statement: duration
+// literals, timer and schedule structure, required named zones, DST and
+// catch-up policy placement, and test-harness virtual-time use. It returns
+// the stream or value name the statement binds, if any.
+func checkTimeStatement(s *Statement, checkExpr func(*Statement, string, bool), add func(*Statement, string)) string {
+	m := match(s.Kind, s.Text)
+	durationExpr := func(stmt *Statement, expr string) {
+		expr = strings.TrimSpace(expr)
+		if expr == "" {
+			add(stmt, "a duration is required")
+			return
+		}
+		// A bare literal must parse strictly; names and composed expressions
+		// are validated by the ordinary expression checker.
+		if expr[0] >= '0' && expr[0] <= '9' {
+			if _, err := ParseDurationValue(expr); err != nil {
+				add(stmt, "invalid duration "+expr)
+			}
+			return
+		}
+		checkExpr(stmt, expr, false)
+	}
+	switch s.Kind {
+	case "timerOneShot":
+		durationExpr(s, m[1])
+		if len(s.Body) != 0 {
+			add(s, "a one-shot timer declaration takes no nested lines")
+		}
+		return m[2]
+	case "timerEvery":
+		durationExpr(s, m[2])
+		policies := 0
+		for _, child := range s.Body {
+			if child.Kind != "timerPolicy" {
+				add(child, strings.Fields(child.Text)[0]+" is not valid in a repeating timer declaration")
+				continue
+			}
+			policies++
+		}
+		if policies > 1 {
+			add(s, "declare at most one missed-tick policy")
+		}
+		return m[3]
+	case "scheduleStream":
+		rules, zones, called := 0, 0, ""
+		remembering := false
+		missedStartup := 0
+		dstMissing, dstTwice := false, false
+		for _, child := range s.Body {
+			switch child.Kind {
+			case "scheduleRuleHour", "scheduleRuleAt", "scheduleRuleMonth":
+				rules++
+				if cm := match(child.Kind, child.Text); len(cm) >= 3 {
+					for _, part := range cm[2:] {
+						if part == "" {
+							continue
+						}
+						if n, err := strconv.Atoi(part); err != nil || n < 0 {
+							add(child, "invalid clock time "+child.Text)
+						}
+					}
+				}
+			case "scheduleZone":
+				zones++
+				checkExpr(child, strings.TrimSpace(match("scheduleZone", child.Text)[1]), false)
+			case "scheduleRemember":
+				remembering = true
+			case "scheduleCatchup":
+				if strings.Contains(child.Text, "scheduled time was missed") || strings.Contains(child.Text, "missed scheduled times") {
+					missedStartup++
+				}
+			case "scheduleNotExist":
+				dstMissing = true
+				if len(child.Body) == 0 {
+					add(child, "declare whether a nonexistent local time is skipped or moved to the next valid time")
+				}
+				for _, grandchild := range child.Body {
+					if grandchild.Kind != "scheduleDSTChoice" {
+						add(grandchild, strings.Fields(grandchild.Text)[0]+" is not valid here")
+					}
+				}
+			case "scheduleOccursTwice":
+				dstTwice = true
+				if len(child.Body) == 0 {
+					add(child, "declare which occurrence of a repeated local time runs")
+				}
+				for _, grandchild := range child.Body {
+					if grandchild.Kind != "scheduleDSTChoice" {
+						add(grandchild, strings.Fields(grandchild.Text)[0]+" is not valid here")
+					}
+				}
+			case "scheduleCalled":
+				if called != "" {
+					add(child, "declare the schedule name once")
+				}
+				called = match("scheduleCalled", child.Text)[1]
+			default:
+				add(child, strings.Fields(child.Text)[0]+" is not valid in a scheduled times declaration")
+			}
+		}
+		if rules != 1 {
+			add(s, "a calendar schedule declares exactly one timing rule")
+		}
+		if zones != 1 {
+			add(s, "a calendar schedule requires exactly one named time zone")
+		}
+		if called == "" {
+			add(s, "a calendar schedule requires a called name")
+		}
+		if missedStartup > 0 && !remembering {
+			add(s, "startup catch-up requires remembering progress as a checkpoint identity")
+		}
+		if missedStartup > 1 {
+			add(s, "declare at most one missed-startup policy")
+		}
+		_ = dstMissing
+		_ = dstTwice
+		return called
+	case "findCalendar":
+		checkExpr(s, m[3], false)
+		policies, zones, called := 0, 0, ""
+		for _, child := range s.Body {
+			switch child.Kind {
+			case "dayNotExist":
+				policies++
+				if len(child.Body) == 0 {
+					add(child, "declare an invalid-day policy")
+				}
+				for _, grandchild := range child.Body {
+					if grandchild.Kind != "dayPolicy" {
+						add(grandchild, strings.Fields(grandchild.Text)[0]+" is not valid here")
+					}
+				}
+			case "scheduleZone":
+				zones++
+			case "scheduleCalled":
+				called = match("scheduleCalled", child.Text)[1]
+			default:
+				add(child, strings.Fields(child.Text)[0]+" is not valid in a calendar arithmetic declaration")
+			}
+		}
+		if zones > 1 {
+			add(s, "declare at most one time zone")
+		}
+		if policies > 1 {
+			add(s, "declare at most one invalid-day policy")
+		}
+		if called == "" {
+			add(s, "calendar arithmetic requires a called name")
+		}
+		return called
+	case "deadline":
+		durationExpr(s, m[1])
+		return ""
+	case "advanceTime":
+		durationExpr(s, m[1])
+		if len(s.Body) != 0 {
+			add(s, "advance test time takes no nested lines")
+		}
+		return ""
+	case "stopStream":
+		return ""
+	}
+	return ""
 }

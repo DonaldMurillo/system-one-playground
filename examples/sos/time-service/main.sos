@@ -1,0 +1,19 @@
+# A scheduled CLI service: hourly health checks in a named zone with a scoped
+# deadline around each check. The service waits for each next hourly
+# occurrence and keeps running until stopped. For a fast CLI demo of the same
+# time constructs see examples/sos/time-basics. Durable schedule checkpoints
+# arrive with the future state library.
+import "std/time"
+
+command watch:
+  option zone as text default "UTC"
+
+  stream scheduled times
+    every hour
+    in time zone zone
+    called checks
+
+  for each tick from checks:
+    allow at most 30 seconds for:
+      remember the current time called observed
+      show "scheduled {tick.scheduled_for}; observed {observed}"

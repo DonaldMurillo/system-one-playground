@@ -22,4 +22,4 @@ make tickets [{"id": 1, "team": "payments", "message": "Checkout is down now. No
 filter tickets where team is "payments"
 # A declared adjective introduces runtime judgment without an explicit jev call.
 keep urgent tickets
-show tickets as table with id, team, message
+display tickets as table with id, team, message

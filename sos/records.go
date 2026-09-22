@@ -86,6 +86,18 @@ var failureCommonFields = map[string]bool{
 	"code": true, "frames": true,
 }
 
+func builtInFailures() map[string]*FailureDef {
+	return map[string]*FailureDef{
+		"StreamLimitExceeded": {
+			Name: "StreamLimitExceeded",
+			Fields: []RecordField{
+				{Name: "limit", Type: TypeRef{Name: "integer"}},
+				{Name: "received", Type: TypeRef{Name: "integer"}},
+			},
+		},
+	}
+}
+
 func parseFailureDefinition(statement *Statement) (*FailureDef, []Diagnostic) {
 	m := match("failure", statement.Text)
 	definition := &FailureDef{Name: m[1], Line: statement.Line}
@@ -186,8 +198,15 @@ func parseRecordDefinition(statement *Statement) (*RecordDef, []Diagnostic) {
 	return definition, diagnostics
 }
 
+var timeTickDefinition = &RecordDef{Name: "TimeTick", Fields: []RecordField{
+	{Name: "sequence", Type: TypeRef{Name: "integer"}},
+	{Name: "scheduled_for", Type: TypeRef{Name: "timestamp"}},
+	{Name: "observed_at", Type: TypeRef{Name: "timestamp"}},
+	{Name: "missed", Type: TypeRef{Name: "integer"}},
+}}
+
 func visibleDefinitions(local map[string]*RecordDef, modules map[string]*Module) (map[string]*RecordDef, []string) {
-	result := map[string]*RecordDef{}
+	result := map[string]*RecordDef{"TimeTick": timeTickDefinition}
 	localNames := map[string]bool{}
 	for name, definition := range local {
 		result[name] = definition

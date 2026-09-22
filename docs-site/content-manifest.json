@@ -122,5 +122,10 @@
     "source": "docs/for-agents.md",
     "slug": "for-agents",
     "title": "For agents"
+  },
+  {
+    "source": "docs/sysonescript-time.md",
+    "slug": "time",
+    "title": "Time, timers, and schedules"
   }
 ]

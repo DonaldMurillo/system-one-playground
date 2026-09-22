@@ -2,16 +2,173 @@ package sos
 
 import (
 	"context"
+	"errors"
 	"math"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
+
+type observableStreamSource struct {
+	nextStarted chan struct{}
+	release     chan struct{}
+	once        sync.Once
+}
+
+func (s *observableStreamSource) next(ctx context.Context) (any, bool, error) {
+	s.once.Do(func() { close(s.nextStarted) })
+	select {
+	case <-s.release:
+		return nil, false, context.Canceled
+	case <-ctx.Done():
+		return nil, false, ctx.Err()
+	}
+}
+
+func (s *observableStreamSource) cancel(context.Context) error {
+	select {
+	case <-s.release:
+	default:
+		close(s.release)
+	}
+	return nil
+}
+
+type finiteStreamSource struct {
+	items []any
+	index int
+}
+
+func (s *finiteStreamSource) next(context.Context) (any, bool, error) {
+	if s.index >= len(s.items) {
+		return nil, false, nil
+	}
+	value := s.items[s.index]
+	s.index++
+	return value, true, nil
+}
+func (*finiteStreamSource) cancel(context.Context) error { return nil }
+
+func TestStreamControllerSnapshotsAndStopsOnlySelectedStream(t *testing.T) {
+	controller := NewStreamController()
+	events := make([]StreamEvent, 0, 4)
+	source := &observableStreamSource{nextStarted: make(chan struct{}), release: make(chan struct{})}
+	stream := newStreamHandle(TypeRef{Name: "text"}, "events.follow", source)
+	stream.id, stream.binding = "stream-1", "updates"
+	stream.emit = func(event StreamEvent) { events = append(events, event) }
+	controller.register(stream)
+	stream.publish("opened")
+
+	if err := stream.beginConsumption(); err != nil {
+		t.Fatal(err)
+	}
+	result := make(chan error, 1)
+	go func() {
+		_, more, err := stream.next(context.Background())
+		if more {
+			err = errors.New("stopped stream produced an item")
+		}
+		result <- err
+	}()
+	<-source.nextStarted
+	if err := controller.Stop(context.Background(), "stream-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-result; err != nil {
+		t.Fatal(err)
+	}
+
+	snapshots := controller.Snapshots()
+	if len(snapshots) != 1 || snapshots[0].ID != "stream-1" || snapshots[0].Binding != "updates" || snapshots[0].State != "stopped" {
+		t.Fatalf("snapshots=%#v", snapshots)
+	}
+	if snapshots[0].ItemsReceived != 0 || snapshots[0].EndedAt == nil {
+		t.Fatalf("snapshot=%#v", snapshots[0])
+	}
+	if got := events[len(events)-1]; got.Event != "stopped" || got.State != "stopped" {
+		t.Fatalf("events=%#v", events)
+	}
+}
+
+func TestStreamLifecycleReportsItemsAndCompletion(t *testing.T) {
+	source := &finiteStreamSource{items: []any{"one"}}
+	var events []StreamEvent
+	stream := newStreamHandle(TypeRef{Name: "text"}, "events.follow", source)
+	stream.id, stream.binding, stream.emit = "stream-1", "updates", func(event StreamEvent) { events = append(events, event) }
+	stream.publish("opened")
+	if err := stream.beginConsumption(); err != nil {
+		t.Fatal(err)
+	}
+	if value, more, err := stream.next(context.Background()); err != nil || !more || value != "one" {
+		t.Fatalf("value=%v more=%v err=%v", value, more, err)
+	}
+	if _, more, err := stream.next(context.Background()); err != nil || more {
+		t.Fatalf("more=%v err=%v", more, err)
+	}
+	if got := events[len(events)-1]; got.Event != "completed" || got.State != "completed" || got.ItemsReceived != 1 || got.EndedAt == nil {
+		t.Fatalf("events=%#v", events)
+	}
+}
 
 type testStreamSource struct{ cancelled bool }
 
 func (*testStreamSource) next(context.Context) (any, bool, error) { return nil, false, nil }
 func (s *testStreamSource) cancel(context.Context) error          { s.cancelled = true; return nil }
+
+func TestClosingARequestedStopKeepsTheToolingOutcome(t *testing.T) {
+	source := &testStreamSource{}
+	var events []StreamEvent
+	stream := newStreamHandle(TypeRef{Name: "text"}, "events.follow", source)
+	stream.id, stream.binding, stream.emit = "stream-1", "updates", func(event StreamEvent) { events = append(events, event) }
+	if err := stream.requestStop(); err != nil {
+		t.Fatal(err)
+	}
+	if err := stream.closeWithReason(context.Background(), "run ended"); err != nil {
+		t.Fatal(err)
+	}
+	got := stream.snapshot("snapshot")
+	if got.State != "stopped" || got.Reason != "tooling" || got.EndedAt == nil {
+		t.Fatalf("snapshot=%#v", got)
+	}
+	if !source.cancelled || len(events) != 1 || events[0].Event != "stopped" {
+		t.Fatalf("cancelled=%v events=%#v", source.cancelled, events)
+	}
+}
+
+type failingCancelStreamSource struct{ err error }
+
+func (*failingCancelStreamSource) next(context.Context) (any, bool, error) { return nil, false, nil }
+func (s *failingCancelStreamSource) cancel(context.Context) error          { return s.err }
+
+func TestClosingARequestedStopReportsCancellationFailure(t *testing.T) {
+	want := errors.New("producer refused cancellation")
+	stream := newStreamHandle(TypeRef{Name: "text"}, "events.follow", &failingCancelStreamSource{err: want})
+	stream.id = "stream-1"
+	if err := stream.requestStop(); err != nil {
+		t.Fatal(err)
+	}
+	if err := stream.closeWithReason(context.Background(), "run ended"); !errors.Is(err, want) {
+		t.Fatalf("err=%v", err)
+	}
+	got := stream.snapshot("snapshot")
+	if got.State != "failed" || got.Reason != "cancellation failed" || got.Failure == nil {
+		t.Fatalf("snapshot=%#v", got)
+	}
+}
+
+func TestClosingAStreamReportsCancellationFailure(t *testing.T) {
+	want := errors.New("producer refused cancellation")
+	stream := newStreamHandle(TypeRef{Name: "text"}, "events.follow", &failingCancelStreamSource{err: want})
+	stream.id = "stream-1"
+	if err := stream.closeWithReason(context.Background(), "close stream"); !errors.Is(err, want) {
+		t.Fatalf("err=%v", err)
+	}
+	got := stream.snapshot("snapshot")
+	if got.State != "failed" || got.Reason != "cancellation failed" || got.Failure == nil {
+		t.Fatalf("snapshot=%#v", got)
+	}
+}
 
 func TestStreamSyntaxAndActionMetadata(t *testing.T) {
 	source := `to follow with service as text streaming text:
@@ -67,6 +224,28 @@ func TestStreamOwnershipDiagnostics(t *testing.T) {
 				t.Fatalf("diagnostics=%q want %q", joined.String(), wants[name])
 			}
 		})
+	}
+}
+
+func TestStreamCollectionDiagnosticsExplainHowToMaterialize(t *testing.T) {
+	prefix := "to follow streaming text:\n  finish\nstream follow called events\n"
+	for _, operation := range []string{"keep events where true", "sort events by value", "group events by value called groups", "map each event in events with at most 2 running called values:\n  show event", "for each event in events:\n  show event"} {
+		messages := []string{}
+		for _, diagnostic := range Check(prefix + operation + "\nclose stream events\n") {
+			messages = append(messages, diagnostic.Message)
+		}
+		if !strings.Contains(strings.Join(messages, "\n"), "requires a collection") {
+			t.Fatalf("%q diagnostics=%v", operation, messages)
+		}
+	}
+	for _, limit := range []string{"0", "1.5", "1000001"} {
+		messages := []string{}
+		for _, diagnostic := range Check(prefix + "collect at most " + limit + " items from events called items\n") {
+			messages = append(messages, diagnostic.Message)
+		}
+		if !strings.Contains(strings.Join(messages, "\n"), "positive bounded integer") {
+			t.Fatalf("limit %s diagnostics=%v", limit, messages)
+		}
 	}
 }
 
@@ -188,18 +367,76 @@ to consume returning text:
 	}
 }
 
-func TestLocalStreamingDeclarationCannotOpenWithoutHost(t *testing.T) {
-	source := "to follow streaming text:\n  finish\nstream follow called events\nclose stream events\n"
-	var messages []string
-	for _, d := range Check(source) {
-		messages = append(messages, d.Message)
+func TestLocalStreamingActionSendsTypedItemsAndCompletes(t *testing.T) {
+	source := `to count with limit as integer streaming integer:
+  repeat limit times:
+    send 7
+  finish
+stream count with 3 called numbers
+for each number from numbers:
+  show number
+show "done"
+`
+	if diagnostics := Check(source); len(diagnostics) != 0 {
+		t.Fatalf("diagnostics=%v", diagnostics)
 	}
-	if !strings.Contains(strings.Join(messages, "\n"), "has no host implementation") {
-		t.Fatalf("diagnostics=%v", messages)
+	var stdout strings.Builder
+	_, err := Run(context.Background(), mustParse(t, source), Options{Stdout: &stdout})
+	if err != nil || stdout.String() != "7\n7\n7\ndone\n" {
+		t.Fatalf("output=%q error=%v", stdout.String(), err)
 	}
-	_, err := Run(context.Background(), mustParse(t, source), Options{})
-	if err == nil || !strings.Contains(err.Error(), "has no host implementation") {
-		t.Fatalf("error=%v", err)
+}
+
+func TestLocalStreamingActionStopsWithoutStoppingItsCaller(t *testing.T) {
+	source := `to count streaming integer:
+  while true:
+    send 7
+stream count called numbers
+for each number from numbers:
+  show number
+  stop reading
+show "continued"
+`
+	var stdout strings.Builder
+	_, err := Run(context.Background(), mustParse(t, source), Options{Stdout: &stdout})
+	if err != nil || stdout.String() != "7\ncontinued\n" {
+		t.Fatalf("output=%q error=%v", stdout.String(), err)
+	}
+}
+
+func TestFailureHandlerCannotSwallowStopReading(t *testing.T) {
+	source := `to count streaming integer:
+  while true:
+    send 7
+stream count called numbers
+for each number from numbers:
+  show number
+  stop reading
+    on failure:
+      recover
+show "continued"
+`
+	var stdout strings.Builder
+	_, err := Run(context.Background(), mustParse(t, source), Options{Stdout: &stdout})
+	if err != nil || stdout.String() != "7\ncontinued\n" {
+		t.Fatalf("output=%q error=%v", stdout.String(), err)
+	}
+}
+
+func TestSendRequiresAStreamingActionAndItsDeclaredItemType(t *testing.T) {
+	source := `send 1
+to ordinary:
+  send 2
+to numbers streaming integer:
+  send "wrong"
+`
+	var joined strings.Builder
+	for _, diagnostic := range Check(source) {
+		joined.WriteString(diagnostic.Message)
+		joined.WriteByte('\n')
+	}
+	if strings.Count(joined.String(), "send is only valid inside a streaming action") != 2 || !strings.Contains(joined.String(), "stream item") {
+		t.Fatalf("diagnostics=%s", joined.String())
 	}
 }
 
@@ -244,6 +481,46 @@ to use returning text may fail with Broken:
 	joined := strings.Join(messages, "\n")
 	if !strings.Contains(joined, "recover requires a value") || !strings.Contains(joined, "recover with is only valid") {
 		t.Fatalf("diagnostics=%s", joined)
+	}
+}
+
+func TestCollectOverflowIsATypedStreamLimitFailure(t *testing.T) {
+	stream := newStreamHandle(TypeRef{Name: "text"}, "events.follow", &finiteStreamSource{items: []any{"one", "two", "three"}})
+	r := &runtime{ctx: context.Background(), env: map[string]any{"events": stream}}
+	err := r.materializeStream(&Statement{Line: 1}, []string{"", "2", "events", "items"}, false)
+	var typed *typedFailure
+	if !errors.As(err, &typed) || typed.kind != "StreamLimitExceeded" {
+		t.Fatalf("error=%#v", err)
+	}
+	value := FailureValue(err)
+	if value["limit"] != float64(2) || value["received"] != float64(3) {
+		t.Fatalf("failure=%#v", value)
+	}
+}
+
+func TestCollectAcceptsTheBuiltInStreamLimitHandler(t *testing.T) {
+	source := `to source streaming text:
+  finish
+to consume may fail with StreamLimitExceeded:
+  stream source called events
+  collect at most 2 items from events called items
+    on failure StreamLimitExceeded using limit, received:
+      pass failure on
+  finish
+`
+	for _, diagnostic := range Check(source) {
+		if strings.Contains(diagnostic.Message, "unknown failure") || strings.Contains(diagnostic.Message, "impossible") {
+			t.Fatalf("diagnostic=%s", diagnostic.Message)
+		}
+	}
+}
+
+func TestBuiltInStreamLimitFailureCannotBeRedefined(t *testing.T) {
+	diagnostics := Check(`define failure StreamLimitExceeded:
+  limit as text
+`)
+	if len(diagnostics) == 0 || !strings.Contains(diagnostics[0].Message, "failure StreamLimitExceeded is reserved by the SysOneScript runtime") {
+		t.Fatalf("diagnostics=%v", diagnostics)
 	}
 }
 

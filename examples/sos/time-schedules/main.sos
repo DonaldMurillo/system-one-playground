@@ -1,0 +1,36 @@
+# Calendar schedules: named zones, weekday rules, month-start rules, and
+# explicit daylight-saving policy. Calendar schedules wait for the next
+# scheduled local time, so this demo runs until each stream has fired once.
+import "std/time"
+
+command schedules:
+  stream scheduled times
+    every weekday at 9:00
+    in time zone "America/New_York"
+    called market_open
+
+  for each tick from market_open:
+    show "market opens at {tick.scheduled_for}"
+    stop stream market_open
+
+  stream scheduled times
+    on the first day of each month at 00:15
+    in time zone "UTC"
+    when a scheduled local time does not exist
+      use the next valid time
+    when a scheduled local time occurs twice
+      run only at the first occurrence
+    called monthly_report
+
+  for each tick from monthly_report:
+    show "monthly report at {tick.scheduled_for}"
+    stop stream monthly_report
+
+  remember today's date in time zone "Europe/London" called today
+  find the time one calendar month after today
+    in time zone "Europe/London"
+    when the day does not exist
+      use the last day of the month
+    called next_month
+
+  show "today in London: {today}; one calendar month later: {next_month}"

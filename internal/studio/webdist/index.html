@@ -6,8 +6,8 @@
   <meta name="color-scheme" content="dark" />
   <link rel="icon" href="data:," />
   <title>SysOneScript Studio</title>
-  <script type="module" crossorigin src="./assets/index-BLajaOql.js"></script>
-  <link rel="stylesheet" crossorigin href="./assets/index-DnTF25zS.css">
+  <script type="module" crossorigin src="./assets/index-URFDLwt2.js"></script>
+  <link rel="stylesheet" crossorigin href="./assets/index-DdWrBF_B.css">
 </head>
 <body>
   <header id="topbar">
@@ -66,12 +66,14 @@
         <button class="tab is-active" data-tab="output" role="tab" type="button">Output</button>
         <button class="tab" data-tab="diagnostics" role="tab" type="button">Diagnostics <span id="diag-count" class="count"></span></button>
         <button class="tab" data-tab="trace" role="tab" type="button">Trace</button>
+        <button class="tab" data-tab="streams" role="tab" type="button">Streams <span id="stream-count" class="count is-clear"></span></button>
         <button class="tab" data-tab="vocabulary" role="tab" type="button">Vocabulary</button>
         <button class="tab" data-tab="interpretation" role="tab" type="button">Interpretation</button>
       </nav>
       <section id="panel-output" class="panel is-active" aria-live="polite"><pre id="output" class="pre">Run a script to see output.</pre></section>
       <section id="panel-diagnostics" class="panel"><ul id="diagnostics" class="diag-list"></ul></section>
       <section id="panel-trace" class="panel"><div id="trace" class="pre">No judgment traces yet.</div></section>
+      <section id="panel-streams" class="panel"><div id="streams" class="stream-list">Run a script that opens a stream to inspect it here.</div></section>
       <section id="panel-vocabulary" class="panel">
         <div class="vocab">
           <div class="vocab-toolbar">

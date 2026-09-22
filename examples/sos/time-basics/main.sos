@@ -1,0 +1,37 @@
+# Time basics: clock reads, waits, one-shot and anchored repeating timers,
+# scoped deadlines, and elapsed arithmetic from the approved time spec.
+# Runs in about three seconds: `sos run main.sos basics`.
+import "std/time"
+
+command basics:
+  remember the current time called started
+
+  wait for 1 second
+
+  remember the current time called after_wait
+  make elapsed after_wait minus started
+  show "waited {elapsed}"
+
+  stream one tick after 500 milliseconds called timer
+  for each tick from timer:
+    show "one-shot tick #{tick.sequence} scheduled for {tick.scheduled_for}"
+
+  stream a tick every 1 second called ticks
+    combining missed ticks
+
+  for each tick from ticks:
+    show "tick #{tick.sequence} at {tick.observed_at} missed {tick.missed}"
+    stop stream ticks
+
+  allow at most 5 seconds for:
+    call time.now called mid
+    make remaining mid minus started
+    show "still inside the deadline after {remaining}"
+
+  format started as RFC3339 called text
+  read timestamp from text as RFC3339 called roundtrip
+  show "round trip: {roundtrip}"
+
+  make deadline started plus 2 seconds
+  wait until deadline
+  show "waited until the deadline"

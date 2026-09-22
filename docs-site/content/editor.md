@@ -16,6 +16,15 @@ runtime used by the CLI.
 Build and install it from the repository root:
 
 ```sh
+./scripts/sync-local-dev.sh
+```
+
+That command builds and smoke-tests the current checkout before updating the
+standalone `sos` and `sysone` commands and the locally installed extension as
+one unit. Reload VS Code windows that were already open afterward. To package
+only the extension manually:
+
+```sh
 go generate ./internal/sosbuild
 mkdir -p vscode/bin
 go build -o vscode/bin/sos ./cmd/sos
@@ -105,9 +114,12 @@ collection loops and diagnoses copied, abandoned, or reused handles. Hover
 shows the item type and declared opening/terminal failures.
 Debugger Variables may show stream state, producer, received/buffered item
 counts, and available credit, but expanding that value never requests the next
-item. Dedicated active-stream panels, individual Cancel buttons, and stream
-lifecycle trace/progress events are not implemented. Use **Stop processes** to
-cancel the active run and all of its producers.
+item. Studio's **Streams** tab and VS Code's **Streams** view update live from
+the same non-consuming runtime snapshots. Each stream exposes **Stop stream**,
+which gracefully ends that stream and continues the program below its loop.
+The lifecycle view/output records open, reading, completion, stop, cancellation,
+and failure events. Use **Stop processes** to cancel the whole run and all of
+its producers.
 
 Project helpers and generators are configured in `.vscode/sysonescript.json`:
 

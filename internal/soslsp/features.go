@@ -191,6 +191,11 @@ func (s *server) sentenceHover(params json.RawMessage) any {
 			return map[string]any{"contents": map[string]any{"kind": "markdown", "value": value}}
 		}
 	}
+	// Time sentences document their timing contract (anchoring, missed-tick
+	// policy, deadline inheritance) even before the core classifies them.
+	if value, is := timeHover(line); is {
+		return map[string]any{"contents": map[string]any{"kind": "markdown", "value": value}}
+	}
 	if info, exists := sos.EditorMeanings(text)[pos.Line+1]; exists {
 		return map[string]any{"contents": map[string]any{"kind": "markdown", "value": "```sos\n" + strings.TrimSpace(line) + "\n```\n\n**" + info.Kind + "**\n\n" + info.Description}}
 	}
@@ -270,6 +275,9 @@ func (s *server) completion(params json.RawMessage) any {
 		if replace != nil {
 			item["textEdit"] = wordEdit(kw)
 		}
+		items = append(items, item)
+	}
+	for _, item := range timeCompletions(lineContext, prefix, wordEdit) {
 		items = append(items, item)
 	}
 	semanticContext := failureCompletionContext(lineContext)
@@ -628,6 +636,13 @@ func (s *server) references(params json.RawMessage) any {
 	if word == "" {
 		return []any{}
 	}
+	if scoped, ok := ownedStreamOccurrences(text, pos.Line, word); ok {
+		locations := make([]map[string]any, 0, len(scoped))
+		for _, occurrence := range scoped {
+			locations = append(locations, map[string]any{"uri": uri, "range": occurrence})
+		}
+		return locations
+	}
 	locations := []map[string]any{}
 	for lineNo, sourceLine := range strings.Split(text, "\n") {
 		for _, token := range sossyntax.Parse(sourceLine).Lines[0].Tokens {
@@ -661,6 +676,13 @@ func (s *server) rename(params json.RawMessage) any {
 	if word == "" {
 		return nil
 	}
+	if scoped, ok := ownedStreamOccurrences(doc.text, request.Position.Line, word); ok {
+		edits := make([]map[string]any, 0, len(scoped))
+		for _, occurrence := range scoped {
+			edits = append(edits, map[string]any{"range": occurrence, "newText": request.NewName})
+		}
+		return map[string]any{"changes": map[string]any{request.TextDocument.URI: edits}}
+	}
 	edits := []map[string]any{}
 	for lineNo, sourceLine := range strings.Split(doc.text, "\n") {
 		for _, token := range sossyntax.Parse(sourceLine).Lines[0].Tokens {
@@ -670,6 +692,81 @@ func (s *server) rename(params json.RawMessage) any {
 		}
 	}
 	return map[string]any{"changes": map[string]any{request.TextDocument.URI: edits}}
+}
+
+type lexicalBinding struct {
+	name  string
+	line  int
+	kind  string
+	scope *lexicalScope
+}
+
+type lexicalScope struct {
+	parent   *lexicalScope
+	bindings []*lexicalBinding
+}
+
+// ownedStreamOccurrences resolves a stream handle through lexical ownership
+// scopes before returning edits. It deliberately declines non-stream symbols,
+// which continue through the general reference path.
+func ownedStreamOccurrences(text string, cursorLine int, word string) ([]lspRange, bool) {
+	root := &lexicalScope{}
+	lineScopes := map[int]*lexicalScope{}
+	var walk func([]*sos.Statement, *lexicalScope)
+	walk = func(statements []*sos.Statement, scope *lexicalScope) {
+		for _, statement := range statements {
+			line := statement.Line - 1
+			lineScopes[line] = scope
+			child := &lexicalScope{parent: scope}
+			for index, pattern := range bindPatterns {
+				match := pattern.FindStringSubmatch(statement.Text)
+				if match == nil {
+					continue
+				}
+				target := scope
+				if index == 3 { // the singular introduced by "for each" belongs to its body
+					target = child
+				}
+				binding := &lexicalBinding{name: match[1], line: line, kind: statement.Kind, scope: target}
+				target.bindings = append(target.bindings, binding)
+			}
+			if len(statement.Body) > 0 {
+				walk(statement.Body, child)
+			}
+		}
+	}
+	walk(statementsOf(text), root)
+	resolve := func(scope *lexicalScope, line int, name string) *lexicalBinding {
+		for current := scope; current != nil; current = current.parent {
+			var found *lexicalBinding
+			for _, binding := range current.bindings {
+				if binding.name == name && binding.line <= line && (found == nil || binding.line >= found.line) {
+					found = binding
+				}
+			}
+			if found != nil {
+				return found
+			}
+		}
+		return nil
+	}
+	selected := resolve(lineScopes[cursorLine], cursorLine, word)
+	if selected == nil || selected.kind != "openStream" {
+		return nil, false
+	}
+	var occurrences []lspRange
+	for lineNo, sourceLine := range strings.Split(text, "\n") {
+		scope := lineScopes[lineNo]
+		if scope == nil || resolve(scope, lineNo, word) != selected {
+			continue
+		}
+		for _, token := range sossyntax.Parse(sourceLine).Lines[0].Tokens {
+			if token.Kind == "identifier" && token.Text == word {
+				occurrences = append(occurrences, lspRange{Start: lspPosition{Line: lineNo, Character: token.Start}, End: lspPosition{Line: lineNo, Character: token.End}})
+			}
+		}
+	}
+	return occurrences, true
 }
 
 func validRename(name string) bool {

@@ -314,6 +314,16 @@ func (p *exprParser) atom() (any, error) {
 		if math.IsNaN(n) || math.IsInf(n, 0) {
 			return nil, fmt.Errorf("number must be finite")
 		}
+		if p.i < len(p.t) && isDurationUnit(p.t[p.i].text) {
+			unit := p.t[p.i].text
+			p.i++
+			d, err := ParseDurationValue(t.text + " " + unit)
+			if err != nil {
+				return nil, err
+			}
+			p.lastType = TypeRef{Name: "duration"}
+			return d, nil
+		}
 		p.lastType = TypeRef{Name: "number"}
 		return n, nil
 	}
@@ -434,6 +444,9 @@ func binary(op string, a, b any) (any, error) {
 		return nil, fmt.Errorf("contains requires matching text or a list")
 	}
 	if t, ok := a.(time.Time); ok {
+		if other, ok := b.(time.Time); ok && op == "-" {
+			return t.Sub(other), nil
+		}
 		if d, ok := b.(time.Duration); ok {
 			if op == "-" {
 				return t.Add(-d), nil

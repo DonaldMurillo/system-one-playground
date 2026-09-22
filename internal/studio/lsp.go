@@ -22,6 +22,8 @@ var lspBridgeMethods = map[string]bool{
 	"textDocument/hover":               true,
 	"textDocument/completion":          true,
 	"textDocument/definition":          true,
+	"textDocument/references":          true,
+	"textDocument/rename":              true,
 	"textDocument/formatting":          true,
 	"textDocument/semanticTokens/full": true,
 	"textDocument/inlayHint":           true,
@@ -43,6 +45,7 @@ func (s *Server) handleLSP(w http.ResponseWriter, r *http.Request) {
 		Context  json.RawMessage `json:"context"`
 		Query    string          `json:"query"`
 		Library  string          `json:"library"`
+		NewName  string          `json:"newName"`
 	}
 	if !decodeBody(w, r, &req) || !checkSource(w, req.Source) {
 		return
@@ -63,8 +66,11 @@ func (s *Server) handleLSP(w http.ResponseWriter, r *http.Request) {
 	}
 	params := map[string]any{}
 	switch req.Method {
-	case "textDocument/foldingRange", "textDocument/hover", "textDocument/completion", "textDocument/definition":
+	case "textDocument/foldingRange", "textDocument/hover", "textDocument/completion", "textDocument/definition", "textDocument/references":
 		params["position"] = req.Position
+	case "textDocument/rename":
+		params["position"] = req.Position
+		params["newName"] = req.NewName
 	case "textDocument/codeAction":
 		if len(req.Range) == 0 {
 			writeError(w, 400, "range", "codeAction requires a range")
