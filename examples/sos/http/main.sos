@@ -1,0 +1,19 @@
+# Start this service, then POST the curl request from README.md.
+define Incoming:
+  message as text
+
+listen for HTTP requests on loopback port 8080 called requests:
+  allow headers up to 32 KiB
+  allow bodies up to 1 MiB
+  request deadline 30 seconds
+  shutdown deadline 5 seconds
+
+for each request from requests:
+  read JSON body from request as Incoming called incoming
+  respond to request with:
+    status from 202
+    headers from {"cache-control": "no-store"}
+    JSON body from {"received": message of incoming}
+  stop reading
+
+show "HTTP example stopped after one request"

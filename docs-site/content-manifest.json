@@ -104,6 +104,11 @@
     "title": "Streams and long-running operations"
   },
   {
+    "source": "docs/sysonescript-http.md",
+    "slug": "http",
+    "title": "HTTP clients and services"
+  },
+  {
     "source": "docs/sysonescript-parallel.md",
     "slug": "parallel",
     "title": "Parallel maps and failures"

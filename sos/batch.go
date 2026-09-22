@@ -3,8 +3,8 @@ package sos
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 	"github.com/DonaldMurillo/system-one-playground/typesafe"
+	"strings"
 )
 
 // questionBatch is an internal envelope. It is never sent as an API question.

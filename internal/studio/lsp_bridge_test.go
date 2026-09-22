@@ -4,6 +4,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 )
 
@@ -32,6 +33,25 @@ func TestLSPBridgeSemanticTokens(t *testing.T) {
 	for i := range want {
 		if got[i] != want[i] {
 			t.Fatalf("data[%d] = %v, want %v", i, got[i], want[i])
+		}
+	}
+}
+
+func TestLSPBridgeExposesReferencesAndRename(t *testing.T) {
+	s, ts := newTestServer(t)
+	source := "stream source called events\nclose stream events\n"
+	res, refs := post(t, ts, s.Token(), "/api/lsp", `{"source":`+strconv.Quote(source)+`,"method":"textDocument/references","position":{"line":1,"character":14}}`)
+	if res.StatusCode != 200 || len(refs["result"].([]any)) != 2 {
+		t.Fatalf("references: %d %+v", res.StatusCode, refs)
+	}
+	res, renamed := post(t, ts, s.Token(), "/api/lsp", `{"source":`+strconv.Quote(source)+`,"method":"textDocument/rename","position":{"line":1,"character":14},"newName":"incoming"}`)
+	if res.StatusCode != 200 {
+		t.Fatalf("rename: %d %+v", res.StatusCode, renamed)
+	}
+	changes := renamed["result"].(map[string]any)["changes"].(map[string]any)
+	for _, edits := range changes {
+		if len(edits.([]any)) != 2 {
+			t.Fatalf("rename edits=%+v", edits)
 		}
 	}
 }

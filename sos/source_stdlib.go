@@ -3,8 +3,8 @@ package sos
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 	"github.com/DonaldMurillo/system-one-playground/internal/semcore"
+	"strings"
 	"unicode/utf8"
 )
 

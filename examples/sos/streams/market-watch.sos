@@ -1,0 +1,17 @@
+import "example/streams-node" as market
+
+# The adapter emits one update per second for ten seconds. In production its
+# deterministic source can be replaced by a broker WebSocket without changing
+# this monitoring policy.
+make opening_price 100
+make highest_price opening_price
+
+show "Watching SYS once a second for 10 seconds..."
+stream market.watch_market with "SYS", 10, 1000 called ticks
+
+for each tick from ticks:
+  show "second {second of tick}: ${price of tick} ({change of tick})"
+  when price of tick > highest_price:
+    assign highest_price price of tick
+
+show "Feed completed. Highest observed price: ${highest_price}"

@@ -183,7 +183,7 @@ func decodeExternalModuleDefinition(path string, b []byte) (*ExternalModuleDefin
 		}
 		for _, arg := range a.Command.Arguments {
 			if strings.HasPrefix(arg, "${") {
-				name := strings.TrimSuffix(strings.TrimPrefix(arg, "${"), "}")
+				name := commandParameterName(arg)
 				if _, ok := parameterTypes[name]; !ok {
 					return nil, fmt.Errorf("external module definition: action %s references unknown parameter %s", a.Name, name)
 				}
@@ -334,6 +334,11 @@ func decodeExternalModuleDefinition(path string, b []byte) (*ExternalModuleDefin
 	d.clientsGate = make(chan struct{}, 1)
 	d.clientsGate <- struct{}{}
 	return &d, nil
+}
+
+func commandParameterName(value string) string {
+	name := strings.TrimSuffix(strings.TrimPrefix(value, "${"), "}")
+	return strings.TrimPrefix(name, "parameter.")
 }
 
 func (d *ExternalModuleDefinition) lockClients(ctx context.Context) error {
@@ -769,7 +774,7 @@ func (d *ExternalModuleDefinition) runCommand(ctx context.Context, opts Options,
 	}
 	for _, raw := range a.Command.Arguments {
 		if strings.HasPrefix(raw, "${") {
-			value := params[strings.TrimSuffix(strings.TrimPrefix(raw, "${"), "}")]
+			value := params[commandParameterName(raw)]
 			if text, ok := value.(string); ok {
 				raw = text
 			} else {
@@ -1029,7 +1034,7 @@ func (d *ExternalModuleDefinition) openCommandStream(ctx context.Context, opts O
 	}
 	for _, raw := range a.Command.Arguments {
 		if strings.HasPrefix(raw, "${") {
-			value := params[strings.TrimSuffix(strings.TrimPrefix(raw, "${"), "}")]
+			value := params[commandParameterName(raw)]
 			if text, ok := value.(string); ok {
 				raw = text
 			} else {
@@ -1422,6 +1427,7 @@ func currentExternalTarget() string {
 
 type stdioClient struct {
 	mu            sync.Mutex
+	writeMu       sync.Mutex
 	cmd           *exec.Cmd
 	in            io.WriteCloser
 	out           *bufio.Reader
@@ -1475,6 +1481,7 @@ type stdioProtocolStream struct {
 	terminalMu      sync.Mutex
 	terminalErr     error
 	terminalTaken   bool
+	cancelRequested atomic.Bool
 	releaseOnce     sync.Once
 	now             func() time.Time
 }
@@ -1562,6 +1569,8 @@ func (c *stdioClient) writeProtocolMessage(ctx context.Context, message any) err
 	}
 	done := make(chan error, 1)
 	go func() {
+		c.writeMu.Lock()
+		defer c.writeMu.Unlock()
 		_, writeErr := c.in.Write(append(encoded, '\n'))
 		done <- writeErr
 	}()
@@ -1656,6 +1665,13 @@ func (s *stdioProtocolStream) next(ctx context.Context) (any, bool, error) {
 		s.credit.Add(-1)
 		s.nextSequence++
 		s.needCredit = true
+		if buffered, ok, peekErr := s.peekBufferedNotification(); peekErr != nil {
+			s.violation()
+			return nil, false, peekErr
+		} else if ok && buffered.Method == "stream.item" {
+			s.violation()
+			return nil, false, fmt.Errorf("%s exceeded its stream credit", s.action)
+		}
 		return decoded, true, nil
 	case "stream.end":
 		var params struct {
@@ -1668,6 +1684,13 @@ func (s *stdioProtocolStream) next(ctx context.Context) (any, bool, error) {
 		}
 		if s.deadlineExpired() {
 			s.setTerminal(context.DeadlineExceeded)
+		}
+		if buffered, ok, peekErr := s.peekBufferedNotification(); peekErr != nil {
+			s.violation()
+			return nil, false, peekErr
+		} else if ok && strings.HasPrefix(buffered.Method, "stream.") {
+			s.violation()
+			return nil, false, fmt.Errorf("%s sent an item after stream %s ended", s.action, s.id)
 		}
 		s.finish(false)
 		return nil, false, s.takeTerminal()
@@ -1704,23 +1727,50 @@ func (s *stdioProtocolStream) next(ctx context.Context) (any, bool, error) {
 	}
 }
 
+func (s *stdioProtocolStream) peekBufferedNotification() (streamNotification, bool, error) {
+	buffered := s.client.out.Buffered()
+	if buffered == 0 {
+		return streamNotification{}, false, nil
+	}
+	data, err := s.client.out.Peek(buffered)
+	if err != nil {
+		return streamNotification{}, false, err
+	}
+	newline := bytes.IndexByte(data, '\n')
+	if newline < 0 {
+		return streamNotification{}, false, nil
+	}
+	if newline+1 > 1<<20 {
+		return streamNotification{}, false, fmt.Errorf("plugin response exceeds 1 MiB")
+	}
+	var notification streamNotification
+	if err := decodeExternalJSON(data[:newline+1], &notification); err != nil {
+		return streamNotification{}, false, fmt.Errorf("plugin wrote non-protocol stream data")
+	}
+	return notification, notification.JSONRPC == "2.0" && notification.Method != "", nil
+}
+
 func (s *stdioProtocolStream) cancel(ctx context.Context) error {
 	s.opMu.Lock()
 	defer s.opMu.Unlock()
 	if s.done.Load() {
 		return nil
 	}
-	if s.shutdown > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, s.shutdown)
-		defer cancel()
+	grace := s.shutdown
+	if grace <= 0 {
+		grace = 2 * time.Second
 	}
+	var cancel context.CancelFunc
+	ctx, cancel = context.WithTimeout(ctx, grace)
+	defer cancel()
 	var deadlineCancel context.CancelFunc
 	ctx, deadlineCancel = s.withDeadline(ctx)
 	defer deadlineCancel()
-	if err := s.client.writeProtocolMessage(ctx, map[string]any{"jsonrpc": "2.0", "method": "stream.cancel", "params": map[string]any{"streamId": s.id}}); err != nil {
-		s.violation()
-		return err
+	if !s.cancelRequested.Swap(true) {
+		if err := s.client.writeProtocolMessage(ctx, map[string]any{"jsonrpc": "2.0", "method": "stream.cancel", "params": map[string]any{"streamId": s.id}}); err != nil {
+			s.violation()
+			return err
+		}
 	}
 	for {
 		line, err := s.client.readProtocolMessage(ctx)
@@ -1770,6 +1820,31 @@ func (s *stdioProtocolStream) cancel(ctx context.Context) error {
 			return fmt.Errorf("plugin did not acknowledge stream cancellation")
 		}
 	}
+}
+
+// requestStreamStop is safe while next owns opMu: stdin writes and stdout
+// reads are independent protocol directions. next receives the bounded
+// stream.end acknowledgement and retains sole ownership of the response side.
+func (s *stdioProtocolStream) requestStreamStop() error {
+	if s.done.Load() || s.cancelRequested.Swap(true) {
+		return nil
+	}
+	grace := s.shutdown
+	if grace <= 0 {
+		grace = 2 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), grace)
+	defer cancel()
+	if err := s.client.writeProtocolMessage(ctx, map[string]any{"jsonrpc": "2.0", "method": "stream.cancel", "params": map[string]any{"streamId": s.id}}); err != nil {
+		s.client.terminate()
+		return err
+	}
+	time.AfterFunc(grace, func() {
+		if !s.done.Load() {
+			s.client.terminate()
+		}
+	})
+	return nil
 }
 
 func (s *stdioProtocolStream) withDeadline(ctx context.Context) (context.Context, context.CancelFunc) {

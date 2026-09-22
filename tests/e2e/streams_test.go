@@ -34,6 +34,87 @@ func TestCLIStreamExamples(t *testing.T) {
 	}
 }
 
+func TestCLINodeStreamExample(t *testing.T) {
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node is required for the Node stream fixture")
+	}
+	dir := filepath.Join(examplesRoot(t), "streams")
+	stdout, stderr, code := runCLI(t, dir, "run", "node.sos")
+	if code != 0 || stdout != "node event 0\nnode event 1\nnode event 2\n" {
+		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+}
+
+func TestCLITimedMarketStreamCompletesAndCancels(t *testing.T) {
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node is required for the timed market stream example")
+	}
+	dir := filepath.Join(examplesRoot(t), "streams")
+	completion := writeScript(t, dir, "market-fast.sos", `import "example/streams-node" as market
+stream market.watch_market with "SYS", 3, 5 called ticks
+for each tick from ticks:
+  show second of tick
+show "complete"
+`)
+	t.Cleanup(func() { _ = os.Remove(completion) })
+	stdout, stderr, code := runCLI(t, dir, "run", completion)
+	if code != 0 || stdout != "1\n2\n3\ncomplete\n" {
+		t.Fatalf("completion exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+
+	cancellation := writeScript(t, dir, "market-cancel.sos", `import "example/streams-node" as market
+stream market.watch_market with "SYS", 50, 5 called ticks
+for each tick from ticks:
+  show second of tick
+  when second of tick is 2:
+    stop reading
+show "canceled"
+`)
+	t.Cleanup(func() { _ = os.Remove(cancellation) })
+	stdout, stderr, code = runCLI(t, dir, "run", cancellation)
+	if code != 0 || stdout != "1\n2\ncanceled\n" {
+		t.Fatalf("cancellation exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+}
+
+func TestCLILocalStreamExample(t *testing.T) {
+	dir := filepath.Join(examplesRoot(t), "streams")
+	stdout, stderr, code := runCLI(t, dir, "run", "local.sos")
+	want := "Watching a live deployment...\n[queued] release accepted\n[building] container image built\n[testing] smoke tests passed\n[deployed] traffic is live\nDeployment succeeded; canceling the remaining feed\nCaller continued after the stream stopped\n"
+	if code != 0 || stdout != want {
+		t.Fatalf("exit=%d stdout=%q, want %q stderr=%q", code, stdout, want, stderr)
+	}
+}
+
+func TestLocalStreamInterpreterAndNativeBuildParity(t *testing.T) {
+	dir := t.TempDir()
+	script := writeScript(t, dir, "main.sos", `to count streaming integer:
+  make current 0
+  while current < 4:
+    assign current current + 1
+    send current
+  finish
+stream count called numbers
+take first 3 items from numbers called sample
+for each number in sample:
+  show number
+show "continued"
+`)
+	runnerOut, runnerErr, runnerCode := runCLI(t, dir, "run", script)
+	if runnerCode != 0 {
+		t.Fatalf("runner exit=%d stderr=%s", runnerCode, runnerErr)
+	}
+	artifact := filepath.Join(dir, "stream-app")
+	_, buildErr, buildCode := runCLI(t, dir, "build", script, "--output", artifact)
+	if buildCode != 0 {
+		t.Fatalf("build exit=%d stderr=%s", buildCode, buildErr)
+	}
+	artifactOut, artifactErr, artifactCode := runAppArtifact(t, dir, artifact)
+	if artifactCode != runnerCode || artifactOut != runnerOut || artifactErr != runnerErr {
+		t.Fatalf("runner=(%d,%q,%q) artifact=(%d,%q,%q)", runnerCode, runnerOut, runnerErr, artifactCode, artifactOut, artifactErr)
+	}
+}
+
 func TestCLIStreamRuntimeActionCleanupAndTerminalFailure(t *testing.T) {
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 is required for stream fixture")

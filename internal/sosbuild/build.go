@@ -766,7 +766,6 @@ func run() int {
 		Model:    os.Getenv("SOS_MODEL"),
 		Record:   os.Getenv("SOS_RECORD"),
 		Replay:   os.Getenv("SOS_REPLAY"),
-		OnTrace:  traceLine,
 	}
 	result, err := sos.Run(ctx, program, options)
  var budgetErr *sos.BudgetError
@@ -806,11 +805,6 @@ func printDiagnostics(diags []sos.Diagnostic) {
 	for _, d := range diags {
 		fmt.Fprintf(os.Stderr, "%s:%d:%d: %s\n", programName, d.Line, d.Column, d.Message)
 	}
-}
-
-func traceLine(t sos.Trace) {
-	fmt.Fprintf(os.Stderr, "sos: trace line=%d model=%s %dms inputTokens=%d replay=%v\n",
-		t.Line, t.Model, t.Milliseconds, t.InputTokens, t.Replay)
 }
 
 func envDuration(name string) (time.Duration,error) {

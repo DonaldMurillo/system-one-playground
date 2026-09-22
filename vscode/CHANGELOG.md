@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Adds a live Streams view, per-stream stop controls, and a dedicated lifecycle output channel for run and debug sessions.
+- Keeps stream inspection non-consuming and reports runtime-owned counters, credit, producer identity, terminal state, and failures.
+- Makes long-running services easy to stop from the Project view header, an active-run row, or the VS Code status bar.
+- Makes project actions follow the active file's nearest nested `sos.toml`, matching editor Run behavior in multi-project workspaces.
+- Uses concise stream action labels and the compact `SOS` name in persistent VS Code controls.
+- Removes redundant `SysOneScript:` prefixes from actions shown inside `.sos` editor toolbars.
+
 ## 0.4.0
 
 - Adds typed external command and persistent stdio modules with capability policy, diagnostics, generated interfaces, and project controls.

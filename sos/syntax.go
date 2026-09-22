@@ -23,6 +23,13 @@ var forms = []struct{ kind, pattern string }{
 	{"find", `^find files under (.+) matching (.+) called ([A-Za-z_]\w*)$`},
 	{"readEach", `^read each (\w+) in (.+) as lines of json into (\w+)$`},
 	{"read", `^read (.+) as (json|text|lines of json) called (\w+)$`},
+	{"httpGet", `^get (text|JSON) from (.+?)(?: expecting status (\d+) through (\d+))? called ([A-Za-z_]\w*)$`},
+	{"httpPost", `^post (.+?) as JSON to (.+?) called ([A-Za-z_]\w*)$`},
+	{"httpRequest", `^send an HTTP request to (.+?) called ([A-Za-z_]\w*):$`},
+	{"httpListen", `^listen for HTTP requests on (?:(all interfaces|loopback) )?port (\d+) called ([A-Za-z_]\w*):$`},
+	{"httpReadBody", `^read (text|JSON|form) body from ([A-Za-z_]\w*)(?: as ([A-Z][A-Za-z0-9_]*))? called ([A-Za-z_]\w*)$`},
+	{"httpRespondComplete", `^respond to ([A-Za-z_]\w*) with:$`},
+	{"httpRespond", `^respond to ([A-Za-z_]\w*) with status (\d+)(?: and (text|JSON) (.+))?$`},
 	{"require", `^require each (\w+) in (.+) matches ([\w-]+)$`},
 	{"keep", `^keep (\w+) where (.+)$`},
 	{"sort", `^sort (\w+) by (.+?)(?: (ascending|descending))?$`},
@@ -47,6 +54,7 @@ var forms = []struct{ kind, pattern string }{
 	{"score", `^score (.+) by (.+) called ([A-Za-z_]\w*):$`},
 	{"append", `^append (.+) to (\w+)$`},
 	{"save", `^save (.+) as (json|text) (?:in (.+)|under (.+) named (.+))$`},
+	{"send", `^send (.+)$`},
 	{"show", `^(?:show|print|emit) (.+)$`},
 	{"rethrow", `^rethrow$`},
 	{"passFailure", `^pass failure on$`},
@@ -91,7 +99,7 @@ func match(kind, text string) []string {
 }
 
 func Keywords() []string {
-	return []string{"stream", "streaming", "from", "close stream", "stop reading", "collect at most", "finish", "fail", "recover", "pass failure on", "capture", "rethrow", "map", "evaluate", "describe", "choices", "read", "keep", "sort", "group", "save", "show", "make", "assign", "remember", "find", "for each", "when", "otherwise", "classify", "jev", "called", "where", "by", "as", "optional", "into", "on failure", "may fail with", "returning", "to", "call", "return", "while", "repeat", "judge", "score", "create folder", "take", "append", "require", "expect", "define", "failure", "command", "option", "argument", "switch", "using", "ask", "accept", "model", "on uncertain", "on existing", "package", "import", "export"}
+	return []string{"stream", "streaming", "from", "send", "close stream", "stop reading", "collect at most", "finish", "fail", "recover", "pass failure on", "capture", "rethrow", "map", "evaluate", "describe", "choices", "read", "keep", "sort", "group", "save", "show", "make", "assign", "remember", "find", "for each", "when", "otherwise", "classify", "jev", "called", "where", "by", "as", "optional", "into", "on failure", "may fail with", "returning", "to", "call", "return", "while", "repeat", "judge", "score", "create folder", "take", "append", "require", "expect", "define", "failure", "command", "option", "argument", "switch", "using", "ask", "accept", "model", "on uncertain", "on existing", "package", "import", "export", "get text from", "get JSON from", "post as JSON to", "send an HTTP request to", "listen for HTTP requests on", "read text body from", "read JSON body from", "respond to"}
 }
 func classifyLine(text string) string {
 	for _, f := range forms {
@@ -212,6 +220,18 @@ func Parse(source string) (*Program, []Diagnostic) {
 				if strings.HasSuffix(fr.parent.Text, " with:") && regexp.MustCompile(`^\w+ from .+$`).MatchString(text) {
 					kind = "field"
 				}
+			case "httpRequest":
+				if _, _, ok := httpRequestOptionParts(text); ok {
+					kind = "field"
+				}
+			case "httpListen":
+				if _, _, ok := httpListenOptionParts(text); ok {
+					kind = "field"
+				}
+			case "httpRespondComplete":
+				if _, _, ok := httpRespondOptionParts(text); ok {
+					kind = "field"
+				}
 			case "classify", "score":
 				if regexp.MustCompile(`^(?:"[^"\n]+"|[0-9]+): ".*"$`).MatchString(text) {
 					kind = "choice"
@@ -257,7 +277,7 @@ func Parse(source string) (*Program, []Diagnostic) {
 	var validate func([]*Statement)
 	validate = func(sts []*Statement) {
 		for _, s := range sts {
-			block := semanticCriterionDeclRe.MatchString(s.Text) || s.Kind == "map" || s.Kind == "for" || s.Kind == "streamFor" || s.Kind == "while" || s.Kind == "repeat" || s.Kind == "when" || s.Kind == "otherwise" || s.Kind == "to" || s.Kind == "command" || s.Kind == "schema" || s.Kind == "define" || s.Kind == "failure" || (s.Kind == "fail" && strings.HasSuffix(s.Text, ":")) || s.Kind == "classify" || s.Kind == "score" || strings.HasSuffix(s.Text, "with:") || strings.HasSuffix(s.Text, "jev:") || s.Kind == "handler" && strings.HasSuffix(s.Text, ":")
+			block := semanticCriterionDeclRe.MatchString(s.Text) || s.Kind == "map" || s.Kind == "for" || s.Kind == "streamFor" || s.Kind == "while" || s.Kind == "repeat" || s.Kind == "when" || s.Kind == "otherwise" || s.Kind == "to" || s.Kind == "command" || s.Kind == "schema" || s.Kind == "define" || s.Kind == "failure" || (s.Kind == "fail" && strings.HasSuffix(s.Text, ":")) || s.Kind == "classify" || s.Kind == "score" || s.Kind == "httpRequest" || s.Kind == "httpListen" || strings.HasSuffix(s.Text, "with:") || strings.HasSuffix(s.Text, "jev:") || s.Kind == "handler" && strings.HasSuffix(s.Text, ":")
 			if block && len(s.Body) == 0 && s.Kind != "failure" {
 				ds = append(ds, Diagnostic{s.Line, 1, "expected an indented body"})
 			}
@@ -274,6 +294,7 @@ func Parse(source string) (*Program, []Diagnostic) {
 	var failureDiagnostics []Diagnostic
 	p.Failures, failureDiagnostics = collectFailureDefinitions(p.Statements)
 	ds = append(ds, failureDiagnostics...)
+	ds = append(ds, validateHTTPStatements(p.Statements)...)
 	ds = append(ds, buildCommands(p)...)
 	return p, ds
 }

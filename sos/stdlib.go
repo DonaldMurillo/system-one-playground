@@ -20,7 +20,10 @@ type NativeParam struct {
 // Synonyms are alternate words for the same operation
 // (upper/uppercase); the name always works too.
 type NativeOp struct {
-	ContextFn        func(context.Context, Options, []any) (any, error)
+	ContextFn func(context.Context, Options, []any) (any, error)
+	// StreamFn opens a runtime-owned native stream. It is mutually exclusive
+	// with Fn and ContextFn and participates in ordinary stream ownership.
+	StreamFn         func(context.Context, Options, []any) (streamSource, error)
 	Targets          []string
 	Effects          []string
 	Description      string

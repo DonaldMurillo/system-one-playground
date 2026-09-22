@@ -21,7 +21,7 @@ const table = execFileSync('unzip', ['-l', vsixPath], { encoding: 'utf8' })
 const expandedBytes = [...table.matchAll(/^\s*(\d+)\s+\d{4}-\d{2}-\d{2}\s+/gm)].reduce((sum, match) => sum + Number(match[1]), 0)
 assert.ok(Number.isSafeInteger(expandedBytes) && expandedBytes <= 64 * 1024 * 1024, `VSIX expands beyond the 64 MiB verification limit: ${expandedBytes}`)
 execFileSync('unzip', ['-tq', vsixPath], { stdio: 'pipe' })
-for (const required of ['extension.vsixmanifest', 'extension/package.json', 'extension/extension.js', 'extension/semantic.js', 'extension/project.js', 'extension/lsp-client.js']) {
+for (const required of ['extension.vsixmanifest', 'extension/package.json', 'extension/extension.js', 'extension/semantic.js', 'extension/project.js', 'extension/lsp-client.js', 'extension/streams.js', 'extension/streams-server.js']) {
   assert.equal(listing.filter(name => name === required).length, 1, `VSIX must contain exactly one ${required}`)
 }
 const expected = (expectedTarget || `${process.platform}-${process.arch}`).replace('win32-', 'windows-').replace('-x64', '-amd64')

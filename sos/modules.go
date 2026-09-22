@@ -348,6 +348,17 @@ func (p *Program) actionPossibleFailures(name string, visiting map[string]bool) 
 				}
 				walkFailureHandlerBodies(statement.Body, walk)
 				continue
+			case "httpGet", "httpPost", "httpRequest", "httpReadBody", "httpRespond", "httpRespondComplete":
+				failures, _ := httpFormPossibleFailures(statement)
+				result = append(result, unhandledFailures(failures, statement)...)
+				walkFailureHandlerBodies(statement.Body, walk)
+				continue
+			case "httpListen":
+				failures, _ := httpFormPossibleFailures(statement)
+				result = append(result, unhandledFailures(failures, statement)...)
+				streamFailures[match("httpListen", statement.Text)[3]] = failures
+				walkFailureHandlerBodies(statement.Body, walk)
+				continue
 			case "streamFor", "collectStream", "take":
 				m := match(statement.Kind, statement.Text)
 				streamName := m[2]

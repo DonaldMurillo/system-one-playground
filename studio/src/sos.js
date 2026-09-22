@@ -4,14 +4,14 @@ export const SENTENCE_STARTERS = [
   'evaluate', 'criterion', 'package', 'import', 'export', 'define', 'failure', 'argument', 'option', 'switch', 'to', 'call', 'returning', 'may', 'finish', 'fail', 'recover', 'capture', 'return', 'while', 'repeat', 'set', 'emit', 'judge', 'score', 'command', 'describe', 'expect', 'remember', 'find', 'read', 'require',
   'keep', 'sort', 'group', 'create', 'make', 'assign', 'when', 'take',
   'classify', 'append', 'save', 'show', 'for', 'map', 'stop', 'print',
-  'stream', 'streaming', 'close', 'collect'
+  'stream', 'streaming', 'send', 'close', 'collect', 'get', 'post', 'listen', 'respond'
 ]
 
 export const CONNECTORS = [
   'each', 'in', 'as', 'into', 'on', 'called', 'with', 'where', 'by', 'from',
   'under', 'named', 'matching', 'if', 'missing', 'numbered', 'otherwise',
   'and', 'or', 'not', 'of', 'count', 'first', 'last', 'items', 'default',
-  'choices', 'is', 'ascending', 'descending', 'existing', 'off', 'at', 'most', 'running', 'collecting', 'failures', 'rethrow', 'pass', 'using', 'reading'
+  'choices', 'is', 'ascending', 'descending', 'existing', 'off', 'at', 'most', 'running', 'collecting', 'failures', 'rethrow', 'pass', 'using', 'reading', 'HTTP', 'status', 'headers', 'body', 'redirects', 'interfaces', 'port', 'deadline', 'accepting'
 ]
 
 export const OPERATORS = ['and', 'contains', 'is', 'minus', 'not', 'or', 'plus', 'times']
@@ -19,7 +19,7 @@ export const OPERATORS = ['and', 'contains', 'is', 'minus', 'not', 'or', 'plus',
 
 export const TYPE_WORDS = [
   'text', 'timestamp', 'duration', 'folder', 'list', 'json', 'table',
-  'number', 'integer', 'boolean', 'switch'
+  'number', 'integer', 'boolean', 'switch', 'JSON'
 ]
 
 export const JUDGMENT_WORDS = [

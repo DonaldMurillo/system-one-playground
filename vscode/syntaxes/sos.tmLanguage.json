@@ -113,7 +113,7 @@
       "patterns": [
         {
           "name": "keyword.control.sos",
-          "match": "\\b(?:evaluate|criterion|package|import|export|define|failure|argument|option|switch|to|call|returning|streaming|stream|close|collect|may|finish|fail|recover|capture|return|while|repeat|set|emit|judge|score|command|describe|expect|remember|find|read|require|keep|sort|group|create|make|assign|when|take|classify|append|save|show|for|map|stop|print)\\b"
+          "match": "\\b(?:evaluate|criterion|package|import|export|define|failure|argument|option|switch|to|call|returning|streaming|stream|send|close|collect|get|post|listen|respond|HTTP|may|finish|fail|recover|capture|return|while|repeat|set|emit|judge|score|command|describe|expect|remember|find|read|require|keep|sort|group|create|make|assign|when|take|classify|append|save|show|for|map|stop|print)\\b"
         },
         {
           "name": "keyword.control.operator.sos",

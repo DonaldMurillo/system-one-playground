@@ -4,7 +4,7 @@ const os = require('node:os')
 const path = require('node:path')
 const test = require('node:test')
 
-const { appendScriptArguments, compareVersions, discoverEntrypoints, findProjectRoot, parseVersionLine, readExternalModules, readHelpers, relativeScript, resolveProjectEntrypoint, walkScripts } = require('../project')
+const { appendScriptArguments, compareVersions, discoverEntrypoints, findProjectRoot, parseVersionLine, preferredProjectRoot, readExternalModules, readHelpers, relativeScript, resolveProjectEntrypoint, walkScripts } = require('../project')
 
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sysonescript-project-'))
@@ -24,6 +24,22 @@ test('finds project roots from files and nested folders', () => {
   const root = fixture()
   assert.equal(findProjectRoot(path.join(root, 'src', 'main.sos')), root)
   assert.equal(findProjectRoot(path.join(root, 'src')), root)
+})
+
+test('project controls follow the active file into its nearest nested project', () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'sysonescript-workspace-'))
+  const first = path.join(workspace, 'first')
+  const http = path.join(workspace, 'http')
+  fs.mkdirSync(first, { recursive: true })
+  fs.mkdirSync(http, { recursive: true })
+  fs.writeFileSync(path.join(first, 'sos.toml'), 'version = 1\n')
+  fs.writeFileSync(path.join(first, 'main.sos'), 'show "first"\n')
+  fs.writeFileSync(path.join(http, 'sos.toml'), 'version = 1\n')
+  const active = path.join(http, 'main.sos')
+  fs.writeFileSync(active, 'show "http"\n')
+
+  assert.equal(preferredProjectRoot(workspace, active), http)
+  assert.equal(preferredProjectRoot(workspace, path.join(workspace, 'notes.txt')), workspace)
 })
 
 test('discovers stable script entrypoints and relative paths', () => {
@@ -119,9 +135,30 @@ test('maps SysOneScript operators to keyword styling across themes', () => {
   assert.equal(grammar.repository.keywords.patterns[2].name, 'keyword.control.operator.sos')
 })
 
-test('keeps project actions in the panel instead of duplicating title buttons', () => {
+test('keeps project actions in the panel and exposes stop while a process is running', () => {
   const manifest = require('../package.json')
-  assert.deepEqual(manifest.contributes.menus['view/title'].map(item => item.command), ['sysonescript.refresh'])
+  const projectTitles = manifest.contributes.menus['view/title'].filter(item => item.when.includes('sysonescript.project'))
+  assert.deepEqual(projectTitles.map(item => item.command), ['sysonescript.stop', 'sysonescript.refresh'])
+  assert.match(projectTitles[0].when, /sysonescript\.processRunning/)
+  assert.deepEqual(manifest.contributes.menus['view/title'].filter(item => item.when.includes('sysonescript.streams')).map(item => item.command), ['sysonescript.refreshStreams', 'sysonescript.showStreamsOutput'])
+})
+
+test('uses concise SOS and stream action labels in VS Code chrome', () => {
+  const manifest = require('../package.json')
+  const commands = new Map(manifest.contributes.commands.map(item => [item.command, item.title]))
+  assert.equal(commands.get('sysonescript.stop'), 'Stop SOS')
+  assert.equal(commands.get('sysonescript.stopStream'), 'Stop Stream')
+  assert.equal(commands.get('sysonescript.refreshStreams'), 'Refresh Streams')
+  assert.equal(commands.get('sysonescript.showStreamsOutput'), 'Show Stream Lifecycle')
+})
+
+test('uses concise action labels in the SOS editor toolbar', () => {
+  const manifest = require('../package.json')
+  const commands = new Map(manifest.contributes.commands.map(item => [item.command, item]))
+  assert.equal(commands.get('sysonescript.canonicalizeFile').shortTitle, 'Canonicalize')
+  assert.equal(commands.get('sysonescript.analyze').shortTitle, 'Analyze')
+  assert.equal(commands.get('sysonescript.runFile').shortTitle, 'Run')
+  assert.equal(commands.get('sysonescript.debugFile').shortTitle, 'Debug')
 })
 
 test('contributes an additive language icon for active icon themes', () => {

@@ -196,8 +196,8 @@ definition = "modules/echo/module.sos.toml"
 	if strings.TrimSpace(stdout) != "hello external" {
 		t.Fatalf("external run stdout = %q", stdout)
 	}
-	if !strings.Contains(stderr, "model=external") {
-		t.Fatalf("external trace missing from stderr: %q", stderr)
+	if strings.Contains(stderr, "sos: trace") {
+		t.Fatalf("external run leaked structured trace telemetry into stderr: %q", stderr)
 	}
 	built := filepath.Join(dir, "dist", "external-app")
 	_, stderr, code = runCLI(t, dir, "build", script, "--output", built)

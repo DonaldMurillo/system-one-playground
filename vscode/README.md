@@ -76,13 +76,18 @@ directly, keep concise status in the sidebar, and automatically open the
 dedicated **SysOneScript Run** Output channel with complete output and errors;
 they do not open an entrypoint picker or terminal. When the entrypoint declares
 a command, Run asks for that command's arguments and passes them across the
-script `--` boundary. It does not mirror the file system. File Run
+script `--` boundary. In workspaces containing multiple nested projects, the
+panel follows the active `.sos` file to its nearest `sos.toml`. It does not
+mirror the file system. File Run
 actions operate on the selected `.sos` file while retaining the containing
 project's `sos.toml`, working directory, and `.env`.
-Long-running runs remain cancellable from **Stop processes**, which also closes
-their owned streams. Inspecting a stream in Variables never advances its
-producer. Per-stream status panels, individual Cancel actions, and stream
-lifecycle progress/trace events are not implemented yet.
+While a run or debug session is active, **Stop SOS** appears in the
+status bar, the Project view title, and directly beneath **Run project**. It
+stops the active processes and closes their owned streams. Inspecting a stream
+in Variables never advances its
+producer. The **Streams** view shows live runtime snapshots and offers an
+individual **Stop stream** action; **SysOneScript Streams** records lifecycle
+events without logging program-visible stream items.
 The `.sos` mark is contributed as a language-default icon, allowing compatible
 file-icon packs to display it without replacing the active pack. A pack's own
 `.sos` mapping takes precedence, and packs can disable language-mode icons. The

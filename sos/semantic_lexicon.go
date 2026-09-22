@@ -37,7 +37,7 @@ type semanticLanguageDefinition struct {
 }
 
 var semanticDefinitions = map[string]semanticLanguageDefinition{
-	"modifier.only":              {id: "modifier.only", canonical: "", inputs: []string{"statement"}},
+	"modifier.only":             {id: "modifier.only", canonical: "", inputs: []string{"statement"}},
 	"language.when":             {id: "language.when", canonical: "when", inputs: []string{"boolean", "statement"}},
 	"language.show":             {id: "language.show", canonical: "show", inputs: []string{"any"}},
 	"operator.greater_than":     {id: "operator.greater_than", canonical: ">", inputs: []string{"ordered", "ordered"}},

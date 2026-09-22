@@ -32,6 +32,8 @@ as pending analysis; **Analyze** or **Run** performs the configured requests.
 
 - `repo-assistant` is a multi-file Studio project.
 - `semlint` is a complete repository scanner and calibration CLI.
+- `http` is a bounded loopback JSON service with typed request validation,
+  response headers, exactly-once response ownership, and graceful shutdown.
 
 ## External modules
 

@@ -20,6 +20,7 @@ type executionState struct {
 	steps   atomic.Int64
 	calls   atomic.Int64
 	output  atomic.Int64
+	streams atomic.Int64
 	traceMu sync.Mutex
 }
 

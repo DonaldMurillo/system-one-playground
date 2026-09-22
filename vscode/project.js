@@ -17,6 +17,20 @@ function findProjectRoot(start) {
   }
 }
 
+function preferredProjectRoot(workspace, activeFile) {
+  const workspacePath = workspace ? path.resolve(workspace) : undefined
+  if (activeFile && String(activeFile).toLowerCase().endsWith('.sos')) {
+    const activePath = path.resolve(activeFile)
+    const relative = workspacePath ? path.relative(workspacePath, activePath) : ''
+    const insideWorkspace = !workspacePath || relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative))
+    if (insideWorkspace) {
+      const activeRoot = findProjectRoot(activePath)
+      if (activeRoot) return activeRoot
+    }
+  }
+  return findProjectRoot(workspacePath) || (workspacePath && isDirectory(workspacePath) ? workspacePath : undefined)
+}
+
 function walkScripts(root) {
   const result = []
   const visit = directory => {
@@ -150,4 +164,4 @@ function compareVersions(left, right) {
   return 0
 }
 
-module.exports = { appendScriptArguments, compareVersions, discoverEntrypoints, findProjectRoot, isDirectory, parseVersionLine, readExternalModules, readHelpers, relativeScript, resolveProjectEntrypoint, walkScripts }
+module.exports = { appendScriptArguments, compareVersions, discoverEntrypoints, findProjectRoot, isDirectory, parseVersionLine, preferredProjectRoot, readExternalModules, readHelpers, relativeScript, resolveProjectEntrypoint, walkScripts }

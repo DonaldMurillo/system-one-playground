@@ -1,6 +1,6 @@
 # Streams and long-running operations
 
-Status: proposed after typed failures and results
+Status: implemented
 
 This proposal adds bounded, cancellable, single-consumer streams to
 SysOneScript. A stream is an active relationship with a producer, not a slowly
@@ -39,7 +39,7 @@ for each user in users:
 
 ## Non-goals
 
-The first version does not add general async/await, detached background jobs,
+Streams do not add general async/await, detached background jobs,
 implicit fan-out, multicast streams, unbounded collection, automatic retries,
 transparent reconnection, random access, stream rewinding, or debugger previews
 that consume values.
@@ -52,7 +52,9 @@ A streaming action declares an item type rather than one final result:
 to follow_logs with service as text streaming LogEvent
   may fail with ServiceNotFound, ConnectionLost:
 
-  # external or native implementation
+  send {"message": "connected", "service": service}
+  send {"message": "waiting for updates", "service": service}
+  finish
 ```
 
 Canonical grammar:
@@ -67,6 +69,14 @@ An action cannot declare both `returning TYPE` and `streaming TYPE`. `streaming`
 describes the item type, not a `list of TYPE` result. The action's declared
 failures may occur while opening or after one or more items have been delivered.
 Tooling records each failure's possible phase when known.
+
+Inside a streaming action, `send VALUE` emits one value of the declared item
+type. Sending applies backpressure: the action pauses until its single consumer
+is ready. `send` is invalid at top level and inside non-streaming actions.
+`finish` completes the stream normally, while a declared typed failure ends it
+with that failure. A local streaming action starts lazily when its consumer asks
+for the first item, so bounded setup between `stream` and consumption remains
+deterministic.
 
 SOS package, standard-library, and external-module interfaces expose the same
 streaming result metadata. Browser or host target restrictions remain part of
@@ -293,8 +303,10 @@ collect at most 1000 items from events called buffered
 ```
 
 This consumes until normal completion. If item 1001 would arrive, the operation
-cancels upstream and fails with a typed collection-limit failure. Terminal source
-failures propagate. An unbounded `collect items from` form is invalid.
+cancels upstream and fails with the built-in typed failure
+`StreamLimitExceeded`, whose fields are `limit as integer` and
+`received as integer`. That failure name is reserved by the runtime. Terminal
+source failures propagate. An unbounded `collect items from` form is invalid.
 
 Sampling intentionally stops after a count:
 

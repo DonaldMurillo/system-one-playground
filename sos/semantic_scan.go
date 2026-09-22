@@ -184,6 +184,18 @@ func classifyUnderParent(parent *semNode, text string) (string, string) {
 		if strings.HasSuffix(parent.text, " with:") && semanticMakeFieldRe.MatchString(text) {
 			return "canonical", "field"
 		}
+	case "httpRequest":
+		if _, _, ok := httpRequestOptionParts(text); ok {
+			return "canonical", "field"
+		}
+	case "httpListen":
+		if _, _, ok := httpListenOptionParts(text); ok {
+			return "canonical", "field"
+		}
+	case "httpRespondComplete":
+		if _, _, ok := httpRespondOptionParts(text); ok {
+			return "canonical", "field"
+		}
 	case "classify", "score":
 		if semanticChoiceRe.MatchString(text) {
 			return "canonical", "choice"

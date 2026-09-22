@@ -44,6 +44,8 @@ type runtime struct {
 	depth            int
 	condition        bool
 	debugStack       []DebugFrame
+	streamOutput     chan<- any
+	streamItemType   TypeRef
 }
 type returnValue struct {
 	value    any
@@ -67,6 +69,9 @@ func Run(ctx context.Context, p *Program, opts Options) (result *Result, err err
 	}
 	if opts.externalSession == nil {
 		opts.externalSession = newExternalSessionKey()
+	}
+	if opts.httpServers == nil {
+		opts.httpServers = newHTTPServerRegistry()
 	}
 	// Validate declarations and inputs before admitting any provider requests.
 	// The import graph from LoadProgram survives re-parsing: canonical
@@ -218,7 +223,7 @@ func Run(ctx context.Context, p *Program, opts Options) (result *Result, err err
 		variables := make(map[string]any, len(r.env))
 		for name, value := range r.env {
 			if stream, ok := value.(*streamHandle); ok {
-				_ = stream.close(context.Background())
+				_ = stream.closeWithReason(context.Background(), "run ended")
 				variables[name] = stream.debugValue()
 			} else {
 				variables[name] = value
@@ -227,6 +232,9 @@ func Run(ctx context.Context, p *Program, opts Options) (result *Result, err err
 		r.result.Variables = variables
 		r.result.Steps = int(r.shared.steps.Load())
 		r.result.Usage = opts.Budget.Snapshot()
+		if opts.Streams != nil {
+			r.result.Streams = opts.Streams.Snapshots()
+		}
 		result = r.result
 		var typed *typedFailure
 		if errors.As(err, &typed) {
@@ -309,6 +317,7 @@ func (r *runtime) block(sts []*Statement) error {
 		err := r.execute(s)
 		if err != nil {
 			var ret returnValue
+			var stopReading stopReadingValue
 			var exit interface{ ExitCode() int }
 			var replayErr *ReplayIntegrityError
 			var recovered recoveryValue
@@ -318,7 +327,7 @@ func (r *runtime) block(sts []*Statement) error {
 			if fatalParallel(err) {
 				return err
 			}
-			if errors.As(err, &ret) || errors.As(err, &recovered) {
+			if errors.As(err, &ret) || errors.As(err, &recovered) || errors.As(err, &stopReading) {
 				return err
 			}
 			if r.ctx.Err() != nil {
@@ -765,7 +774,7 @@ func isFatalFailure(err error) bool {
 
 func (r *runtime) execute(s *Statement) error {
 	m := match(s.Kind, s.Text)
-	if binding := statementBindingName(s); binding != "" && s.Kind != "openStream" {
+	if binding := statementBindingName(s); binding != "" && s.Kind != "openStream" && s.Kind != "httpListen" {
 		if existing, ok := r.env[binding].(*streamHandle); ok {
 			existing.mu.Lock()
 			active := existing.state == streamActive
@@ -803,6 +812,23 @@ func (r *runtime) execute(s *Statement) error {
 			return e
 		}
 		return returnValue{value: v, hasValue: true}
+	case "send":
+		if r.streamOutput == nil {
+			return fmt.Errorf("send is only valid inside a streaming action")
+		}
+		value, err := r.eval(m[1], nil)
+		if err != nil {
+			return err
+		}
+		if !typeMatchesRef(value, r.streamItemType, r.definitions) {
+			return fmt.Errorf("stream item must be %s; received %s", r.streamItemType.String(), valueTypeName(value))
+		}
+		select {
+		case r.streamOutput <- value:
+			return nil
+		case <-r.ctx.Done():
+			return r.ctx.Err()
+		}
 	case "recover":
 		if r.activeFailure == nil {
 			return fmt.Errorf("recover requires an active failure handler")
@@ -966,6 +992,12 @@ func (r *runtime) execute(s *Statement) error {
 			return fmt.Errorf("action %s did not return a value", m[1])
 		}
 		return e
+	case "httpGet", "httpPost", "httpRequest", "httpReadBody":
+		return r.runHTTPCall(s, m)
+	case "httpListen":
+		return r.runHTTPListen(s, m)
+	case "httpRespond", "httpRespondComplete":
+		return r.runHTTPRespond(s, m)
 	case "openStream":
 		if existing, ok := r.env[m[3]].(*streamHandle); ok {
 			existing.mu.Lock()
@@ -979,7 +1011,7 @@ func (r *runtime) execute(s *Statement) error {
 		if e != nil {
 			return e
 		}
-		stream, e := r.openExternalStream(m[1], args)
+		stream, e := r.openExternalStream(m[1], m[3], s.Line, args)
 		if e == nil {
 			r.env[m[3]] = stream
 		}
@@ -990,9 +1022,9 @@ func (r *runtime) execute(s *Statement) error {
 			return fmt.Errorf("%s is not an owned stream", m[1])
 		}
 		if e := stream.beginConsumption(); e != nil {
-			return fmt.Errorf("%s was already consumed", m[1])
+			return fmt.Errorf("%s: %w", m[1], e)
 		}
-		return stream.close(r.ctx)
+		return stream.closeWithReason(r.ctx, "close stream")
 	case "stopReading":
 		return stopReadingValue{}
 	case "streamFor":
@@ -1002,7 +1034,7 @@ func (r *runtime) execute(s *Statement) error {
 			return fmt.Errorf("%s is not an owned stream", name)
 		}
 		if e := stream.beginConsumption(); e != nil {
-			return fmt.Errorf("%s was already consumed", name)
+			return fmt.Errorf("%s: %w", name, e)
 		}
 		old, had := r.env[m[1]]
 		defer func() {
@@ -1029,11 +1061,31 @@ func (r *runtime) execute(s *Statement) error {
 			e = r.block(s.Body)
 			var stopped stopReadingValue
 			if errors.As(e, &stopped) {
-				return stream.close(r.ctx)
+				var responseErr error
+				if r.opts.httpServers != nil {
+					responseErr = r.opts.httpServers.ensureResponded(item)
+				}
+				if responseErr != nil {
+					r.recordHTTPRuntimeFailure(s.Line, responseErr)
+				}
+				return stream.closeWithReason(r.ctx, "stop reading")
 			}
 			if e != nil {
+				var exit interface{ ExitCode() int }
+				var replayErr *ReplayIntegrityError
+				if !errors.As(e, &exit) && !errors.As(e, &replayErr) && !fatalParallel(e) && r.opts.httpServers != nil && r.opts.httpServers.completeUnhandledFailure(item, e) {
+					r.recordHTTPRuntimeFailure(s.Line, e)
+					continue
+				}
 				_ = stream.close(context.Background())
 				return e
+			}
+			var responseErr error
+			if r.opts.httpServers != nil {
+				responseErr = r.opts.httpServers.ensureResponded(item)
+			}
+			if responseErr != nil {
+				r.recordHTTPRuntimeFailure(s.Line, responseErr)
 			}
 		}
 	case "collectStream":
@@ -1573,6 +1625,18 @@ func (r *runtime) execute(s *Statement) error {
 		return &StopError{Message: v}
 	default:
 		return fmt.Errorf("construction %q is not executable here", s.Kind)
+	}
+}
+
+func (r *runtime) recordHTTPRuntimeFailure(line int, err error) {
+	trace := Trace{Line: line, Question: "HTTP request response obligation", Model: "http", Decision: "safe fallback response", Reason: err.Error()}
+	var failure *typedFailure
+	if errors.As(err, &failure) {
+		trace.Answer = failure.value
+	}
+	r.result.Traces = append(r.result.Traces, trace)
+	if r.opts.OnTrace != nil {
+		r.opts.OnTrace(trace)
 	}
 }
 
