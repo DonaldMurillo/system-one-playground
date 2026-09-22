@@ -145,7 +145,7 @@ func analyze(p *Program) []Diagnostic {
 				continue
 			}
 			switch base {
-			case "true", "false", "on", "off", "null", "now", "empty", "list", "record", "not", "count", "length", "of", "words", "first", "last", "items", "and", "or", "is", "contains", "plus", "minus", "times":
+			case "true", "false", "on", "off", "null", "now", "empty", "list", "record", "not", "count", "length", "of", "words", "first", "last", "items", "and", "or", "is", "contains", "plus", "minus", "times", "millisecond", "milliseconds", "second", "seconds", "minute", "minutes", "hour", "hours", "day", "days":
 				continue
 			}
 			add(s, fmt.Sprintf("unknown name %q", base))
@@ -260,7 +260,7 @@ func analyze(p *Program) []Diagnostic {
 						add(s, fmt.Sprintf("%s expects %d argument(s)", m[1], want))
 					}
 					if target != nil {
-						if _, streaming, _ := streamTarget(p, actions, action, target); streaming {
+						if _, streaming, _ := streamTarget(p, actions, action, target); streaming && !isStreamAliasCall(p, m[1]) {
 							add(s, "streaming action "+m[1]+" must be opened with stream")
 						}
 					}
@@ -321,7 +321,7 @@ func analyze(p *Program) []Diagnostic {
 				} else if strings.Contains(m[1], ".") {
 					alias, action, _ := strings.Cut(m[1], ".")
 					if mod := moduleAlias(p, alias); mod != nil {
-						if op, ok := mod.Native[action]; ok && strings.HasPrefix(op.Result, "stream of ") {
+						if op, ok := mod.Native[action]; ok && strings.HasPrefix(op.Result, "stream of ") && !isStreamAliasCall(p, m[1]) {
 							add(s, "streaming action "+m[1]+" must be opened with stream")
 						}
 					}
@@ -424,6 +424,40 @@ func analyze(p *Program) []Diagnostic {
 				continue
 			case "stopReading":
 				// Stream-loop placement is validated by the ownership pass.
+			case "quietStream", "limitStream", "batchStream", "distinctStream", "distinctKeyStream", "idleStream", "takeForStream", "deadlineStream", "filterStream", "projectStream", "handleEachStream", "handleOneStream", "newestStream", "conflateStream", "exhaustStream":
+				var inline string
+				switch s.Kind {
+				case "quietStream", "batchStream", "idleStream":
+					inline = m[5]
+				case "limitStream":
+					inline = m[7]
+				case "takeForStream", "deadlineStream":
+					inline = m[3]
+				}
+				if sink := streamSink(s, inline); sink != "" {
+					names[sink] = true
+				}
+				if s.Kind == "distinctStream" {
+					names[m[2]] = true
+				}
+				if s.Kind == "distinctKeyStream" || s.Kind == "filterStream" || s.Kind == "projectStream" {
+					names[m[3]] = true
+				}
+				old := names
+				names = copyNames(names)
+				switch s.Kind {
+				case "filterStream", "projectStream", "handleEachStream", "handleOneStream", "newestStream":
+					names[m[1]] = true
+				case "exhaustStream":
+					names[m[1]] = true
+				case "conflateStream":
+					if policy := streamChild(s, "conflatePolicy"); policy != nil {
+						names[match("conflatePolicy", policy.Text)[1]] = true
+					}
+				}
+				walk(s.Body)
+				names = old
+				continue
 			case "remember":
 				checkExpr(s, m[1], false)
 				names[m[2]] = true
@@ -733,6 +767,7 @@ func analyze(p *Program) []Diagnostic {
 	walk(p.Statements)
 	ds = append(ds, checkActionContracts(p, actions, visibleDefs)...)
 	ds = append(ds, checkStreamOwnership(p, actions)...)
+	ds = append(ds, checkStreamAliasCalls(p)...)
 	ds = append(ds, checkStreamSendPlacement(p.Statements)...)
 	return ds
 }
@@ -758,8 +793,10 @@ func checkStreamSendPlacement(statements []*Statement) []Diagnostic {
 }
 
 type streamOwnershipState struct {
-	line     int
-	consumed bool
+	line        int
+	consumed    bool
+	derived     bool
+	obligations []string
 }
 
 func streamTarget(p *Program, actions map[string]*Statement, name string, explicit *Module) (known, streaming, hosted bool) {
@@ -856,7 +893,7 @@ func checkStreamOwnership(p *Program, actions map[string]*Statement) []Diagnosti
 					ds = append(ds, Diagnostic{s.Line, 1, "stream " + m[3] + " is already active; consume or close it before reopening"})
 					continue
 				}
-				owned[m[3]] = &streamOwnershipState{line: s.Line}
+				owned[m[3]] = &streamOwnershipState{line: s.Line, obligations: streamActionObligations(p, m[1])}
 			case "httpListen":
 				if openFailureHandlerRecovers(s) {
 					ds = append(ds, Diagnostic{s.Line, 1, "an opening failure handler cannot recover and continue because no stream handle exists; finish, fail, stop, or pass the failure on"})
@@ -866,7 +903,7 @@ func checkStreamOwnership(p *Program, actions map[string]*Statement) []Diagnosti
 					ds = append(ds, Diagnostic{s.Line, 1, "stream " + m[3] + " is already active; consume or close it before reopening"})
 					continue
 				}
-				owned[m[3]] = &streamOwnershipState{line: s.Line}
+				owned[m[3]] = &streamOwnershipState{line: s.Line, obligations: streamActionObligations(p, "http.listen")}
 			case "streamFor":
 				name := strings.TrimSpace(m[2])
 				state := owned[name]
@@ -910,6 +947,38 @@ func checkStreamOwnership(p *Program, actions map[string]*Statement) []Diagnosti
 					} else {
 						state.consumed = true
 					}
+				}
+			case "call", "sent":
+				var target, argsText, sink string
+				if s.Kind == "call" {
+					target, argsText, sink = m[1], m[2], m[3]
+				} else if sent := matchSent(s.Text); sent != nil {
+					target, argsText, sink = sent[1], sent[2], sent[4]
+					if argsText == "" {
+						argsText = sent[3]
+					}
+				}
+				if isStreamAliasCall(p, target) {
+					args := splitStreamAliasArguments(argsText)
+					if len(args) > 0 {
+						source := strings.TrimSpace(args[0])
+						if state := owned[source]; state == nil {
+							ds = append(ds, Diagnostic{s.Line, 1, source + " is not an owned stream"})
+						} else if state.consumed {
+							ds = append(ds, Diagnostic{s.Line, 1, source + " was already consumed"})
+						} else {
+							state.consumed = true
+							if sink != "" {
+								owned[sink] = &streamOwnershipState{line: s.Line, obligations: state.obligations}
+							}
+						}
+					}
+				}
+				walk(s.Body, owned, inStreamLoop, false)
+			case "quietStream", "limitStream", "batchStream", "distinctStream", "distinctKeyStream", "idleStream", "takeForStream", "deadlineStream", "filterStream", "projectStream", "handleEachStream", "handleOneStream", "newestStream", "conflateStream", "exhaustStream":
+				ds = append(ds, checkStreamConstruction(p, s, m, owned)...)
+				for _, body := range streamHandlerBodies(s) {
+					walk(body, owned, true, true)
 				}
 			case "keep", "sort", "group", "map", "for", "require":
 				index := 1
@@ -986,7 +1055,7 @@ func checkStreamOwnership(p *Program, actions map[string]*Statement) []Diagnosti
 	owned := map[string]*streamOwnershipState{}
 	walk(p.Statements, owned, false, false)
 	for name, state := range owned {
-		if !state.consumed {
+		if !state.consumed && !state.derived {
 			ds = append(ds, Diagnostic{state.line, 1, "stream " + name + " remains active; consume it, close it, or transfer ownership"})
 		}
 	}
@@ -1588,6 +1657,9 @@ func visibleFailureDefinitionsWithProblems(p *Program) (map[string]*FailureDef, 
 
 func visibleFailuresFrom(local map[string]*FailureDef, modules map[string]*Module, localOwner string) (map[string]*FailureDef, []string) {
 	result := builtInFailures()
+	for name, definition := range reservedStreamFailureDefs() {
+		result[name] = definition
+	}
 	owners := map[string]string{}
 	for name := range result {
 		owners[name] = "the SysOneScript runtime"
@@ -1907,4 +1979,728 @@ func actionBodyBinds(stmts []*Statement, wanted string) bool {
 		}
 	}
 	return false
+}
+
+// ---------------------------------------------------------------------------
+// Stream handling: static ownership, bounds, policy, effect, and obligation
+// checks for the canonical stream-handling grammar (docs/sysonescript-
+// stream-handling-spec.md).
+
+var streamDurationRe = regexp.MustCompile(`^(\d+(?:\.\d+)?)\s+(?:milliseconds?|seconds?|minutes?|hours?|days?)$`)
+
+// positiveDurationLiteral reports whether text is a positive duration literal
+// such as "500 milliseconds". Zero is invalid unless a construction explicitly
+// permits it, and none of the current constructions do.
+func positiveDurationLiteral(text string) bool {
+	m := streamDurationRe.FindStringSubmatch(strings.TrimSpace(text))
+	if m == nil {
+		return false
+	}
+	v, err := strconv.ParseFloat(m[1], 64)
+	return err == nil && v > 0
+}
+
+func validHTTPStatus(text string) bool {
+	code, err := strconv.Atoi(strings.TrimSpace(text))
+	return err == nil && code >= 400 && code <= 599
+}
+
+// isStreamAliasCall reports whether a qualified call targets a std/streams
+// technical alias: the one streaming surface that is valid as an ordinary
+// call because it names a derived stream.
+func isStreamAliasCall(p *Program, target string) bool {
+	alias, action, qualified := strings.Cut(target, ".")
+	if !qualified {
+		return false
+	}
+	mod := moduleAlias(p, alias)
+	if mod == nil || mod.Key != "std/streams" {
+		return false
+	}
+	_, known := streamAlias(action)
+	return known
+}
+
+func streamActionObligations(p *Program, target string) []string {
+	_, obligations := streamActionMetadata(p, target)
+	return obligations
+}
+
+func streamChild(s *Statement, kind string) *Statement {
+	for _, c := range s.Body {
+		if c.Kind == kind {
+			return c
+		}
+	}
+	return nil
+}
+
+func streamChildren(s *Statement, kind string) []*Statement {
+	var out []*Statement
+	for _, c := range s.Body {
+		if c.Kind == kind {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// streamSink resolves the derived binding name: either the header's inline
+// "called" name or a "called <name>" continuation line.
+func streamSink(s *Statement, inline string) string {
+	if inline != "" {
+		return inline
+	}
+	if c := streamChild(s, "calledName"); c != nil {
+		return match("calledName", c.Text)[1]
+	}
+	return ""
+}
+
+// streamHandlerBodies returns the handler statement lists of a handling
+// construction: bodies under its policy lines (or directly under the header
+// for the bounded and sequential forms).
+func streamHandlerBodies(s *Statement) [][]*Statement {
+	var out [][]*Statement
+	switch s.Kind {
+	case "handleEachStream", "handleOneStream", "filterStream", "projectStream":
+		out = append(out, s.Body)
+	case "newestStream", "conflateStream", "exhaustStream":
+		out = append(out, s.Body)
+		for _, c := range s.Body {
+			switch c.Kind {
+			case "newestCancel", "cancelPolicy", "conflatePolicy", "exhaustPolicy":
+				out = append(out, c.Body)
+			}
+		}
+	}
+	return out
+}
+
+// streamCallTargets lists every module or local action invoked by a handler.
+func streamCallTargets(bodies [][]*Statement) []string {
+	var targets []string
+	var walk func([]*Statement)
+	walk = func(sts []*Statement) {
+		for _, st := range sts {
+			switch st.Kind {
+			case "call":
+				if m := match("call", st.Text); m != nil {
+					targets = append(targets, m[1])
+				}
+			case "sent":
+				if m := matchSent(st.Text); m != nil {
+					targets = append(targets, m[1])
+				}
+			}
+			walk(st.Body)
+		}
+	}
+	for _, body := range bodies {
+		walk(body)
+	}
+	return targets
+}
+
+// streamActionMetadata resolves the declared effect and ownership metadata of
+// a module action. External module actions are consulted first because they
+// carry owned obligations beyond their native effect summary.
+func streamActionMetadata(p *Program, target string) (effects, obligations []string) {
+	if p == nil || !strings.Contains(target, ".") {
+		return nil, nil
+	}
+	alias, action, _ := strings.Cut(target, ".")
+	mod := moduleAlias(p, alias)
+	if mod == nil {
+		return nil, nil
+	}
+	if mod.external != nil {
+		for _, a := range mod.external.Actions {
+			if a.Name == action {
+				return a.Effects, a.Owns
+			}
+		}
+	}
+	if op, ok := mod.Native[action]; ok {
+		return op.Effects, nil
+	}
+	return nil, nil
+}
+
+// streamCancellingEffects are effect names that cancellation cannot undo:
+// the explicit stream vocabulary entry plus the mutating capability effects
+// external module definitions declare.
+var streamCancellingEffects = map[string]bool{
+	"non-idempotent": true, "write": true, "process": true, "network": true,
+}
+
+// streamHandlerNonIdempotent reports whether any invoked action declares an
+// effect that cancellation cannot undo.
+func streamHandlerNonIdempotent(p *Program, targets []string) bool {
+	for _, target := range targets {
+		effects, _ := streamActionMetadata(p, target)
+		for _, effect := range effects {
+			if streamCancellingEffects[effect] {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// streamHandlerOwnsObligations reports whether any invoked action owns
+// response, acknowledgment, or similar completion obligations.
+func streamHandlerOwnsObligations(p *Program, targets []string) bool {
+	for _, target := range targets {
+		if _, obligations := streamActionMetadata(p, target); len(obligations) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// statementMentionsBinding reports whether text references the item binding
+// as a whole word outside double-quoted strings. Quoted data and substrings
+// of longer identifiers ("deadline" for "line") are not uses of the binding.
+func statementMentionsBinding(text, item string) bool {
+	unquoted := string(maskQuoted(text))
+	re, err := regexp.Compile(`\b` + regexp.QuoteMeta(item) + `\b`)
+	if err != nil {
+		return false
+	}
+	return re.MatchString(unquoted)
+}
+
+// statementCompletesObligation reports whether one call or send statement
+// completes the item's obligations: it must use the item binding and either
+// invoke an action that owns obligations or name one of the inherited
+// obligation names.
+func statementCompletesObligation(p *Program, s *Statement, item string, obligations []string) bool {
+	if s.Kind != "call" && s.Kind != "sent" {
+		return false
+	}
+	if !statementMentionsBinding(s.Text, item) {
+		return false
+	}
+	var target string
+	if s.Kind == "call" {
+		target = match("call", s.Text)[1]
+	} else if m := matchSent(s.Text); m != nil {
+		target = m[1]
+	}
+	if len(streamActionObligations(p, target)) > 0 {
+		return true
+	}
+	for _, obligation := range obligations {
+		if statementMentionsBinding(s.Text, obligation) {
+			return true
+		}
+	}
+	return false
+}
+
+// pathsCompleteObligation reports whether every linearly reachable path
+// through the statement list completes the item's obligation. A statement
+// that completes it satisfies the path; when/otherwise chains require every
+// branch (plus the implicit else of a one-sided when) to complete.
+func pathsCompleteObligation(p *Program, sts []*Statement, item string, obligations []string) bool {
+	for i := 0; i < len(sts); i++ {
+		s := sts[i]
+		if statementCompletesObligation(p, s, item, obligations) {
+			return true
+		}
+		switch s.Kind {
+		case "when", "otherwise":
+			j := i
+			hasOtherwise := false
+			for j < len(sts) && (sts[j].Kind == "when" || sts[j].Kind == "otherwise") {
+				if sts[j].Kind == "otherwise" {
+					hasOtherwise = true
+				}
+				j++
+			}
+			rest := sts[j:]
+			for k := i; k < j; k++ {
+				branch := append(append([]*Statement{}, sts[k].Body...), rest...)
+				if !pathsCompleteObligation(p, branch, item, obligations) {
+					return false
+				}
+			}
+			if !hasOtherwise && !pathsCompleteObligation(p, rest, item, obligations) {
+				return false
+			}
+			i = j - 1
+		default:
+			if len(s.Body) > 0 && pathsCompleteObligation(p, s.Body, item, obligations) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// streamHandlerCompletesObligations reports whether every reachable handler
+// path completes the owned item's obligations.
+func streamHandlerCompletesObligations(p *Program, bodies [][]*Statement, item string, obligations []string) bool {
+	for _, body := range bodies {
+		if !pathsCompleteObligation(p, body, item, obligations) {
+			return false
+		}
+	}
+	return true
+}
+
+// checkStreamConstruction validates one canonical stream-handling statement
+// and updates the ownership map: the source binding is consumed, and derived
+// bindings become the new single owners, inheriting source obligations.
+func checkStreamConstruction(p *Program, s *Statement, m []string, owned map[string]*streamOwnershipState) []Diagnostic {
+	var ds []Diagnostic
+	diag := func(line int, format string, args ...any) {
+		ds = append(ds, Diagnostic{line, 1, fmt.Sprintf(format, args...)})
+	}
+	consume := func(name string, line int) []string {
+		state := owned[name]
+		if state == nil {
+			diag(line, "%s is not an owned stream", name)
+			return nil
+		}
+		if state.consumed {
+			diag(line, "%s was already consumed", name)
+			return nil
+		}
+		state.consumed = true
+		return state.obligations
+	}
+	// consumeOrNoun consumes name when it names an owned stream. Forms whose
+	// first noun names the item type rather than a binding ("limit metrics
+	// ...", "require an update ...") use this: an unknown name is an item
+	// noun, not an ownership error.
+	consumeOrNoun := func(name string, line int) []string {
+		if owned[name] == nil {
+			return nil
+		}
+		return consume(name, line)
+	}
+	// childNumber reads a numeric bound from a continuation line.
+	childNumber := func(kind string) string {
+		c := streamChild(s, kind)
+		if c == nil {
+			return ""
+		}
+		return match(kind, c.Text)[1]
+	}
+	bind := func(name string, line int, obligations []string) {
+		if name == "" {
+			return
+		}
+		if existing := owned[name]; existing != nil && !existing.consumed {
+			diag(line, "stream %s is already active; consume or close it before reusing the name", name)
+			return
+		}
+		owned[name] = &streamOwnershipState{line: line, derived: true, obligations: obligations}
+	}
+	switch s.Kind {
+	case "quietStream":
+		if !positiveDurationLiteral(m[3]) {
+			diag(s.Line, "the quiet duration must be a positive duration such as \"500 milliseconds\"")
+		}
+		bound := m[4]
+		if bound == "" {
+			bound = childNumber("streamPendingBound")
+		}
+		if m[1] != "" && bound == "" {
+			diag(s.Line, "keyed quiet waiting requires a bounded key count: add \"with at most N pending %ss\"", m[1])
+		} else if bound != "" {
+			if n, err := strconv.Atoi(bound); err != nil || n <= 0 {
+				diag(s.Line, "the pending-key bound must be a positive integer")
+			}
+		}
+		obligations := consume(m[2], s.Line)
+		sink := streamSink(s, m[5])
+		if sink == "" {
+			diag(s.Line, "quiet waiting must name its derived stream: add \"called <name>\"")
+		}
+		bind(sink, s.Line, obligations)
+	case "limitStream":
+		allowanceText := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(m[3]), "at most "))
+		if allowanceText != "one" {
+			if allowance, err := strconv.Atoi(allowanceText); err != nil || allowance <= 0 {
+				diag(s.Line, "the rate allowance must be \"one\" or a positive integer")
+			}
+		}
+		policy := m[5]
+		policies := streamChildren(s, "throttlePolicy")
+		if policy == "" && len(policies) == 0 {
+			diag(s.Line, "the rate policy is mandatory: add a line \"keeping the first\" or \"keeping the latest\"")
+		} else if len(policies) > 1 || (policy != "" && len(policies) > 0) {
+			diag(s.Line, "the rate policy must be declared exactly once")
+		} else if policy == "" {
+			policy = match("throttlePolicy", policies[0].Text)[1]
+		}
+		bound := m[6]
+		if bound == "" {
+			bound = childNumber("streamKeyBound")
+		}
+		if m[2] != "" && bound == "" {
+			diag(s.Line, "keyed rate limiting requires a bounded key count: add \"with at most N %ss\"", m[2])
+		} else if bound != "" {
+			if n, err := strconv.Atoi(bound); err != nil || n <= 0 {
+				diag(s.Line, "the rate-limit key bound must be a positive integer")
+			}
+		}
+		obligations := consumeOrNoun(m[1], s.Line)
+		if rejection := streamChild(s, "rejectExcess"); rejection != nil && !validHTTPStatus(match("rejectExcess", rejection.Text)[1]) {
+			diag(rejection.Line, "the rejection status must be an integer from 400 through 599")
+		}
+		if len(obligations) > 0 {
+			if rejection := streamChild(s, "rejectExcess"); rejection == nil {
+				diag(s.Line, "rate limiting may drop items that own obligations; add \"rejecting excess %s with status <code>\" to complete them", m[1])
+			}
+		}
+		sink := streamSink(s, m[7])
+		if sink == "" {
+			diag(s.Line, "rate limiting must name its derived stream: add \"called <name>\"")
+		}
+		bind(sink, s.Line, obligations)
+	case "handleEachStream":
+		bound := m[3]
+		if bound == "" {
+			bound = childNumber("streamBound")
+		}
+		if bound == "" {
+			diag(s.Line, "the handling policy is ambiguous: add \"with at most N at once\" for concurrent handling or \"one at a time\" for sequential handling")
+		} else if n, err := strconv.Atoi(bound); err != nil || n <= 0 {
+			diag(s.Line, "the concurrency bound must be a positive integer")
+		}
+		obligations := consume(m[2], s.Line)
+		bodies := streamHandlerBodies(s)
+		if len(obligations) > 0 && !streamHandlerCompletesObligations(p, bodies, m[1], obligations) {
+			diag(s.Line, "an owned source item must be completed, transferred, or explicitly rejected on every reachable handler path; the handler never uses %s", m[1])
+		}
+	case "handleOneStream":
+		obligations := consume(m[2], s.Line)
+		bodies := streamHandlerBodies(s)
+		if len(obligations) > 0 && !streamHandlerCompletesObligations(p, bodies, m[1], obligations) {
+			diag(s.Line, "an owned source item must be completed, transferred, or explicitly rejected on every reachable handler path; the handler never uses %s", m[1])
+		}
+	case "newestStream":
+		if streamChild(s, "newestCancel") == nil {
+			diag(s.Line, "latest-only handling must declare its cancellation line: \"when a newer %s arrives cancel the previous work\"", m[1])
+		}
+		if m[2] != "" {
+			if streamChild(s, "streamBound") == nil || streamChild(s, "streamKnownBound") == nil {
+				diag(s.Line, "keyed latest-only handling requires both a concurrency bound (\"with at most N %ss at once\") and a known-key bound (\"and at most M known %ss\")", m[2], m[2])
+			}
+		} else if streamChild(s, "streamBound") != nil || streamChild(s, "streamKnownBound") != nil {
+			diag(s.Line, "non-keyed latest-only handling does not accept keyed concurrency or known-key bounds")
+			for _, kind := range []string{"streamBound", "streamKnownBound"} {
+				if value := childNumber(kind); value != "" {
+					if n, err := strconv.Atoi(value); err != nil || n <= 0 {
+						diag(s.Line, "keyed latest-only bounds must be positive integers")
+					}
+				}
+			}
+		}
+		bodies := streamHandlerBodies(s)
+		targets := streamCallTargets(bodies)
+		if streamHandlerNonIdempotent(p, targets) && streamChild(s, "effectAck") == nil {
+			diag(s.Line, "the handler performs non-idempotent effects; cancellation does not reverse completed effects; add \"acknowledging completed effects are not reversed\"")
+		}
+		if streamHandlerOwnsObligations(p, targets) && streamChild(s, "cancelPolicy") == nil {
+			diag(s.Line, "the handler owns completion obligations; add \"canceling an older %s with status <code>\" so canceled items are completed", m[1])
+		}
+		if policy := streamChild(s, "cancelPolicy"); policy != nil {
+			if status := match("cancelPolicy", policy.Text)[2]; !validHTTPStatus(status) {
+				diag(policy.Line, "the cancellation status must be an integer from 400 through 599")
+			}
+		}
+		consume(m[3], s.Line)
+	case "conflateStream":
+		if streamChild(s, "conflatePolicy") == nil {
+			diag(s.Line, "conflation must declare its retention line: \"keeping only the latest waiting update:\"")
+		} else if len(streamChildren(s, "conflatePolicy")) > 1 {
+			diag(s.Line, "conflation must declare its retention line exactly once")
+		}
+		if obligations := consume(m[1], s.Line); len(obligations) > 0 {
+			diag(s.Line, "conflation drops waiting items; it is invalid while items own unresolved obligations")
+		}
+	case "exhaustStream":
+		policies := streamChildren(s, "exhaustPolicy")
+		if len(policies) != 1 {
+			diag(s.Line, "busy handling must declare exactly one policy: \"ignoring new %ss while busy:\" or \"rejecting new %ss with status <code> while busy:\"", m[1], m[1])
+		}
+		source := strings.ReplaceAll(m[1], " ", "_")
+		obligations := consume(source, s.Line)
+		if len(policies) == 1 {
+			pm := match("exhaustPolicy", policies[0].Text)
+			if pm[1] == "ignoring" && len(obligations) > 0 {
+				diag(policies[0].Line, "ignoring is valid only for values without completion obligations; use \"rejecting new %ss with status <code> while busy:\"", m[1])
+			}
+			if pm[1] == "rejecting" {
+				if pm[2] == "" {
+					diag(policies[0].Line, "rejection must complete the item with an explicit status: \"rejecting new %ss with status <code> while busy:\"", m[1])
+				} else if !validHTTPStatus(pm[2]) {
+					diag(policies[0].Line, "the rejection status must be an integer from 400 through 599")
+				}
+			}
+		}
+	case "batchStream":
+		if count, err := strconv.Atoi(m[3]); err != nil || count <= 0 {
+			diag(s.Line, "the batch size bound must be a positive integer")
+		}
+		window := streamChild(s, "batchWindow")
+		if window == nil {
+			diag(s.Line, "batching requires a time window: add a line \"or after <duration>\"")
+		} else if !positiveDurationLiteral(match("batchWindow", window.Text)[1]) {
+			diag(window.Line, "the batch time window must be a positive duration such as \"5 seconds\"")
+		}
+		bound := m[4]
+		if bound == "" {
+			bound = childNumber("streamKeyBound")
+		}
+		if m[2] != "" && bound == "" {
+			diag(s.Line, "keyed batching requires a bounded key count: add \"with at most N %ss\"", m[2])
+		} else if bound != "" {
+			if n, err := strconv.Atoi(bound); err != nil || n <= 0 {
+				diag(s.Line, "the batch key bound must be a positive integer")
+			}
+		}
+		obligations := consumeOrNoun(m[1], s.Line)
+		sink := streamSink(s, m[5])
+		if sink == "" {
+			diag(s.Line, "batching must name its derived stream: add \"called <name>\"")
+		}
+		bind(sink, s.Line, obligations)
+	case "distinctStream":
+		obligations := consume(m[1], s.Line)
+		bind(m[2], s.Line, obligations)
+	case "distinctKeyStream":
+		obligations := consume(m[2], s.Line)
+		bind(m[3], s.Line, obligations)
+	case "idleStream":
+		if !positiveDurationLiteral(m[3]) {
+			diag(s.Line, "the idle deadline must be a positive duration such as \"30 seconds\"")
+		}
+		source := m[1]
+		if source == "" {
+			source = m[4]
+		}
+		if source == "" {
+			source = m[2]
+		}
+		if m[1] == "" && m[4] == "" && owned[source] == nil && owned[source+"s"] != nil {
+			source += "s"
+		}
+		var obligations []string
+		if source == "" || owned[source] == nil {
+			diag(s.Line, "idle deadlines require an active source stream")
+		} else {
+			obligations = consume(source, s.Line)
+		}
+		sink := streamSink(s, m[5])
+		if sink == "" {
+			diag(s.Line, "idle deadlines must name their derived stream: add \"called <name>\"")
+		}
+		bind(sink, s.Line, obligations)
+	case "takeForStream":
+		if !positiveDurationLiteral(m[2]) {
+			diag(s.Line, "the listening lifetime must be a positive duration such as \"10 minutes\"")
+		}
+		obligations := consume(m[1], s.Line)
+		sink := streamSink(s, m[3])
+		if sink == "" {
+			diag(s.Line, "bounded listening must name its derived stream: add \"called <name>\"")
+		}
+		bind(sink, s.Line, obligations)
+	case "deadlineStream":
+		if !positiveDurationLiteral(m[2]) {
+			diag(s.Line, "the deadline must be a positive duration such as \"10 minutes\"")
+		}
+		obligations := consume(m[1], s.Line)
+		sink := streamSink(s, m[3])
+		if sink == "" {
+			diag(s.Line, "required deadlines must name their derived stream: add \"called <name>\"")
+		}
+		bind(sink, s.Line, obligations)
+	case "filterStream":
+		keeps := 0
+		for _, block := range s.Body {
+			if block.Kind == "when" {
+				count := 0
+				for _, c := range block.Body {
+					if c.Kind == "keepItem" {
+						count++
+						if name := match("keepItem", c.Text)[1]; name != m[1] {
+							diag(c.Line, "the filter block must keep %s, not %s", m[1], name)
+						}
+					}
+				}
+				if count > 1 {
+					diag(block.Line, "the filter block must keep %s at most once per item", m[1])
+				}
+				keeps += count
+			}
+		}
+		if keeps == 0 {
+			diag(s.Line, "the filter block must keep %s on at least one path", m[1])
+		}
+		obligations := consume(m[2], s.Line)
+		bind(m[3], s.Line, obligations)
+	case "projectStream":
+		if uses := streamChildren(s, "useValue"); len(uses) != 1 {
+			diag(s.Line, "the projection block must use exactly one value: add a single \"use <value>\" line")
+		}
+		obligations := consume(m[2], s.Line)
+		bind(m[3], s.Line, obligations)
+	}
+	return ds
+}
+
+// checkStreamAliasCalls gives every std/streams technical alias one
+// deterministic meaning: the argument list must match the alias signature
+// exactly, and derived-stream aliases must name their sink. Aliases are
+// canonical calls, so they never reach the paid semantic engine.
+func checkStreamAliasCalls(p *Program) []Diagnostic {
+	if p == nil {
+		return nil
+	}
+	var ds []Diagnostic
+	var walk func([]*Statement)
+	walk = func(sts []*Statement) {
+		for _, s := range sts {
+			var target, argsText, sink string
+			switch s.Kind {
+			case "call":
+				m := match("call", s.Text)
+				target, argsText, sink = m[1], m[2], m[3]
+			case "sent":
+				m := matchSent(s.Text)
+				if m == nil {
+					continue
+				}
+				target, argsText, sink = m[1], m[2], m[4]
+				if argsText == "" {
+					argsText = m[3]
+				}
+			default:
+				walk(s.Body)
+				continue
+			}
+			alias, action, qualified := strings.Cut(target, ".")
+			if !qualified {
+				walk(s.Body)
+				continue
+			}
+			mod := moduleAlias(p, alias)
+			if mod == nil || mod.Key != "std/streams" {
+				walk(s.Body)
+				continue
+			}
+			info, known := streamAlias(action)
+			if !known {
+				ds = append(ds, Diagnostic{s.Line, 1, action + " is not a std/streams operation"})
+				continue
+			}
+			var args []string
+			if strings.TrimSpace(argsText) != "" {
+				args = splitStreamAliasArguments(argsText)
+			}
+			if len(args) != len(info.Params) {
+				ds = append(ds, Diagnostic{s.Line, 1, fmt.Sprintf("streams.%s expects %d argument(s) (%s); got %d. It means: %s", action, len(info.Params), strings.Join(info.Params, ", "), len(args), info.Canonical)})
+				continue
+			}
+			ds = append(ds, validateStreamAliasArguments(s.Line, action, args)...)
+			if action == "merge" || action == "concat" || action == "switch_latest" || action == "exhaust" || action == "conflate" {
+				ds = append(ds, Diagnostic{s.Line, 1, fmt.Sprintf("streams.%s requires a canonical handler block so effects and obligations can be checked; use: %s", action, info.Canonical)})
+				continue
+			}
+			if info.RequiresSink && sink == "" {
+				ds = append(ds, Diagnostic{s.Line, 1, fmt.Sprintf("streams.%s must name its derived stream; add \"called <name>\". It means: %s", action, info.Canonical)})
+			}
+			walk(s.Body)
+		}
+	}
+	walk(p.Statements)
+	return ds
+}
+
+var streamAliasStatusRe = regexp.MustCompile(`^reject with status (\d+)$`)
+
+// validateStreamAliasArguments checks every technical alias argument against
+// its canonical meaning: durations must be positive, counts positive
+// integers, throttle policies one of first/latest, and exhaust policies an
+// explicit rejection.
+func validateStreamAliasArguments(line int, action string, args []string) []Diagnostic {
+	var ds []Diagnostic
+	positiveDuration := func(i int) {
+		if !positiveDurationLiteral(args[i]) {
+			ds = append(ds, Diagnostic{line, 1, fmt.Sprintf("streams.%s requires a positive duration such as \"500 milliseconds\"; got %q", action, args[i])})
+		}
+	}
+	positiveInteger := func(i int) {
+		if n, err := strconv.Atoi(strings.TrimSpace(args[i])); err != nil || n <= 0 {
+			ds = append(ds, Diagnostic{line, 1, fmt.Sprintf("streams.%s requires a positive integer; got %q", action, args[i])})
+		}
+	}
+	switch action {
+	case "debounce", "idle_timeout", "take_for":
+		positiveDuration(1)
+	case "throttle":
+		positiveInteger(1)
+		if _, err := streamUnitDuration(args[2]); err != nil {
+			ds = append(ds, Diagnostic{line, 1, fmt.Sprintf("streams.throttle requires a positive window unit such as \"second\" or \"minute\"; got %q", args[2])})
+		}
+		if policy := strings.TrimSpace(args[3]); policy != "first" && policy != "latest" {
+			ds = append(ds, Diagnostic{line, 1, fmt.Sprintf("streams.throttle requires a keeping policy of \"first\" or \"latest\"; got %q", args[3])})
+		}
+	case "merge":
+		positiveInteger(1)
+	case "batch":
+		positiveInteger(1)
+		positiveDuration(2)
+	case "exhaust":
+		policy := strings.TrimSpace(args[1])
+		if policy != "ignore" {
+			status := streamAliasStatusRe.FindStringSubmatch(policy)
+			if status == nil || !validHTTPStatus(status[1]) {
+				ds = append(ds, Diagnostic{line, 1, fmt.Sprintf("streams.exhaust requires \"ignore\" or \"reject with status <code>\" (400 through 599); got %q", args[1])})
+			}
+		}
+	}
+	return ds
+}
+
+// splitStreamAliasArguments splits a comma-separated argument list, honoring
+// double-quoted text.
+func splitStreamAliasArguments(text string) []string {
+	masked := string(maskQuoted(text))
+	var args []string
+	start := 0
+	for i := 0; i <= len(masked); i++ {
+		if i == len(masked) || masked[i] == ',' {
+			if field := strings.TrimSpace(text[start:i]); field != "" {
+				args = append(args, field)
+			}
+			start = i + 1
+		}
+	}
+	return args
+}
+
+// reservedStreamFailureDefs are the reserved typed failures of the stream
+// handling model. They exist before the runtime registers them so failure
+// handlers and redefinitions are checked consistently.
+func reservedStreamFailureDefs() map[string]*FailureDef {
+	integer := func() TypeRef { return TypeRef{Name: "integer"} }
+	text := func() TypeRef { return TypeRef{Name: "text"} }
+	duration := func() TypeRef { return TypeRef{Name: "duration"} }
+	optionalText := func() TypeRef { return TypeRef{Name: "text", Optional: true} }
+	return map[string]*FailureDef{
+		"StreamKeyLimitExceeded":         {Name: "StreamKeyLimitExceeded", Fields: []RecordField{{Name: "limit", Type: integer()}, {Name: "operation", Type: text()}}},
+		"StreamConcurrencyLimitExceeded": {Name: "StreamConcurrencyLimitExceeded", Fields: []RecordField{{Name: "limit", Type: integer()}}},
+		"StreamIdleTimeout":              {Name: "StreamIdleTimeout", Fields: []RecordField{{Name: "idle_for", Type: duration()}}},
+		"StreamDeadlineExceeded":         {Name: "StreamDeadlineExceeded", Fields: []RecordField{{Name: "deadline", Type: duration()}}},
+		"StreamHandlerCleanupFailed":     {Name: "StreamHandlerCleanupFailed", Fields: []RecordField{{Name: "operation", Type: text()}, {Name: "reason", Type: text()}}},
+		"StreamObligationAbandoned":      {Name: "StreamObligationAbandoned", Fields: []RecordField{{Name: "operation", Type: text()}, {Name: "item", Type: optionalText()}}},
+	}
 }

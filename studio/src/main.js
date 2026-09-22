@@ -4,7 +4,7 @@ import { commandLeaves, effectiveInputs, findByPath } from './commands.js'
 import { normalizeCatalog, searchEntries, searchLibraries, enabledView, libraryView, libraryEnabled, importPreview, entrySignature, needsJev, diagnosticsFor } from './vocabulary.js'
 import { installLanguageServices, diagnosticColumn } from './lsp.js'
 import { actionFailureContracts, failureOutput } from './failures.js'
-import { streamCanStop, streamElapsed, streamSummary } from './streams.js'
+import { streamCanStop, streamElapsed, streamSubtitle, streamSummary } from './streams.js'
 import * as monaco from 'monaco-editor'
 import editorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker'
 import { registerSOSLanguage } from './sos.js'
@@ -249,7 +249,7 @@ function renderStreams(streams = [], events = []) {
     const name = document.createElement('strong'); name.textContent = stream.binding || stream.id
     const status = document.createElement('span'); status.className = 'stream-state'; status.textContent = stream.state
     head.append(name, status)
-    const producer = document.createElement('p'); producer.className = 'stream-producer'; producer.textContent = `${stream.producer} · stream of ${stream.itemType}`
+    const producer = document.createElement('p'); producer.className = 'stream-producer'; producer.textContent = streamSubtitle(stream)
     const metrics = document.createElement('p'); metrics.className = 'stream-metrics'; metrics.textContent = `${streamSummary(stream)} · ${streamElapsed(stream)}`
     card.append(head, producer, metrics)
     if (stream.failure?.message) {

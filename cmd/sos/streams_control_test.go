@@ -187,3 +187,60 @@ func TestStreamControlCloseDoesNotWaitForAStalledInspector(t *testing.T) {
 		t.Fatal("close waited for a peer that was not reading")
 	}
 }
+
+func TestStreamControlCloseWritesByeFrameWithDroppedCount(t *testing.T) {
+	clientConn, serverPipe := net.Pipe()
+	defer serverPipe.Close()
+	client := &streamControlClient{
+		conn:       clientConn,
+		controller: sos.NewStreamController(),
+		events:     make(chan sos.StreamEvent, 2),
+		done:       make(chan struct{}),
+	}
+	lines := make(chan string, 4)
+	go func() {
+		defer close(lines)
+		scanner := bufio.NewScanner(serverPipe)
+		for scanner.Scan() {
+			lines <- scanner.Text()
+		}
+	}()
+	// No writeEvents goroutine: with the queue capped at two, the third and
+	// fourth events take the overflow path and increment the dropped counter.
+	for range 4 {
+		client.event(sos.StreamEvent{ID: "stream-1", Event: "opened"})
+	}
+	if got := client.Dropped(); got != 2 {
+		t.Fatalf("dropped=%d want 2", got)
+	}
+	client.close()
+	var bye struct {
+		Type    string `json:"type"`
+		Dropped int64  `json:"dropped"`
+	}
+	seen := false
+	for line := range lines {
+		var frame struct {
+			Type    string `json:"type"`
+			Dropped int64  `json:"dropped"`
+		}
+		if json.Unmarshal([]byte(line), &frame) != nil {
+			continue
+		}
+		if frame.Type == "bye" {
+			bye = frame
+			seen = true
+		}
+	}
+	if !seen || bye.Dropped != 2 {
+		t.Fatalf("bye frame seen=%v dropped=%d", seen, bye.Dropped)
+	}
+}
+
+func TestRunCLIRejectsStreamTokenFlag(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := RunCLI([]string{"run", "--stream-token", "secret", "script.sos"}, &stdout, &stderr)
+	if code != 2 || !strings.Contains(stderr.String(), "unknown flag --stream-token") {
+		t.Fatalf("code=%d stderr=%s", code, stderr.String())
+	}
+}

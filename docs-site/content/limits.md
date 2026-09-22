@@ -7,6 +7,8 @@ This site describes the 0.6 implementation. Earlier design proposals are not pro
 | Language | Canonical sentences, values, collections, actions, schemas and commands | Dynamic runtime values; not a complete static type system |
 | Jev | Explicit judgments, declared criteria, constrained semantic interpretation | Supported operation registry; not arbitrary code generation |
 | Packages | Local modules, multi-file packages, text/JSON/list/record libraries, filesystem/process primitives, vocabulary aliases | No remote dependency resolver |
+| Streams | Single-owner bounded streams, cancellation, materialization, bounded flow-control transformations and handlers, Python/Node stdio producers, live stream panels | Detached tasks, implicit infinite queues, and unbounded keyed state remain intentionally unsupported |
+| Stream inspection | Live stream panels over a loopback control channel authenticated by a `SOS_STREAM_TOKEN` environment token | Frames over 8 MiB and connections beyond 16 are rejected; a 2048-event lifecycle queue may drop events under extreme burst (counted and reported; snapshots remain authoritative) |
 | Parallel maps | Bounded isolated workers, ordered results, shared limits, structured failures | No nested maps or worker stdin; external effects remain shared |
 | Native build | Executable with interpreter and resolved source graph | Not direct machine-code lowering of each sentence |
 | WASM | Pure browser and WASI programs | No live Jev host adapter; browser filesystem operations unavailable |
@@ -14,6 +16,11 @@ This site describes the 0.6 implementation. Earlier design proposals are not pro
 | Budgets | Request counts and timeout limits, reported usage | No persistent account-wide spending cap; missing usage is unknown |
 | Editor assistance | On-demand analysis | Automatic assistance currently behaves as on-demand |
 | JavaScript | Browser WASM wrapper | No plain JavaScript emitter |
+
+Stream policies bound five independent dimensions: pending items, concurrent
+and waiting handlers, keyed state, aggregate partial-batch items, and retained
+bytes/timers. Keyed batch aggregate capacity is derived from its declared batch
+size and key count, so every language-level policy has a finite admission bound.
 
 ## Three meanings of “understood”
 

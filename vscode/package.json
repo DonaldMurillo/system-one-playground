@@ -299,17 +299,17 @@
       },
       {
         "command": "sysonescript.stopStream",
-        "title": "Stop Stream",
+        "title": "SysOneScript: Stop Stream",
         "category": "SysOneScript"
       },
       {
         "command": "sysonescript.refreshStreams",
-        "title": "Refresh Streams",
+        "title": "SysOneScript: Refresh Streams",
         "category": "SysOneScript"
       },
       {
         "command": "sysonescript.showStreamsOutput",
-        "title": "Show Stream Lifecycle",
+        "title": "SysOneScript: Show Stream Lifecycle",
         "category": "SysOneScript"
       },
       {
@@ -446,11 +446,6 @@
         }
       ],
       "view/title": [
-        {
-          "command": "sysonescript.stop",
-          "when": "view == sysonescript.project && sysonescript.processRunning",
-          "group": "navigation@1"
-        },
         {
           "command": "sysonescript.refresh",
           "when": "view == sysonescript.project",

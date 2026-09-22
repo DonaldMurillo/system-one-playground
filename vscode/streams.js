@@ -34,7 +34,10 @@ function canStopStream(stream) { return ['open','reading'].includes(stream?.stat
 function traceLine(session, event) {
   const at = event.updatedAt ? new Date(event.updatedAt).toISOString().slice(11, 23) : '--:--:--.---'
   const count = Number(event.itemsReceived || 0)
-  return `${at} ${session} ${String(event.event || 'snapshot').padEnd(9)} ${event.id} ${event.binding || '-'} state=${event.state} received=${count} buffered=${Number(event.itemsBuffered || 0)} credit=${Number(event.creditAvailable || 0)} producer=${event.producer || '-'}`
+  const origin = event.line > 0 ? ` line=${event.line}` : ''
+  const reason = ['completed', 'failed', 'stopped'].includes(event.state) && event.reason ? ` reason=${event.reason}` : ''
+  const policy = event.policy ? ` keys=${Number(event.policy.keys || 0)}/${Number(event.policy.max_keys || 0)} pending=${Number(event.policy.pending || 0)} timers=${Number(event.policy.timers || 0)}` : ''
+  return `${at} ${session} ${String(event.event || 'snapshot').padEnd(9)} ${event.id} ${event.binding || '-'}${event.itemType ? ` (${event.itemType})` : ''} state=${event.state} received=${count} buffered=${Number(event.itemsBuffered || 0)} credit=${Number(event.creditAvailable || 0)} producer=${event.producer || '-'}${policy}${origin}${reason}`
 }
 
 module.exports = { StreamStore, canStopStream, traceLine }

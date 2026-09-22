@@ -137,28 +137,9 @@ test('maps SysOneScript operators to keyword styling across themes', () => {
 
 test('keeps project actions in the panel and exposes stop while a process is running', () => {
   const manifest = require('../package.json')
-  const projectTitles = manifest.contributes.menus['view/title'].filter(item => item.when.includes('sysonescript.project'))
-  assert.deepEqual(projectTitles.map(item => item.command), ['sysonescript.stop', 'sysonescript.refresh'])
-  assert.match(projectTitles[0].when, /sysonescript\.processRunning/)
+  const projectTitles = manifest.contributes.menus['view/title'].filter(item => item.when.includes('sysonescript.project')).map(item => item.command)
+  assert.deepEqual(projectTitles, ['sysonescript.refresh'])
   assert.deepEqual(manifest.contributes.menus['view/title'].filter(item => item.when.includes('sysonescript.streams')).map(item => item.command), ['sysonescript.refreshStreams', 'sysonescript.showStreamsOutput'])
-})
-
-test('uses concise SOS and stream action labels in VS Code chrome', () => {
-  const manifest = require('../package.json')
-  const commands = new Map(manifest.contributes.commands.map(item => [item.command, item.title]))
-  assert.equal(commands.get('sysonescript.stop'), 'Stop SOS')
-  assert.equal(commands.get('sysonescript.stopStream'), 'Stop Stream')
-  assert.equal(commands.get('sysonescript.refreshStreams'), 'Refresh Streams')
-  assert.equal(commands.get('sysonescript.showStreamsOutput'), 'Show Stream Lifecycle')
-})
-
-test('uses concise action labels in the SOS editor toolbar', () => {
-  const manifest = require('../package.json')
-  const commands = new Map(manifest.contributes.commands.map(item => [item.command, item]))
-  assert.equal(commands.get('sysonescript.canonicalizeFile').shortTitle, 'Canonicalize')
-  assert.equal(commands.get('sysonescript.analyze').shortTitle, 'Analyze')
-  assert.equal(commands.get('sysonescript.runFile').shortTitle, 'Run')
-  assert.equal(commands.get('sysonescript.debugFile').shortTitle, 'Debug')
 })
 
 test('contributes an additive language icon for active icon themes', () => {

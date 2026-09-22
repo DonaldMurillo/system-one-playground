@@ -93,3 +93,104 @@ test('control server refuses a second client claiming a live session', async () 
     await server.close()
   }
 })
+
+async function waitFor(predicate, label) {
+  const deadline = Date.now() + 2000
+  while (!predicate()) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${label}`)
+    await new Promise(resolve => setTimeout(resolve, 10))
+  }
+}
+
+test('trace line surfaces terminal reason, item type and source line', () => {
+  const store = new StreamStore(); store.begin('run-1')
+  store.apply('run-1', {id:'stream-1', event:'stopped', state:'stopped', binding:'events', itemType:'sysone.data.Record', producer:'events.tail', line:12, reason:'consumer cancelled', itemsReceived:3})
+  const line = traceLine('run-1', store.list()[0])
+  assert.match(line, /state=stopped/)
+  assert.match(line, /\(sysone\.data\.Record\)/)
+  assert.match(line, /line=12/)
+  assert.match(line, /reason=consumer cancelled/)
+  const quiet = traceLine('run-1', {id:'stream-2', state:'reading', reason:'ignored until terminal'})
+  assert.doesNotMatch(quiet, /reason=/)
+})
+
+test('trace line exposes current and maximum derived key counts', () => {
+  const line = traceLine('run-1', {id:'stream-1', state:'reading', policy:{keys:2, max_keys:5, pending:1, timers:2}})
+  assert.match(line, /keys=2\/5 pending=1 timers=2/)
+})
+
+test('control server delivers a multi-megabyte frame', async () => {
+  const seen = []
+  const server = new StreamControlServer({onEvent:(session,event)=>seen.push([session,event])})
+  const address = await server.start()
+  const socket = net.connect(Number(address.split(':')[1]), '127.0.0.1')
+  socket.on('error', () => {})
+  socket.setEncoding('utf8')
+  socket.write(JSON.stringify({type:'hello', token:server.token, session:'run-1'})+'\n')
+  await new Promise(resolve => socket.once('data', resolve))
+  socket.write(JSON.stringify({type:'event', event:{id:'stream-1', state:'open', padding:'x'.repeat(2 * 1024 * 1024)}})+'\n')
+  await waitFor(() => seen.length === 1, 'large frame delivery')
+  assert.equal(seen[0][0], 'run-1')
+  assert.equal(seen[0][1].padding.length, 2 * 1024 * 1024)
+  socket.destroy(); await server.close()
+})
+
+test('control server destroys a socket whose frame exceeds the 8 MiB limit', async () => {
+  const errors = []
+  const server = new StreamControlServer({onError:error=>errors.push(error)})
+  const address = await server.start()
+  const socket = net.connect(Number(address.split(':')[1]), '127.0.0.1')
+  socket.on('error', () => {})
+  socket.setEncoding('utf8')
+  socket.write(JSON.stringify({type:'hello', token:server.token, session:'run-1'})+'\n')
+  await new Promise(resolve => socket.once('data', resolve))
+  socket.write(JSON.stringify({type:'event', event:{id:'stream-1', state:'open', padding:'x'.repeat(9 * 1024 * 1024)}})+'\n')
+  await new Promise(resolve => socket.once('close', resolve))
+  assert.ok(errors.some(error => /exceeded 8 MiB limit/.test(error.message)))
+  await server.close()
+})
+
+test('control server refuses connections beyond the connection cap', async () => {
+  const errors = []
+  const server = new StreamControlServer({onError:error=>errors.push(error)})
+  const port = Number((await server.start()).split(':')[1])
+  const sockets = []
+  for (let index = 0; index < 16; index++) {
+    const socket = net.connect(port, '127.0.0.1')
+    socket.on('error', () => {})
+    sockets.push(socket)
+  }
+  await waitFor(() => server.sockets.size === 16, 'sixteen accepted connections')
+  const extra = net.connect(port, '127.0.0.1')
+  extra.on('error', () => {})
+  await new Promise(resolve => extra.once('close', resolve))
+  assert.ok(errors.some(error => /connection limit/.test(error.message)))
+  sockets[0].setEncoding('utf8')
+  sockets[0].write(JSON.stringify({type:'hello', token:server.token, session:'run-1'})+'\n')
+  assert.equal(JSON.parse(await new Promise(resolve => sockets[0].once('data', resolve))).type, 'ready')
+  assert.equal(server.sockets.size, 16)
+  for (const socket of sockets) socket.destroy()
+  await server.close()
+})
+
+test('control server reports dropped events from a bye frame exactly once', async () => {
+  const byes = [], disconnects = []
+  const server = new StreamControlServer({
+    onBye:(session,dropped)=>byes.push([session,dropped]),
+    onDisconnect:session=>disconnects.push(session),
+  })
+  const address = await server.start()
+  const socket = net.connect(Number(address.split(':')[1]), '127.0.0.1')
+  socket.on('error', () => {})
+  socket.setEncoding('utf8')
+  socket.write(JSON.stringify({type:'hello', token:server.token, session:'run-1'})+'\n')
+  await new Promise(resolve => socket.once('data', resolve))
+  socket.write(JSON.stringify({type:'bye', dropped:7})+'\n')
+  socket.write(JSON.stringify({type:'bye', dropped:9})+'\n')
+  await waitFor(() => byes.length === 1, 'bye frame delivery')
+  assert.deepEqual(byes, [['run-1', 7]])
+  socket.destroy()
+  await waitFor(() => disconnects.length === 1, 'normal close handling after bye')
+  assert.deepEqual(disconnects, ['run-1'])
+  await server.close()
+})

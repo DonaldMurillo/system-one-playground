@@ -28,7 +28,10 @@ function emit(state, value) {
 
 function pumpFinite(state) {
   while (!state.ended && state.credit > 0 && state.sequence < state.count) {
-    emit(state, {sequence: state.sequence, message: `node event ${state.sequence}`})
+    const value = state.values
+      ? state.values[state.sequence]
+      : {sequence: state.sequence, message: `node event ${state.sequence}`}
+    emit(state, value)
   }
   if (state.sequence === state.count) finish(state)
 }
@@ -58,6 +61,13 @@ function openStream(request) {
     state.count = args.count
     streams.set(state.id, state)
     send({jsonrpc: '2.0', id: request.id, result: {streamId: state.id, itemType: 'Event'}})
+    pumpFinite(state)
+    return
+  }
+  if (action === 'statuses') {
+    Object.assign(state, {values: ['queued', 'queued', 'running'], count: 3})
+    streams.set(state.id, state)
+    send({jsonrpc: '2.0', id: request.id, result: {streamId: state.id, itemType: 'text'}})
     pumpFinite(state)
     return
   }

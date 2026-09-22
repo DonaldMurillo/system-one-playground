@@ -538,6 +538,10 @@ func (s *Server) handleStopStream(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "stream", "stream id is required")
 		return
 	}
+	if req.RunID == 0 {
+		writeError(w, http.StatusBadRequest, "runId", "runId is required to stop a stream")
+		return
+	}
 	s.mu.Lock()
 	controller := s.streams
 	running := s.cancel != nil
@@ -547,7 +551,7 @@ func (s *Server) handleStopStream(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "idle", "no run is active")
 		return
 	}
-	if req.RunID != 0 && req.RunID != runID {
+	if req.RunID != runID {
 		writeError(w, http.StatusConflict, "stale", "that stream belongs to an earlier run")
 		return
 	}

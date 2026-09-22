@@ -62,6 +62,13 @@ type = "integer"
 type = "stream of Event"
 
 [[action]]
+name = "statuses"
+description = "Emits duplicate scalar statuses for flow-control examples."
+
+[action.result]
+type = "stream of text"
+
+[[action]]
 name = "watch_market"
 description = "Emits a simulated live market tick at the requested interval. Replace the deterministic price source with a broker WebSocket without changing the SysOneScript consumer."
 

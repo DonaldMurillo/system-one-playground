@@ -46,7 +46,6 @@ type debugLaunch struct {
 	Model         string   `json:"model"`
 	MaxCalls      int      `json:"maxCalls"`
 	StreamControl string   `json:"streamControl"`
-	StreamToken   string   `json:"streamToken"`
 	StreamSession string   `json:"streamSession"`
 }
 
@@ -420,10 +419,9 @@ func (s *dapServer) start() error {
 		streamController := sos.NewStreamController()
 		var streamControl *streamControlClient
 		if s.launch.StreamControl != "" {
-			streamToken := s.launch.StreamToken
-			if streamToken == "" {
-				streamToken = os.Getenv("SOS_STREAM_TOKEN")
-			}
+			// The token never travels in launch JSON, which clients log; the
+			// extension injects SOS_STREAM_TOKEN into the adapter environment.
+			streamToken := os.Getenv("SOS_STREAM_TOKEN")
 			connected, connectErr := connectStreamControl(ctx, s.launch.StreamControl, streamToken, s.launch.StreamSession, streamController)
 			if connectErr != nil {
 				s.output("stderr", "Stream inspector unavailable: "+connectErr.Error()+"\n")

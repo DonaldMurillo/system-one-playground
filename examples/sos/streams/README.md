@@ -20,6 +20,7 @@ sos run failure.sos
 sos run node.sos
 sos run local.sos
 sos run market-watch.sos
+sos run flow-control.sos
 ```
 
 `main.sos` watches a simulated deployment as delayed updates arrive from the
@@ -49,6 +50,14 @@ weather polling client would supply real updates.
 SysOneScript, sends typed progress records as work happens, and deliberately
 stops after the successful deployment. This demonstrates that a stream is a
 live, cancellable producer rather than another spelling of a list loop.
+
+`flow-control.sos` combines both producer kinds in one run and exercises both
+language surfaces over the shared derived-stream runtime. The Node stdio feed
+uses `streams.distinct_consecutive` on scalar status values; the in-language
+record producer uses the canonical `keep only changes in stage from ...`
+wording with an explicit scalar key. The build is then cancelled early with
+`stop reading`, while a second in-language action ends in a declared
+`RegistryUnavailable` failure. It needs Node but not Python.
 
 The fixture honors item credit and acknowledges cancellation. Its stdout is
 protocol-only; program output still comes from `show`. Try replacing a bound

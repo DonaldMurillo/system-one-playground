@@ -24,6 +24,7 @@ type streamControlClient struct {
 	eventWG    sync.WaitGroup
 	eventMu    sync.Mutex
 	failed     atomic.Bool
+	dropped    atomic.Int64
 }
 
 type streamControlFrame struct {
@@ -97,8 +98,34 @@ func (c *streamControlClient) event(event sos.StreamEvent) {
 	default:
 		// Snapshots remain authoritative if an extreme burst exceeds the
 		// lifecycle queue; runtime execution must never block on tooling.
+		c.dropped.Add(1)
 		c.eventWG.Done()
 	}
+}
+
+// Dropped reports how many lifecycle events were discarded because the event
+// queue was full.
+func (c *streamControlClient) Dropped() int64 {
+	return c.dropped.Load()
+}
+
+// writeBye sends the farewell frame promised to the control server: the count
+// of lifecycle events dropped because the queue was full. It is strictly best
+// effort — if a concurrent write holds the mutex or the peer is not reading,
+// the frame is skipped rather than blocking close.
+func (c *streamControlClient) writeBye(dropped int64) {
+	if !c.writeMu.TryLock() {
+		return
+	}
+	defer c.writeMu.Unlock()
+	if conn, ok := c.conn.(net.Conn); ok {
+		_ = conn.SetWriteDeadline(time.Now().Add(100 * time.Millisecond))
+		defer func() { _ = conn.SetWriteDeadline(time.Time{}) }()
+	}
+	_ = json.NewEncoder(c.conn).Encode(struct {
+		Type    string `json:"type"`
+		Dropped int64  `json:"dropped"`
+	}{Type: "bye", Dropped: dropped})
 }
 
 func (c *streamControlClient) writeEvents() {
@@ -158,6 +185,7 @@ func (c *streamControlClient) close() {
 			c.eventMu.Lock()
 			c.failed.Store(true)
 			close(c.done)
+			c.writeBye(c.dropped.Load())
 			_ = c.conn.Close()
 			for {
 				select {

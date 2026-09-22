@@ -278,6 +278,31 @@ func (s *server) codeActions(params json.RawMessage) any {
 			},
 		})
 	}
+	// A std/streams technical alias call offers its deterministic canonical
+	// rewrite. Aliases never change behavior; this only changes wording.
+	for lineNo, line := range strings.Split(doc.text, "\n") {
+		if lineNo < p.Range.Start.Line || lineNo > p.Range.End.Line {
+			continue
+		}
+		m := reStreamAliasCall.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+		rewrite, ok := streamAliasRewrite(m[1], m[2], m[3])
+		if !ok {
+			continue
+		}
+		indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+		replacement := indent + strings.ReplaceAll(rewrite, "\n", "\n"+indent)
+		actions = append(actions, map[string]any{
+			"title": "Rewrite as canonical stream handling",
+			"kind":  "quickfix",
+			"edit": map[string]any{"changes": map[string]any{p.TextDocument.URI: []any{map[string]any{
+				"range":   lspRange{Start: lspPosition{Line: lineNo, Character: 0}, End: lspPosition{Line: lineNo, Character: byteToChar(line, len(line))}},
+				"newText": replacement,
+			}}}},
+		})
+	}
 	// Dotted data access remains valid, but this opt-in action gives users the
 	// idiomatic `field of value` spelling without rewriting source silently.
 	dotted := regexp.MustCompile(`\b([a-z_][A-Za-z0-9_]*)\.([a-z_][A-Za-z0-9_]*)\b`)
@@ -376,6 +401,36 @@ var opDocs = map[string]struct{ effect, binds string }{
 	"using":         {"selects the model for provider calls", ""},
 	"model":         {"overrides the model for this scope", ""},
 	"accept":        {"sets the acceptance probability threshold", ""},
+
+	// Stream-handling constructions: canonical surface of std/streams.
+	"quietStream":       {"debounce: each item restarts the quiet timer; the latest item is emitted only after the complete duration with no newer item. Consumes the source; the derived stream becomes the single owner", "the derived stream"},
+	"limitStream":       {"throttle: bounded emission rate; the keeping policy is mandatory because there is no unambiguous default", "the derived stream"},
+	"throttlePolicy":    {"declares which item survives a rate window: the first or the latest", ""},
+	"rejectExcess":      {"completes dropped owned items with a typed rejection status", ""},
+	"handleEachStream":  {"merge: bounded concurrent handling; items start in source order, completion order is unconstrained", ""},
+	"handleOneStream":   {"concat: ordered sequential handling; the next item is requested only after the current handler finishes", ""},
+	"newestStream":      {"switch_latest: a newer item cancels the previous handler; only the newest surviving result becomes visible", ""},
+	"newestCancel":      {"declares that a newer arrival cancels the previous handler's work", ""},
+	"effectAck":         {"acknowledges that cancellation does not reverse completed effects; the risk becomes visible and auditable", ""},
+	"cancelPolicy":      {"completes canceled owned items with a typed rejection status", ""},
+	"streamBound":       {"bounds the number of concurrent keyed handlers", ""},
+	"streamKnownBound":  {"bounds the number of known keys", ""},
+	"conflateStream":    {"conflate: the active handler is never canceled; at most one waiting item is retained and replaced by newer arrivals", ""},
+	"conflatePolicy":    {"retains only the latest waiting item while the active handler runs", ""},
+	"exhaustStream":     {"exhaust: new arrivals are ignored or explicitly rejected while a handler is busy", ""},
+	"exhaustPolicy":     {"declares the busy policy: ignoring (unowned items only) or typed rejection", ""},
+	"batchStream":       {"batch: bounded batches emitted on the count or time limit, whichever happens first", "the derived stream of bounded lists"},
+	"batchWindow":       {"the time limit after which a nonempty partial batch is emitted", ""},
+	"distinctStream":    {"distinct_consecutive: only the immediately previous item is retained; consecutive repeats are dropped", "the derived stream"},
+	"distinctKeyStream": {"distinct_consecutive over one declared scalar key", "the derived stream"},
+	"idleStream":        {"idle_timeout: no item during the duration fails with StreamIdleTimeout and cancels upstream", "the derived stream"},
+	"takeForStream":     {"take_for: bounded observation; upstream is canceled at the deadline and the stream completes normally", "the derived stream"},
+	"deadlineStream":    {"fails with StreamDeadlineExceeded if the source has not finished within the duration", "the derived stream"},
+	"filterStream":      {"block-based filter: the block must keep the item at most once per path", "the derived stream"},
+	"keepItem":          {"keeps the current item in a filter block", ""},
+	"projectStream":     {"block-based projection: the block must use exactly one value on every successful path", "the derived stream"},
+	"useValue":          {"provides the projected value", ""},
+	"calledName":        {"names the derived stream of a transformation", "the derived stream"},
 }
 
 var (

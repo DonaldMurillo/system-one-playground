@@ -1,0 +1,72 @@
+# Flow control across producer kinds: one program combines an in-language
+# streaming action with a Node.js stdio plugin stream.
+#
+# 1. Credit-based consumption: the plugin may emit only within the credit the
+#    runtime grants, so it can never outpace its consumer.
+# 2. Bounded collection: `collect at most` materializes under an explicit
+#    overflow bound instead of an unbounded buffer.
+# 3. Early cancellation: `stop reading` cancels one producer mid-stream while
+#    the other has already completed on its own.
+# 4. Terminal reason handling: a declared typed failure ends a stream and the
+#    consumer keeps the items it already observed.
+import "example/streams-node" as node_events
+import "std/streams" as streams
+
+define DeployUpdate:
+  stage as text
+  detail as text
+
+define failure RegistryUnavailable:
+
+# In-language producer. The consumer will cancel it after the test stage, so
+# the publish item below is never observed.
+to watch_build streaming DeployUpdate:
+  send {"stage": "build", "detail": "image built"}
+  send {"stage": "build", "detail": "duplicate build notification"}
+  send {"stage": "test", "detail": "suite passed"}
+  send {"stage": "publish", "detail": "artifact released"}
+  finish
+
+# In-language producer that ends in its declared terminal failure.
+to watch_publish streaming DeployUpdate may fail with RegistryUnavailable:
+  send {"stage": "upload", "detail": "artifact uploaded"}
+  send {"stage": "verify", "detail": "checksum verified"}
+  fail RegistryUnavailable with "registry rejected the artifact"
+
+show "Flow control: an in-language producer and a Node stdio producer"
+
+# Both producers are open at once. The in-language action starts lazily; the
+# node plugin emits only the items its granted credit window allows.
+stream watch_build called raw_build
+stream node_events.statuses called feed
+
+# The technical alias and canonical wording lower onto the same derived-stream
+# runtime. These two sources intentionally use different producer types.
+call streams.distinct_consecutive with feed called unique_feed
+keep only changes in stage from raw_build called build
+
+# The node producer completes naturally: 3 statuses arrive under the 5-item
+# bound and the repeated `queued` status is removed before collection.
+collect at most 5 items from unique_feed called delivered
+show "Node producer completed with {count of delivered} distinct statuses from 3 events"
+for each status in delivered:
+  show "node status: {status}"
+
+# The build producer is cancelled early: `stop reading` ends the loop, cancels
+# the action at its current send, and the publish stage never runs.
+for each update from build:
+  show "build [{stage of update}] {detail of update}"
+  when stage of update is "test":
+    show "build is healthy; canceling the remaining stages"
+    stop reading
+show "Build watch stopped early; the publish stage never ran"
+
+# The publish producer ends in its declared typed failure. The handler names
+# the terminal reason and recovers, keeping the two items already observed.
+stream watch_publish called publish
+for each update from publish:
+  show "publish [{stage of update}] {detail of update}"
+  on failure RegistryUnavailable called problem:
+    show "publish failed: {message of problem}"
+    recover
+show "Publish watch handled its terminal failure and kept both items"

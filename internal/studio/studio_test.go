@@ -34,6 +34,10 @@ func TestStreamEndpointsTrackRunGenerationAndRejectStaleControl(t *testing.T) {
 	s.streams = sos.NewStreamController()
 	s.mu.Unlock()
 	t.Cleanup(func() { s.mu.Lock(); s.cancel = nil; s.mu.Unlock() })
+	res, noRunID := post(t, ts, s.Token(), "/api/streams/stop", `{"id":"stream-1"}`)
+	if res.StatusCode != http.StatusBadRequest || errKind(t, noRunID) != "runId" {
+		t.Fatalf("stop without runId: %d %#v", res.StatusCode, noRunID)
+	}
 	res, stale := post(t, ts, s.Token(), "/api/streams/stop", `{"id":"stream-1","runId":1}`)
 	if res.StatusCode != http.StatusConflict || errKind(t, stale) != "stale" {
 		t.Fatalf("stale stop: %d %#v", res.StatusCode, stale)

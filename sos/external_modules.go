@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	stdruntime "runtime"
 	"slices"
 	"sort"
@@ -93,6 +94,7 @@ type ExternalAction struct {
 	Name, Description, Timeout string
 	Failures                   []string        `toml:"failures"`
 	Effects                    []string        `toml:"effects"`
+	Owns                       []string        `toml:"owns"`
 	Targets                    []string        `toml:"targets"`
 	Parameters                 []ExternalField `toml:"parameter"`
 	Result                     struct {
@@ -115,6 +117,23 @@ func LoadExternalModuleDefinition(path string) (*ExternalModuleDefinition, error
 	}
 	return decodeExternalModuleDefinition(path, b)
 }
+
+// externalEffectVocabulary is the closed set of effect and cancellation
+// classes stream handling, tooling, and safety checks understand. Declaring
+// an effect outside it is rejected at definition decode time.
+var externalEffectVocabulary = []string{
+	"pure", "read", "read-only", "write", "process", "network", "secret",
+	"idempotent", "compensatable", "non-idempotent",
+	"cancellation-safe", "cancellation-delayed",
+}
+
+var externalEffectNames = func() map[string]bool {
+	set := map[string]bool{}
+	for _, effect := range externalEffectVocabulary {
+		set[effect] = true
+	}
+	return set
+}()
 
 func decodeExternalModuleDefinition(path string, b []byte) (*ExternalModuleDefinition, error) {
 	var d ExternalModuleDefinition
@@ -163,6 +182,7 @@ func decodeExternalModuleDefinition(path string, b []byte) (*ExternalModuleDefin
 	if !d.Capabilities.Process {
 		return nil, fmt.Errorf("external module definition: command runtime requires capabilities.process = true")
 	}
+
 	seen := map[string]bool{}
 	for _, a := range d.Actions {
 		if a.Name == "" || seen[a.Name] {
@@ -171,6 +191,16 @@ func decodeExternalModuleDefinition(path string, b []byte) (*ExternalModuleDefin
 		seen[a.Name] = true
 		if d.Runtime.Kind == "command" && a.Command.Program == "" {
 			return nil, fmt.Errorf("external module definition: action %s requires action.command.program", a.Name)
+		}
+		for _, obligation := range a.Owns {
+			if !streamObligationNameRe.MatchString(obligation) {
+				return nil, fmt.Errorf("external module definition: action %s owns %q; owned obligations are lowercase hyphenated names such as \"response\" or \"acknowledgment\"", a.Name, obligation)
+			}
+		}
+		for _, effect := range a.Effects {
+			if !externalEffectNames[effect] {
+				return nil, fmt.Errorf("external module definition: action %s declares effect %q; effects come from the closed effect vocabulary %v", a.Name, effect, externalEffectVocabulary)
+			}
 		}
 		for _, arg := range a.Command.Arguments {
 			if strings.Contains(arg, "${") && !(strings.HasPrefix(arg, "${") && strings.HasSuffix(arg, "}") && strings.Count(arg, "${") == 1) {
@@ -2843,4 +2873,172 @@ func ResolveExternalModuleDefinition(dir, modulePath string) (*ExternalModuleDef
 		}
 	}
 	return nil, fmt.Errorf("external module %q is not registered", modulePath)
+}
+
+// ---------------------------------------------------------------------------
+// std/streams technical aliases. Every alias is a deterministic, canonical
+// call that maps to exactly one canonical stream-handling sentence; none of
+// them ever reaches the paid semantic engine.
+
+// StreamAliasInfo is one searchable technical operation of std/streams.
+type StreamAliasInfo struct {
+	Name         string
+	Params       []string
+	Canonical    string
+	Description  string
+	RequiresSink bool
+}
+
+var streamAliasTable = []StreamAliasInfo{
+	{Name: "debounce", Params: []string{"source", "duration"}, RequiresSink: true,
+		Canonical:   "wait for <source> to be quiet for <duration> called <name>",
+		Description: "Each item restarts the quiet timer; the latest item is emitted only after the complete duration passes with no newer item."},
+	{Name: "throttle", Params: []string{"source", "allowance", "window", "policy"}, RequiresSink: true,
+		Canonical:   "limit <source> to <allowance> each <window> keeping the <policy> called <name>",
+		Description: "Bounded emission rate; the keeping policy (first or latest) is mandatory because there is no unambiguous default."},
+	{Name: "merge", Params: []string{"source", "concurrency"},
+		Canonical:   "handle each item from <source> with at most <n> at once:",
+		Description: "Bounded concurrent handling: items start in source order, completion order is unconstrained."},
+	{Name: "concat", Params: []string{"source"},
+		Canonical:   "handle each item from <source> one at a time:",
+		Description: "Ordered sequential handling: the next item is requested only after the current handler finishes."},
+	{Name: "switch_latest", Params: []string{"source"},
+		Canonical:   "handle only the newest item from <source>:\n  when a newer item arrives cancel the previous work",
+		Description: "A newer item cancels the previous handler; only the newest surviving result becomes visible."},
+	{Name: "exhaust", Params: []string{"source", "policy"},
+		Canonical:   "handle one <source> at a time:\n  ignoring new items while busy:  # or: rejecting new items with status <code> while busy:",
+		Description: "New arrivals are ignored or explicitly rejected while a handler is busy; ignoring is invalid for owned items."},
+	{Name: "conflate", Params: []string{"source"},
+		Canonical:   "handle <source> one at a time:\n  keeping only the latest waiting item:",
+		Description: "The active handler is never canceled; at most one waiting item is retained and replaced by newer arrivals."},
+	{Name: "batch", Params: []string{"source", "count", "duration"}, RequiresSink: true,
+		Canonical:   "group <source> into batches of at most <count>\n  or after <duration>\n  called <name>",
+		Description: "Bounded batches emitted on the count or time limit, whichever happens first; empty periodic batches are not emitted."},
+	{Name: "distinct_consecutive", Params: []string{"source"}, RequiresSink: true,
+		Canonical:   "ignore consecutive duplicate <source> called <name>",
+		Description: "Only the immediately previous item is retained; consecutive repeats are dropped. Global uniqueness is a different, explicitly bounded operation."},
+	{Name: "idle_timeout", Params: []string{"source", "duration"}, RequiresSink: true,
+		Canonical:   "require an item at least every <duration> from <source> called <name>",
+		Description: "If no item arrives during the duration, upstream is canceled and the derived stream fails with StreamIdleTimeout."},
+	{Name: "take_for", Params: []string{"source", "duration"}, RequiresSink: true,
+		Canonical:   "listen to <source> for at most <duration> then stop normally called <name>",
+		Description: "Bounded observation: upstream is canceled at the deadline and the derived stream completes normally."},
+}
+
+func streamAlias(name string) (StreamAliasInfo, bool) {
+	for _, info := range streamAliasTable {
+		if info.Name == name {
+			return info, true
+		}
+	}
+	return StreamAliasInfo{}, false
+}
+
+// StreamAliases lists every std/streams technical operation, sorted by name.
+func StreamAliases() []StreamAliasInfo {
+	out := append([]StreamAliasInfo(nil), streamAliasTable...)
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+// StreamAliasRewrite deterministically rewrites one technical alias call into
+// its canonical sentence. It returns the canonical text and whether the
+// argument list matches the alias signature.
+func StreamAliasRewrite(action string, args []string, sink string) (string, bool) {
+	info, known := streamAlias(action)
+	if !known {
+		return "", false
+	}
+	if len(args) != len(info.Params) {
+		return "", false
+	}
+	arg := func(i int) string {
+		if i < len(args) {
+			return strings.TrimSpace(args[i])
+		}
+		return "<" + info.Params[i] + ">"
+	}
+	name := "<name>"
+	if sink != "" {
+		name = sink
+	}
+	switch action {
+	case "debounce":
+		return "wait for " + arg(0) + " to be quiet for " + arg(1) + " called " + name, true
+	case "throttle":
+		policy := arg(3)
+		if policy != "first" && policy != "latest" {
+			return "", false
+		}
+		return "limit " + arg(0) + " to " + arg(1) + " each " + arg(2) + " keeping the " + policy + " called " + name, true
+	case "merge":
+		return "handle each item from " + arg(0) + " with at most " + arg(1) + " at once:", true
+	case "concat":
+		return "handle each item from " + arg(0) + " one at a time:", true
+	case "switch_latest":
+		return "handle only the newest item from " + arg(0) + ":\nwhen a newer item arrives cancel the previous work", true
+	case "exhaust":
+		if arg(1) == "ignore" {
+			return "handle one " + arg(0) + " at a time:\nignoring new items while busy:", true
+		}
+		if status, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(arg(1)), "reject with status "))); err == nil && status >= 400 && status <= 599 {
+			return "handle one " + arg(0) + " at a time:\nrejecting new items with status " + strconv.Itoa(status) + " while busy:", true
+		}
+		return "", false
+	case "conflate":
+		return "handle " + arg(0) + " one at a time:\nkeeping only the latest waiting update:", true
+	case "batch":
+		return "group " + arg(0) + " into batches of at most " + arg(1) + "\nor after " + arg(2) + "\ncalled " + name, true
+	case "distinct_consecutive":
+		return "ignore consecutive duplicate " + arg(0) + " called " + name, true
+	case "idle_timeout":
+		return "require an item at least every " + arg(1) + " from " + arg(0) + " called " + name, true
+	case "take_for":
+		return "listen to " + arg(0) + " for at most " + arg(1) + " then stop normally called " + name, true
+	}
+	return "", false
+}
+
+var streamObligationNameRe = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
+
+func init() {
+	ops := map[string]NativeOp{}
+	for _, info := range streamAliasTable {
+		params := make([]NativeParam, 0, len(info.Params))
+		for _, name := range info.Params {
+			typ := "any"
+			if name == "duration" || name == "window" {
+				typ = "duration"
+			}
+			if name == "concurrency" || name == "count" {
+				typ = "integer"
+			}
+			params = append(params, NativeParam{Name: name, Type: typ})
+		}
+		failures := []string{}
+		switch info.Name {
+		case "debounce", "batch", "throttle":
+			failures = append(failures, "StreamKeyLimitExceeded")
+		case "merge":
+			failures = append(failures, "StreamConcurrencyLimitExceeded", "StreamHandlerCleanupFailed")
+		case "switch_latest", "exhaust", "conflate":
+			failures = append(failures, "StreamHandlerCleanupFailed", "StreamObligationAbandoned")
+		case "idle_timeout":
+			failures = append(failures, "StreamIdleTimeout")
+		case "take_for":
+			failures = append(failures, "StreamDeadlineExceeded")
+		}
+		ops[info.Name] = NativeOp{
+			Name:             info.Name,
+			Params:           params,
+			Result:           "stream of any",
+			Effects:          []string{"pure"},
+			PossibleFailures: failures,
+			Description:      info.Description + " Canonical form: " + info.Canonical,
+			Fn: func(args []any) (any, error) {
+				return nil, fmt.Errorf("streams transformations share one runtime implementation with the canonical sentences; the transformation runtime is not wired yet")
+			},
+		}
+	}
+	stdRegistry["std/streams"] = ops
 }

@@ -81,10 +81,8 @@ panel follows the active `.sos` file to its nearest `sos.toml`. It does not
 mirror the file system. File Run
 actions operate on the selected `.sos` file while retaining the containing
 project's `sos.toml`, working directory, and `.env`.
-While a run or debug session is active, **Stop SOS** appears in the
-status bar, the Project view title, and directly beneath **Run project**. It
-stops the active processes and closes their owned streams. Inspecting a stream
-in Variables never advances its
+Long-running runs remain cancellable from **Stop processes**, which also closes
+their owned streams. Inspecting a stream in Variables never advances its
 producer. The **Streams** view shows live runtime snapshots and offers an
 individual **Stop stream** action; **SysOneScript Streams** records lifecycle
 events without logging program-visible stream items.

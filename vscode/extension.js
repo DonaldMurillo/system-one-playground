@@ -281,16 +281,6 @@ function setPanelRun(action, value) {
   updateRunningUI()
 }
 
-function updateRunningUI() {
-  const state = extensionState
-  if (!state || state.disposed) return
-  const running = state.processes.size > 0 || state.debugSessions.size > 0
-  vscode.commands.executeCommand('setContext', 'sysonescript.processRunning', running)
-  if (running) state.stopStatus.show()
-  else state.stopStatus.hide()
-  state.tree.refresh()
-}
-
 function runPanelProcess(action, args, cwd, label, commandOverride, onClose, extraEnvironment = {}) {
 	const state = extensionState
   const command = commandOverride || runnerCommand()
@@ -833,9 +823,11 @@ class StreamsTreeProvider {
     if (!streams.length) return [this.message(session.status === 'running' ? 'No streams opened yet' : 'No streams were opened', 'circle-outline', session.label)]
     return streams.map(stream => {
       const icons = {open:'pulse', reading:'pulse', stopping:'loading~spin', stopped:'debug-stop', cancelled:'debug-stop', completed:'pass-filled', closed:'close', failed:'error', unknown:'warning'}
-      const item = new SysOneScriptItem(stream.binding || stream.id, vscode.TreeItemCollapsibleState.None, 'stream', session.root, undefined, icons[stream.state] || 'question', `${stream.state} · ${stream.itemsReceived || 0} items · ${stream.producer || ''}`)
+      const origin = stream.line > 0 ? ` · line ${stream.line}` : ''
+      const item = new SysOneScriptItem(stream.binding || stream.id, vscode.TreeItemCollapsibleState.None, 'stream', session.root, undefined, icons[stream.state] || 'question', `${stream.state} · ${stream.itemsReceived || 0} items · ${stream.itemType || 'unknown'}${origin} · ${stream.producer || ''}`)
       item.stream = {...stream, session:session.session}
-      item.tooltip = new vscode.MarkdownString(`**${stream.binding || stream.id}**\n\n${stream.producer || 'unknown producer'} · stream of ${stream.itemType || 'unknown'}\n\n${stream.itemsReceived || 0} received · ${stream.itemsBuffered || 0} buffered · ${stream.creditAvailable || 0} credit${stream.reason ? `\n\n${stream.reason}` : ''}`)
+      const terminal = ['completed', 'failed', 'stopped'].includes(stream.state)
+      item.tooltip = new vscode.MarkdownString(`**${stream.binding || stream.id}**\n\n${stream.producer || 'unknown producer'} · stream of ${stream.itemType || 'unknown'}${origin}\n\n${stream.itemsReceived || 0} received · ${stream.itemsBuffered || 0} buffered · ${stream.creditAvailable || 0} credit${terminal && stream.reason ? `\n\n${stream.reason}` : ''}`)
       if (session.file && stream.line > 0) item.command = {command:'vscode.open', title:'Reveal stream', arguments:[vscode.Uri.file(session.file), {selection:new vscode.Range(stream.line-1, 0, stream.line-1, 0)}]}
       return item
     })
@@ -1352,11 +1344,6 @@ function activate(context) {
   const tree = new SysOneScriptTreeProvider()
   const streamsTree = new StreamsTreeProvider()
   const streamStore = new StreamStore()
-  const stopStatus = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100)
-  stopStatus.name = 'SOS running process'
-  stopStatus.text = '$(debug-stop) Stop SOS'
-  stopStatus.tooltip = 'Stop the running SOS project, file, or debugger'
-  stopStatus.command = 'sysonescript.stop'
   const streamsServer = new StreamControlServer({
     onEvent(session, event) {
       streamStore.apply(session, event)
@@ -1364,6 +1351,10 @@ function activate(context) {
       streamsTree.refresh()
     },
     onDisconnect() { streamsTree.refresh() },
+    onBye(session, dropped) {
+      output.appendLine(`Stream inspector: session ${session} ended; ${dropped} lifecycle events dropped (snapshots remain authoritative)`)
+      streamsTree.refresh()
+    },
 	onError(error) { output.appendLine(`Stream inspector: ${error.message}`) },
   })
   const state = {
@@ -1374,7 +1365,6 @@ function activate(context) {
     tree,
     streamsTree,
     streamStore,
-    stopStatus,
     streamsServer,
     streamControlAddress: undefined,
     streamControlReady: undefined,
@@ -1411,8 +1401,7 @@ function activate(context) {
   state.tokenReady = context.secrets.get(JEV_SECRET_KEY).then(token => {
     if (!state.disposed) state.jevToken = token || undefined
   })
-  context.subscriptions.push(output, runOutput, streamsOutput, diagnostics, stopStatus)
-  vscode.commands.executeCommand('setContext', 'sysonescript.processRunning', false)
+  context.subscriptions.push(output, runOutput, streamsOutput, diagnostics)
 
   state.streamControlReady = streamsServer.start().then(address => { if (!state.disposed) state.streamControlAddress = address }).catch(error => output.appendLine(`Stream inspector unavailable: ${error.message}`))
   state.streamRefreshTimer = setInterval(() => refreshStreams().catch(() => {}), 250)
@@ -1428,7 +1417,6 @@ function activate(context) {
 		const state = extensionState
 		if (!state) return
 		state.debugSessions.add(session)
-		updateRunningUI()
 		endPendingDebugStream(state, session.configuration.__sysoneLaunchId, 0, false)
 		if (state.disposed || (session.configuration.__sysoneEpoch ?? -1) < state.debugEpoch) {
 			state.stoppedDebugSessions.add(session.id)

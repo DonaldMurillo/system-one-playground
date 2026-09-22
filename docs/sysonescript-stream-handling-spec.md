@@ -1,6 +1,6 @@
 # Readable stream handling and flow control
 
-Status: approved design; implementation pending
+Status: implemented
 
 This specification adds bounded stream transformations and concurrent handling
 policies to SysOneScript. It provides the practical behavior commonly described

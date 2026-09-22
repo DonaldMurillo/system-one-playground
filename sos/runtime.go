@@ -1061,13 +1061,6 @@ func (r *runtime) execute(s *Statement) error {
 			e = r.block(s.Body)
 			var stopped stopReadingValue
 			if errors.As(e, &stopped) {
-				var responseErr error
-				if r.opts.httpServers != nil {
-					responseErr = r.opts.httpServers.ensureResponded(item)
-				}
-				if responseErr != nil {
-					r.recordHTTPRuntimeFailure(s.Line, responseErr)
-				}
 				return stream.closeWithReason(r.ctx, "stop reading")
 			}
 			if e != nil {
@@ -1623,6 +1616,12 @@ func (r *runtime) execute(s *Statement) error {
 			return e
 		}
 		return &StopError{Message: v}
+	case "quietStream", "limitStream", "batchStream", "distinctStream", "distinctKeyStream", "idleStream", "takeForStream", "deadlineStream":
+		return r.executeStreamTransformation(s, m)
+	case "handleEachStream", "handleOneStream":
+		return r.executeStreamHandler(s, m)
+	case "newestStream", "conflateStream", "exhaustStream", "filterStream", "projectStream":
+		return r.executeStreamPolicy(s, m)
 	default:
 		return fmt.Errorf("construction %q is not executable here", s.Kind)
 	}
@@ -1655,6 +1654,13 @@ func (r *runtime) callImported(s *Statement, m []string) error {
 			return fmt.Errorf("action %s is not exported by module %s", action, mod.Name)
 		}
 		return fmt.Errorf("unknown action %s.%s", alias, action)
+	}
+	if mod.Key == "std/streams" {
+		vals, err := splitExpressions(m[2])
+		if err != nil {
+			return err
+		}
+		return r.executeStreamAliasCall(s, action, vals, m[3])
 	}
 	if e := r.tick(); e != nil {
 		return e
@@ -2094,4 +2100,561 @@ func remapStatements(statements []*Statement, sourceMap []int) {
 		}
 		remapStatements(s.Body, sourceMap)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Canonical stream-handling execution. Every canonical sentence and every
+// std/streams alias lowers onto the shared constructors in streams.go, so
+// both surfaces share one runtime implementation.
+// ---------------------------------------------------------------------------
+
+// parseStreamDurationLiteral converts a positive duration literal such as
+// "500 milliseconds" into a time.Duration.
+func parseStreamDurationLiteral(text string) (time.Duration, error) {
+	trimmed := strings.TrimSpace(text)
+	literal := streamDurationRe.FindStringSubmatch(trimmed)
+	if literal == nil {
+		return 0, fmt.Errorf("%q is not a duration literal such as \"500 milliseconds\"", trimmed)
+	}
+	value, err := strconv.ParseFloat(literal[1], 64)
+	if err != nil || value <= 0 {
+		return 0, fmt.Errorf("duration %q must be positive", trimmed)
+	}
+	fields := strings.Fields(trimmed)
+	unit := strings.TrimSuffix(fields[1], "s")
+	multiplier := map[string]time.Duration{
+		"millisecond": time.Millisecond, "second": time.Second,
+		"minute": time.Minute, "hour": time.Hour, "day": 24 * time.Hour,
+	}[unit]
+	if multiplier == 0 {
+		return 0, fmt.Errorf("%q uses an unsupported duration unit", trimmed)
+	}
+	return time.Duration(value * float64(multiplier)), nil
+}
+
+func streamUnitDuration(unit string) (time.Duration, error) {
+	switch strings.TrimSuffix(strings.TrimSuffix(unit, "s"), "s") {
+	case "millisecond":
+		return time.Millisecond, nil
+	case "second":
+		return time.Second, nil
+	case "minute":
+		return time.Minute, nil
+	case "hour":
+		return time.Hour, nil
+	case "day":
+		return 24 * time.Hour, nil
+	}
+	return 0, fmt.Errorf("unsupported rate window %q", unit)
+}
+
+// streamChildNumber reads a numeric bound from a continuation line.
+func streamChildNumber(s *Statement, kind string) (int, bool) {
+	for _, c := range s.Body {
+		if c.Kind == kind {
+			if n, err := strconv.Atoi(match(kind, c.Text)[1]); err == nil {
+				return n, true
+			}
+		}
+	}
+	return 0, false
+}
+
+// streamSinkName resolves the derived binding: the header's inline "called"
+// name or a "called <name>" continuation line.
+func streamSinkName(s *Statement, inline string) string {
+	if inline != "" {
+		return inline
+	}
+	for _, c := range s.Body {
+		if c.Kind == "calledName" {
+			return match("calledName", c.Text)[1]
+		}
+	}
+	return ""
+}
+
+// streamSourceOf resolves the consumed upstream handle for a name that must
+// be an owned stream.
+func (r *runtime) streamSourceOf(name string) (*streamHandle, error) {
+	stream, ok := r.env[name].(*streamHandle)
+	if !ok {
+		return nil, fmt.Errorf("%s is not an owned stream", name)
+	}
+	return stream, nil
+}
+
+// bindDerivedStream publishes one derived stream under its sink binding.
+func (r *runtime) bindDerivedStream(stream *streamHandle, sink string, line int) {
+	if sink == "" {
+		return
+	}
+	stream.id = fmt.Sprintf("stream-%d", r.shared.streams.Add(1))
+	stream.binding, stream.line, stream.emit = sink, line, r.opts.OnStreamEvent
+	if r.opts.Streams != nil {
+		r.opts.Streams.register(stream)
+	}
+	stream.publish("opened")
+	r.env[sink] = stream
+}
+
+// streamKeyOf builds the keyed-state extractor for a key noun: the item's
+// field of that name when present, otherwise the whole scalar item.
+func streamKeyOf(key string) func(item any) (any, error) {
+	if key == "" {
+		return nil
+	}
+	return func(item any) (any, error) {
+		value, err := property(item, key)
+		if err != nil {
+			return scalarKey(item)
+		}
+		return value, nil
+	}
+}
+
+// executeStreamTransformation derives a new stream from the consumed source
+// using the shared transformation constructors.
+func (r *runtime) executeStreamTransformation(s *Statement, m []string) error {
+	clock := StreamClock(MonotonicClock{})
+	var derived StreamHandle
+	var err error
+	sinkLine := s.Line
+	switch s.Kind {
+	case "quietStream":
+		quiet, e := parseStreamDurationLiteral(m[3])
+		if e != nil {
+			return e
+		}
+		up, e := r.streamSourceOf(m[2])
+		if e != nil {
+			return e
+		}
+		opts := DebounceOptions{Key: streamKeyOf(m[1])}
+		if n, ok := streamChildNumber(s, "streamPendingBound"); ok || m[4] != "" {
+			if ok {
+				opts.KeyLimit = n
+			} else if n, e := strconv.Atoi(m[4]); e == nil {
+				opts.KeyLimit = n
+			}
+		}
+		derived, err = Debounce(up, quiet, opts, clock)
+	case "limitStream":
+		allowanceText := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(m[3]), "at most "))
+		allowance := 1
+		if allowanceText != "one" {
+			allowance, err = strconv.Atoi(allowanceText)
+			if err != nil || allowance <= 0 {
+				return fmt.Errorf("the rate allowance must be \"one\" or a positive integer")
+			}
+		}
+		window, e := streamUnitDuration(m[4+1-1])
+		if e != nil {
+			return e
+		}
+		up, e := r.streamSourceOf(m[1])
+		if e != nil {
+			return e
+		}
+		keeping := m[5]
+		for _, c := range s.Body {
+			if c.Kind == "throttlePolicy" {
+				keeping = match("throttlePolicy", c.Text)[1]
+			}
+		}
+		if keeping != "first" && keeping != "latest" {
+			return fmt.Errorf("the rate policy is mandatory: add \"keeping the first\" or \"keeping the latest\"")
+		}
+		var keyLimit int
+		if n, ok := streamChildNumber(s, "streamKeyBound"); ok {
+			keyLimit = n
+		} else if m[6] != "" {
+			if n, e := strconv.Atoi(m[6]); e == nil {
+				keyLimit = n
+			}
+		}
+		opts := ThrottleOptions{Keeping: keeping, Key: streamKeyOf(m[2]), KeyLimit: keyLimit}
+		if rejection := streamChild(s, "rejectExcess"); rejection != nil {
+			status, _ := strconv.Atoi(match("rejectExcess", rejection.Text)[1])
+			opts.OnDrop = func(item any) error {
+				up.rejected.Add(1)
+				if owned, ok := item.(*OwnedItem); ok {
+					return owned.Complete(fmt.Sprintf("status %d", status))
+				}
+				return nil
+			}
+		}
+		derived, err = Throttle(up, allowance, window, opts, clock)
+	case "batchStream":
+		count, e := strconv.Atoi(m[3])
+		if e != nil || count <= 0 {
+			return fmt.Errorf("the batch size bound must be a positive integer")
+		}
+		var window time.Duration
+		for _, c := range s.Body {
+			if c.Kind == "batchWindow" {
+				if window, e = parseStreamDurationLiteral(match("batchWindow", c.Text)[1]); e != nil {
+					return e
+				}
+			}
+		}
+		if window <= 0 {
+			return fmt.Errorf("batching requires a time window: add a line \"or after <duration>\"")
+		}
+		up, e := r.streamSourceOf(m[1])
+		if e != nil {
+			return e
+		}
+		var keyLimit int
+		if n, ok := streamChildNumber(s, "streamKeyBound"); ok {
+			keyLimit = n
+		} else if m[4] != "" {
+			if n, e := strconv.Atoi(m[4]); e == nil {
+				keyLimit = n
+			}
+		}
+		aggregateLimit := count
+		if keyLimit > 0 {
+			if count > int(^uint(0)>>1)/keyLimit {
+				return fmt.Errorf("the keyed batch bounds are too large")
+			}
+			aggregateLimit = count * keyLimit
+		}
+		derived, err = Batch(up, count, window, BatchOptions{Key: streamKeyOf(m[2]), KeyLimit: keyLimit, AggregateItemLimit: aggregateLimit}, clock)
+	case "distinctStream":
+		up, e := r.streamSourceOf(m[1])
+		if e != nil {
+			return e
+		}
+		derived, err = DistinctConsecutive(up, DistinctOptions{}, clock)
+	case "distinctKeyStream":
+		up, e := r.streamSourceOf(m[2])
+		if e != nil {
+			return e
+		}
+		derived, err = DistinctConsecutive(up, DistinctOptions{Key: streamKeyOf(m[1])}, clock)
+	case "idleStream":
+		idle, e := parseStreamDurationLiteral(m[3])
+		if e != nil {
+			return e
+		}
+		source := m[1]
+		if source == "" {
+			source = m[4]
+		}
+		if source == "" {
+			source = m[2]
+		}
+		if source == "" {
+			return fmt.Errorf("idle deadlines require a source stream: \"require an item from <source> at least every <duration>\"")
+		}
+		up, e := r.streamSourceOf(source)
+		if e != nil && m[1] == "" && m[4] == "" && m[2] != "" {
+			up, e = r.streamSourceOf(source + "s")
+		}
+		if e != nil {
+			return e
+		}
+		derived, err = RequireIdle(up, idle, clock)
+	case "takeForStream":
+		lifetime, e := parseStreamDurationLiteral(m[2])
+		if e != nil {
+			return e
+		}
+		up, e := r.streamSourceOf(m[1])
+		if e != nil {
+			return e
+		}
+		derived, err = LimitLifetime(up, lifetime, clock)
+	case "deadlineStream":
+		deadline, e := parseStreamDurationLiteral(m[2])
+		if e != nil {
+			return e
+		}
+		up, e := r.streamSourceOf(m[1])
+		if e != nil {
+			return e
+		}
+		derived, err = RequireDeadline(up, deadline, clock)
+	default:
+		return fmt.Errorf("construction %q is not executable here", s.Kind)
+	}
+	if err != nil {
+		return err
+	}
+	sink := ""
+	switch s.Kind {
+	case "quietStream":
+		sink = streamSinkName(s, m[5])
+	case "limitStream":
+		sink = streamSinkName(s, m[7])
+	case "batchStream":
+		sink = streamSinkName(s, m[5])
+	case "distinctStream":
+		sink = m[2]
+	case "distinctKeyStream":
+		sink = m[3]
+	case "idleStream":
+		sink = streamSinkName(s, m[5])
+	case "takeForStream", "deadlineStream":
+		sink = streamSinkName(s, m[3])
+	}
+	r.bindDerivedStream(derived, sink, sinkLine)
+	return nil
+}
+
+// streamHandlerStatements filters continuation lines out of a handler body.
+func streamHandlerStatements(s *Statement) []*Statement {
+	var out []*Statement
+	for _, c := range s.Body {
+		if streamChildOnlyLine(c.Kind) {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
+func (r *runtime) streamChild(ctx context.Context, name string, item any) *runtime {
+	r.shared.traceMu.Lock()
+	child := *r
+	r.shared.traceMu.Unlock()
+	child.ctx = ctx
+	child.env = make(map[string]any, len(r.env)+1)
+	for key, value := range r.env {
+		child.env[key] = value
+	}
+	child.env[name] = item
+	child.types = copyTypes(r.types)
+	child.functions = copyStatements(r.functions)
+	child.schemas = copyStatements(r.schemas)
+	child.debugStack = append([]DebugFrame(nil), r.debugStack...)
+	child.result = &Result{Traces: []Trace{}}
+	child.recording = nil
+	child.opts = r.opts
+	child.opts.Stdout = synchronizedWriter{mu: &r.shared.outputMu, w: r.opts.Stdout}
+	child.opts.Stderr = synchronizedWriter{mu: &r.shared.outputMu, w: r.opts.Stderr}
+	return &child
+}
+
+func (r *runtime) mergeStreamChild(child *runtime) {
+	r.shared.traceMu.Lock()
+	r.result.Traces = append(r.result.Traces, child.result.Traces...)
+	r.recording = append(r.recording, child.recording...)
+	r.shared.traceMu.Unlock()
+}
+
+// runStreamBlock forks lexical bindings for one handler. Concurrent stream
+// handlers must never swap bindings in the parent runtime's shared maps.
+func (r *runtime) runStreamBlock(ctx context.Context, name string, item any, body []*Statement) error {
+	child := r.streamChild(ctx, name, item)
+	err := child.block(body)
+	r.mergeStreamChild(child)
+	return err
+}
+
+type languageTransformSource struct {
+	up    *streamHandle
+	apply func(context.Context, any) (any, bool, error)
+}
+
+func (s *languageTransformSource) next(ctx context.Context) (any, bool, error) {
+	for {
+		item, ok, err := pullWithContext(ctx, s.up)
+		if err != nil || !ok {
+			return nil, ok, err
+		}
+		value, keep, err := s.apply(ctx, item)
+		if err != nil {
+			return nil, false, err
+		}
+		if keep {
+			return value, true, nil
+		}
+	}
+}
+
+func (s *languageTransformSource) cancel(ctx context.Context) error { return s.up.close(ctx) }
+
+// executeStreamHandler runs bounded concurrent or sequential handling. The
+// item binding is visible only inside the handler body.
+func (r *runtime) executeStreamHandler(s *Statement, m []string) error {
+	up, err := r.streamSourceOf(m[2])
+	if err != nil {
+		return err
+	}
+	name := m[1]
+	body := streamHandlerStatements(s)
+	handler := func(ctx context.Context, item any) error {
+		return r.runStreamBlock(ctx, name, item, body)
+	}
+	if s.Kind == "handleOneStream" {
+		return HandleSequentially(r.ctx, up, handler)
+	}
+	limit := 0
+	if m[3] != "" {
+		if limit, err = strconv.Atoi(m[3]); err != nil || limit <= 0 {
+			return fmt.Errorf("the concurrency bound must be a positive integer")
+		}
+	} else if n, ok := streamChildNumber(s, "streamBound"); ok {
+		limit = n
+	}
+	if limit <= 0 {
+		return fmt.Errorf("the handling policy is ambiguous: add \"with at most N at once\" or \"one at a time\"")
+	}
+	return HandleWithBoundConcurrency(r.ctx, up, limit, handler)
+}
+
+// executeStreamPolicy runs the remaining handling policies over the consumed
+// source: latest-only cancellation, conflation, busy exclusion, and the
+// block-based filter and projection forms.
+func (r *runtime) executeStreamPolicy(s *Statement, m []string) error {
+	sourceName := m[len(m)-1]
+	if s.Kind == "exhaustStream" {
+		sourceName = strings.ReplaceAll(m[1], " ", "_")
+	}
+	up, err := r.streamSourceOf(sourceName)
+	if err != nil {
+		return err
+	}
+	switch s.Kind {
+	case "newestStream":
+		name := m[1]
+		body := streamHandlerStatements(s)
+		opts := LatestOptions{CleanupDeadline: defaultHandlerCleanupDeadline}
+		if m[2] != "" {
+			opts.Key = streamKeyOf(m[2])
+			if n, ok := streamChildNumber(s, "streamBound"); ok {
+				opts.Concurrency = n
+			}
+			if n, ok := streamChildNumber(s, "streamKnownBound"); ok {
+				opts.KeyLimit = n
+			}
+		}
+		if streamChild(s, "effectAck") != nil {
+			opts.AcknowledgeEffects = true
+		}
+		if policy := streamChild(s, "cancelPolicy"); policy != nil {
+			status, _ := strconv.Atoi(match("cancelPolicy", policy.Text)[2])
+			opts.Replacement = func(item *OwnedItem) error { return item.Complete(fmt.Sprintf("status %d", status)) }
+		}
+		return HandleLatest(r.ctx, up, func(ctx context.Context, item any) (any, error) {
+			return nil, r.runStreamBlock(ctx, name, item, body)
+		}, opts)
+	case "conflateStream":
+		name := m[1]
+		if policy := streamChild(s, "conflatePolicy"); policy != nil {
+			name = match("conflatePolicy", policy.Text)[1]
+		}
+		body := streamHandlerStatements(s)
+		return HandleConflating(r.ctx, up, func(ctx context.Context, item any) error {
+			return r.runStreamBlock(ctx, name, item, body)
+		}, ConflateOptions{})
+	case "exhaustStream":
+		name := m[1]
+		body := streamHandlerStatements(s)
+		policy := BusyIgnore
+		var reject func(item any) error
+		for _, c := range s.Body {
+			if c.Kind != "exhaustPolicy" {
+				continue
+			}
+			pm := match("exhaustPolicy", c.Text)
+			if pm[1] == "rejecting" && pm[2] != "" {
+				code, _ := strconv.Atoi(pm[2])
+				policy = BusyReject
+				reject = func(item any) error {
+					if owned, ok := item.(*OwnedItem); ok {
+						return owned.Complete(fmt.Sprintf("status %d", code))
+					}
+					return nil
+				}
+			}
+		}
+		return HandleExclusively(r.ctx, up, func(ctx context.Context, item any) error {
+			return r.runStreamBlock(ctx, name, item, body)
+		}, ExclusiveOptions{Policy: policy, Reject: reject})
+	case "filterStream", "projectStream":
+		name := m[1]
+		itemType := up.itemType
+		if s.Kind == "projectStream" {
+			itemType = TypeRef{Name: "any"}
+		}
+		source := &languageTransformSource{up: up}
+		source.apply = func(ctx context.Context, item any) (any, bool, error) {
+			child := r.streamChild(ctx, name, item)
+			defer r.mergeStreamChild(child)
+			if s.Kind == "projectStream" {
+				for _, c := range s.Body {
+					if c.Kind == "useValue" {
+						value, evalErr := child.eval(match("useValue", c.Text)[1], nil)
+						return value, evalErr == nil, evalErr
+					}
+				}
+				return nil, false, fmt.Errorf("projection block has no use value")
+			}
+			for _, block := range s.Body {
+				if block.Kind != "when" {
+					continue
+				}
+				keep, evalErr := child.eval(match("when", block.Text)[1], nil)
+				if evalErr != nil {
+					return nil, false, evalErr
+				}
+				keepBool, ok := keep.(bool)
+				if !ok {
+					return nil, false, fmt.Errorf("filter condition must be boolean")
+				}
+				if keepBool {
+					return item, true, nil
+				}
+			}
+			return nil, false, nil
+		}
+		derived, deriveErr := deriveStream(up, s.Kind, itemType, source)
+		if deriveErr != nil {
+			return deriveErr
+		}
+		r.bindDerivedStream(derived, m[3], s.Line)
+		return nil
+	default:
+		return fmt.Errorf("construction %q is not executable here", s.Kind)
+	}
+}
+
+// indentStreamRewrite indents continuation lines of a rewritten multi-line
+// canonical sentence so the whole text parses as source.
+func indentStreamRewrite(text string) string {
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		if i > 0 && line != "" {
+			lines[i] = "  " + line
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// executeStreamAliasCall lowers one std/streams technical alias call onto
+// its canonical sentence and executes it with the shared runtime, so both
+// surfaces behave identically.
+func (r *runtime) executeStreamAliasCall(s *Statement, action string, args []string, called string) error {
+	if action == "merge" || action == "concat" || action == "switch_latest" || action == "exhaust" || action == "conflate" {
+		return fmt.Errorf("streams.%s requires its canonical handler block so effects and obligations remain explicit", action)
+	}
+	text, ok := StreamAliasRewrite(action, args, called)
+	if !ok {
+		return fmt.Errorf("streams.%s arguments do not match its signature", action)
+	}
+	p, ds := Parse(indentStreamRewrite(text))
+	if len(ds) != 0 {
+		return fmt.Errorf("streams.%s canonical rewrite does not parse: %s", action, ds[0].Message)
+	}
+	for _, st := range p.Statements {
+		st.Line = s.Line
+		remapStatements(st.Body, nil)
+		if e := r.execute(st); e != nil {
+			return e
+		}
+	}
+	return nil
 }

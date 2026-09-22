@@ -1,11 +1,16 @@
 package e2e
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
+
+	"github.com/DonaldMurillo/system-one-playground/sos"
 )
 
 func TestCLIStreamExamples(t *testing.T) {
@@ -42,6 +47,18 @@ func TestCLINodeStreamExample(t *testing.T) {
 	stdout, stderr, code := runCLI(t, dir, "run", "node.sos")
 	if code != 0 || stdout != "node event 0\nnode event 1\nnode event 2\n" {
 		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+}
+
+func TestCLIFlowControlExample(t *testing.T) {
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node is required for the flow-control stream fixture")
+	}
+	dir := filepath.Join(examplesRoot(t), "streams")
+	stdout, stderr, code := runCLI(t, dir, "run", "flow-control.sos")
+	want := "Flow control: an in-language producer and a Node stdio producer\nNode producer completed with 2 distinct statuses from 3 events\nnode status: queued\nnode status: running\nbuild [build] image built\nbuild [test] suite passed\nbuild is healthy; canceling the remaining stages\nBuild watch stopped early; the publish stage never ran\npublish [upload] artifact uploaded\npublish [verify] checksum verified\npublish failed: registry rejected the artifact\nPublish watch handled its terminal failure and kept both items\n"
+	if code != 0 || stdout != want {
+		t.Fatalf("exit=%d stdout=%q, want %q stderr=%q", code, stdout, want, stderr)
 	}
 }
 
@@ -228,5 +245,142 @@ func TestCLIRejectsQualifiedLegacyStreamCalls(t *testing.T) {
 				t.Fatalf("code=%d stderr=%s", code, stderr)
 			}
 		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Runtime transformation semantics (docs/sysonescript-stream-handling-spec.md)
+// driven end to end through the public runtime API with the host monotonic
+// clock. The language surface for these constructions lands separately; the
+// runtime, bounds, cancellation, and obligations are stable here.
+// ---------------------------------------------------------------------------
+
+func newRuntimeTestStream() (sos.StreamHandle, chan any) {
+	ch := make(chan any, 16)
+	return sos.OpenChannelStream(context.Background(), sos.TypeRef{Name: "integer"}, "e2e.source", ch), ch
+}
+
+func TestRuntimeDebounceEndToEnd(t *testing.T) {
+	stream, ch := newRuntimeTestStream()
+	derived, err := sos.Debounce(stream, 40*time.Millisecond, sos.DebounceOptions{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		for i := 1; i <= 5; i++ {
+			ch <- float64(i)
+			time.Sleep(5 * time.Millisecond)
+		}
+		close(ch)
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	value, ok, err := derived.Next(ctx)
+	if err != nil || !ok {
+		t.Fatalf("next: ok=%v err=%v", ok, err)
+	}
+	if value != 5.0 {
+		t.Fatalf("debounce must emit only the latest item, got %v", value)
+	}
+	_, ok, err = derived.Next(ctx)
+	if err != nil || ok {
+		t.Fatalf("stream must complete: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestRuntimeThrottleAndBatchEndToEnd(t *testing.T) {
+	stream, ch := newRuntimeTestStream()
+	limited, err := sos.Throttle(stream, 1, 75*time.Millisecond, sos.ThrottleOptions{Keeping: "latest"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batches, err := sos.Batch(limited, 2, time.Hour, sos.BatchOptions{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		for i := 1; i <= 4; i++ {
+			ch <- float64(i)
+		}
+		close(ch)
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	first, ok, err := batches.Next(ctx)
+	if err != nil || !ok {
+		t.Fatalf("first batch: ok=%v err=%v", ok, err)
+	}
+	// Keeping the latest: item 1 is admitted, 2 and 3 are replaced by 4,
+	// and the retained 4 is flushed when upstream completes.
+	if items, ok := first.([]any); !ok || len(items) != 2 || items[0] != 1.0 || items[1] != 4.0 {
+		t.Fatalf("first batch=%v (want [1 4]: 2 and 3 replaced while suppressed)", first)
+	}
+	if _, ok, err := batches.Next(ctx); ok || err != nil {
+		t.Fatalf("stream must complete after the single batch: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestRuntimeHandleLatestCancelsObsoleteWorkEndToEnd(t *testing.T) {
+	stream, ch := newRuntimeTestStream()
+	results := make(chan float64, 4)
+	go func() {
+		ch <- 1.0
+		time.Sleep(5 * time.Millisecond)
+		ch <- 2.0
+		close(ch)
+	}()
+	err := sos.HandleLatest(context.Background(), stream, func(ctx context.Context, item any) (any, error) {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(80 * time.Millisecond):
+			return item.(float64) * 10, nil
+		}
+	}, sos.LatestOptions{
+		Concurrency: 4,
+		OnResult:    func(_, result any) { results <- result.(float64) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	close(results)
+	seen := []float64{}
+	for r := range results {
+		seen = append(seen, r)
+	}
+	if len(seen) != 1 || seen[0] != 20 {
+		t.Fatalf("only the newest handler's result may survive cancellation: %v", seen)
+	}
+}
+
+func TestRuntimeObligationRejectionEndToEnd(t *testing.T) {
+	stream, ch := newRuntimeTestStream()
+	var rejected []string
+	var mu sync.Mutex
+	go func() {
+		ch <- sos.NewOwnedItem("request-1", func(string) error { return nil })
+		time.Sleep(5 * time.Millisecond)
+		ch <- sos.NewOwnedItem("request-2", func(string) error { return nil })
+		close(ch)
+	}()
+	err := sos.HandleExclusively(context.Background(), stream, func(_ context.Context, item any) error {
+		time.Sleep(60 * time.Millisecond)
+		return item.(*sos.OwnedItem).Complete("handled")
+	}, sos.ExclusiveOptions{
+		Policy: sos.BusyReject,
+		Reject: func(item any) error {
+			mu.Lock()
+			rejected = append(rejected, item.(*sos.OwnedItem).Value.(string))
+			mu.Unlock()
+			return item.(*sos.OwnedItem).Complete("rejected with status 429")
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(rejected) != 1 || rejected[0] != "request-2" {
+		t.Fatalf("busy owned request must be rejected with a typed action: %v", rejected)
 	}
 }

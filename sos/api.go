@@ -3,10 +3,11 @@ package sos
 
 import (
 	"context"
-	"github.com/DonaldMurillo/system-one-playground/sosconfig"
 	"io"
 	"net/http"
 	"time"
+
+	"github.com/DonaldMurillo/system-one-playground/sosconfig"
 )
 
 var Version = "0.4.0"
@@ -102,6 +103,7 @@ type StreamEvent struct {
 	ItemsReceived   int            `json:"itemsReceived"`
 	ItemsBuffered   int            `json:"itemsBuffered"`
 	CreditAvailable int            `json:"creditAvailable"`
+	Policy          map[string]any `json:"policy,omitempty"`
 	StartedAt       time.Time      `json:"startedAt"`
 	UpdatedAt       time.Time      `json:"updatedAt"`
 	EndedAt         *time.Time     `json:"endedAt,omitempty"`

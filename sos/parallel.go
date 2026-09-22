@@ -17,11 +17,23 @@ import (
 )
 
 type executionState struct {
-	steps   atomic.Int64
-	calls   atomic.Int64
-	output  atomic.Int64
-	streams atomic.Int64
-	traceMu sync.Mutex
+	steps    atomic.Int64
+	calls    atomic.Int64
+	output   atomic.Int64
+	streams  atomic.Int64
+	traceMu  sync.Mutex
+	outputMu sync.Mutex
+}
+
+type synchronizedWriter struct {
+	mu *sync.Mutex
+	w  io.Writer
+}
+
+func (w synchronizedWriter) Write(data []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.w.Write(data)
 }
 
 type executionLimitError struct{ message string }

@@ -127,13 +127,140 @@ runtime-owned stream identity, producer, item type, received/buffered counts,
 credit, elapsed time, terminal failures, and lifecycle history without reading
 an item. **Stop stream** ends only that producer and lets execution continue
 below its stream loop; the ordinary run Stop action still cancels the whole run.
+Editor inspection travels a loopback control channel whose failure policy —
+environment-only authentication, bounded frames and connections, and counted
+lifecycle-event drops — is documented in [editor language
+services](sysonescript-editor.md).
 
 Lazy stream filters/maps, merge, and stream parameters/ownership transfer are
 reserved future syntax. The shipped surface is direct sequential consumption,
 explicit close/early stop, bounded collect/take, stdio plugin streams, and
 command-adapter JSON-lines streams.
 
+## Flow control and derived streams
+
+Bounded stream transformations and concurrent handling policies are specified in
+the approved [readable stream handling and flow-control
+design](sysonescript-stream-handling-spec.md). This section documents the
+implemented runtime and editor behavior.
+
+Every policy has two surfaces with one meaning and one runtime implementation:
+canonical English wording, and a searchable technical name in `std/streams`
+(`debounce`, `throttle`, `merge`, `concat`, `switch_latest`, `exhaust`,
+`conflate`, `batch`, `distinct_consecutive`, `idle_timeout`, `take_for`).
+Technical aliases are deterministic, never create a paid interpretation request,
+and editors offer a canonical rewrite. Documentation, completion, and
+canonicalization emit the canonical form. Handler operations (`merge`,
+`concat`, `switch_latest`, `exhaust`, and `conflate`) require their canonical
+block form so the checker can inspect effects and obligation completion; a
+bodyless technical call is rejected instead of silently draining the stream.
+
+### Quiet waiting and rate limiting
+
+`wait for changes to be quiet for 500 milliseconds called settled_changes`
+(debounce) restarts a quiet timer on every item and emits only the latest item
+after the complete duration passes with no newer arrival. The keyed form keeps
+one independent timer per key with an explicit pending-key bound; exceeding it
+fails with `StreamKeyLimitExceeded` rather than silently evicting a key.
+
+`limit metrics to at most 10 each second keeping the first` (throttle) emits up
+to the allowance per window and drops later items; `keeping the latest` retains
+at most one suppressed item and emits it when capacity returns. The keep policy
+is mandatory — there is no ambiguous default — and idle periods do not
+accumulate catch-up credit. Dropped-item counts are observable in snapshots and
+traces, and dropping an item that owns a response, acknowledgment, or lease is
+invalid unless an explicit rejection or disposal policy completes that
+obligation.
+
+### Bounded concurrent and sequential handling
+
+`handle each request from requests with at most 32 at once` (merge-map) runs at
+most the declared number of child handlers; items start in source order,
+complete in any order, and backpressure stops admission when handler slots and
+the bounded queue are full. A handler failure cancels upstream and siblings,
+waits for bounded cleanup, and propagates. Runtime embedders can choose that
+bound with `HandleWithBoundConcurrencyCleanup`; the simpler helper uses five
+seconds and reports `StreamHandlerCleanupFailed` on expiry. `handle each ... one at a time`
+(concat-map) is the ordered, capacity-one form; the checker may recommend a
+plain `for each` loop when no owned obligation or handler lifecycle is needed.
+
+### Canceling, finishing, and rejecting while busy
+
+`handle only the newest query from queries` (switch_latest) cancels the previous
+handler's child context on each newer item, prevents stale results from becoming
+visible, waits up to a cleanup deadline, and records cleanup failure. The
+waiting queue is bounded to one item. Because cancellation prevents future work
+but never undoes completed effects, the checker rejects it when a handler owns
+an obligation without a replacement policy, and requires an explicit
+`acknowledging completed effects are not reversed` marker on non-idempotent
+effects.
+
+`handle updates one at a time keeping only the latest waiting update` (conflate)
+never cancels the active handler and retains at most one newer waiting item.
+`handle one request at a time ignoring new requests while busy` (exhaust) is
+valid only for values without completion obligations; owned requests require a
+typed rejection such as `rejecting new requests with status 429 while busy`.
+
+### Batching, filtering, and projection
+
+`group events into batches of at most 100 or after 5 seconds called batches`
+(batch) starts the timer on the first item of an empty batch, emits whichever
+limit fires first, never emits empty periodic batches, and emits a nonempty
+partial batch on normal upstream completion. Keyed batching adds the key bound
+and derives the aggregate item bound as batch size times maximum keys.
+
+`ignore consecutive duplicate statuses` (distinct-until-changed) retains only
+the immediately previous key; global uniqueness is a different, invalid-without-
+a-bound operation. Records and lists must use `keep only changes in <field>
+from <stream>` to declare the scalar comparison key; they are never compared
+deeply by implication. Canonical filtering and projection are block-based:
+
+```sos
+keep each event from events called critical_events:
+  when severity of event is "critical":
+    keep event
+```
+
+```sos
+take a value from each event in events called messages:
+  use message of event
+```
+
+### Time bounds and lifetimes
+
+All durations use the monotonic clock; wall-clock changes never shorten or
+extend a window. `require an update at least every 30 seconds` (idle_timeout)
+cancels upstream and fails with `StreamIdleTimeout` when the source stays idle;
+backpressure waiting does not count as idleness. `listen to updates for at most
+10 minutes then stop normally` (take_for) completes normally at the deadline,
+while `require updates to finish within 10 minutes` fails with
+`StreamDeadlineExceeded`. The existing `take first 100 items from events`
+remains the canonical bounded sample.
+
+### Ownership, ordering, and failures
+
+Every derived stream consumes ownership of its source: after a transformation
+succeeds, the original binding may not be consumed, closed, or transformed
+again; the derived binding is the new single owner. Canceling a derived stream
+cancels its timers before upstream cleanup. Backpressure is enforced through the
+same stream credit model everywhere — pending items, active and waiting
+handlers, keyed state, partial-batch items, retained bytes, and timer count are
+all bounded, and external adapters cannot bypass these bounds.
+
+Ordering per policy: quiet waiting and rate limiting preserve the order of what
+they emit, sequential handling preserves start and completion order, concurrent
+handling preserves start order only, latest-only handling exposes only the
+surviving handler's results, and batches preserve source order within each
+batch. Keyed operations preserve per-key order without promising global
+cross-key completion order.
+
+Reserved failures are `StreamKeyLimitExceeded`, `StreamConcurrencyLimitExceeded`,
+`StreamIdleTimeout`, `StreamDeadlineExceeded`, `StreamHandlerCleanupFailed`, and
+`StreamObligationAbandoned`. Ordinary upstream failures keep their identity and
+gain a transformation frame.
+
 See the runnable [stream examples](https://github.com/DonaldMurillo/system-one-playground/tree/main/examples/sos/streams) project for
 local streaming actions, Python and Node stdio producers, finite consumption,
-early stop, explicit close, bounded collection, sampling, and terminal failure
-handling.
+early stop, explicit close, bounded collection, sampling, terminal failure
+handling, and a multi-producer flow-control program that combines in-language
+and Node producers in one run.

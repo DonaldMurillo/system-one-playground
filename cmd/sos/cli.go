@@ -51,7 +51,8 @@ script's command declarations; --help after FILE prints the script's usage.
 --save-resolution is a runner flag only before FILE, leaving the same-named
 token available to scripts after FILE.
 Editor integrations pass --stream-control and --stream-session before FILE and
-provide the private SOS_STREAM_TOKEN through the child environment.
+provide the private SOS_STREAM_TOKEN through the child environment; the token
+is never accepted as a command-line flag.
 `
 
 const checkUsage = "usage: sos check FILE [--json] [--editor]\n"
@@ -180,7 +181,6 @@ type runOptions struct {
 	resolution     string
 	saveResolution string
 	streamControl  string
-	streamToken    string
 	streamSession  string
 }
 
@@ -267,11 +267,6 @@ parse:
 			if i, ok = take(&opts.streamControl, i); !ok {
 				return 2
 			}
-		case arg == "--stream-token" || strings.HasPrefix(arg, "--stream-token="):
-			var ok bool
-			if i, ok = take(&opts.streamToken, i); !ok {
-				return 2
-			}
 		case arg == "--stream-session" || strings.HasPrefix(arg, "--stream-session="):
 			var ok bool
 			if i, ok = take(&opts.streamSession, i); !ok {
@@ -353,19 +348,22 @@ parse:
 	streamController := sos.NewStreamController()
 	var streamControl *streamControlClient
 	if opts.streamControl != "" {
-		if opts.streamToken == "" {
-			opts.streamToken = os.Getenv("SOS_STREAM_TOKEN")
-		}
-		if opts.streamToken == "" {
-			fmt.Fprintln(stderr, "sos: run: SOS_STREAM_TOKEN or --stream-token is required with --stream-control")
+		streamToken := os.Getenv("SOS_STREAM_TOKEN")
+		if streamToken == "" {
+			fmt.Fprintln(stderr, "sos: run: SOS_STREAM_TOKEN is required with --stream-control")
 			return 2
 		}
-		streamControl, err = connectStreamControl(ctx, opts.streamControl, opts.streamToken, opts.streamSession, streamController)
+		streamControl, err = connectStreamControl(ctx, opts.streamControl, streamToken, opts.streamSession, streamController)
 		if err != nil {
 			fmt.Fprintf(stderr, "sos: run: stream control: %v\n", err)
 			return 1
 		}
-		defer streamControl.close()
+		defer func() {
+			streamControl.close()
+			if dropped := streamControl.Dropped(); dropped > 0 {
+				fmt.Fprintf(stderr, "sos: stream control: dropped %d lifecycle events; snapshots remain authoritative\n", dropped)
+			}
+		}()
 	}
 	result, runErr := sos.Run(ctx, program, sos.Options{
 		Resolution: saved, Locked: saved != nil,

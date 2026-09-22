@@ -87,7 +87,7 @@ var failureCommonFields = map[string]bool{
 }
 
 func builtInFailures() map[string]*FailureDef {
-	failures := map[string]*FailureDef{
+	return map[string]*FailureDef{
 		"StreamLimitExceeded": {
 			Name: "StreamLimitExceeded",
 			Fields: []RecordField{
@@ -95,22 +95,46 @@ func builtInFailures() map[string]*FailureDef {
 				{Name: "received", Type: TypeRef{Name: "integer"}},
 			},
 		},
+		"StreamKeyLimitExceeded": {
+			Name: "StreamKeyLimitExceeded",
+			Fields: []RecordField{
+				{Name: "limit", Type: TypeRef{Name: "integer"}},
+				{Name: "operation", Type: TypeRef{Name: "text"}},
+			},
+		},
+		"StreamConcurrencyLimitExceeded": {
+			Name: "StreamConcurrencyLimitExceeded",
+			Fields: []RecordField{
+				{Name: "limit", Type: TypeRef{Name: "integer"}},
+			},
+		},
+		"StreamIdleTimeout": {
+			Name: "StreamIdleTimeout",
+			Fields: []RecordField{
+				{Name: "idle_for", Type: TypeRef{Name: "duration"}},
+			},
+		},
+		"StreamDeadlineExceeded": {
+			Name: "StreamDeadlineExceeded",
+			Fields: []RecordField{
+				{Name: "deadline", Type: TypeRef{Name: "duration"}},
+			},
+		},
+		"StreamHandlerCleanupFailed": {
+			Name: "StreamHandlerCleanupFailed",
+			Fields: []RecordField{
+				{Name: "operation", Type: TypeRef{Name: "text"}},
+				{Name: "reason", Type: TypeRef{Name: "text"}},
+			},
+		},
+		"StreamObligationAbandoned": {
+			Name: "StreamObligationAbandoned",
+			Fields: []RecordField{
+				{Name: "operation", Type: TypeRef{Name: "text"}},
+				{Name: "item", Type: TypeRef{Name: "text", Optional: true}},
+			},
+		},
 	}
-	httpDefinitions := map[string][]RecordField{
-		"InvalidHttpRequest":   {{Name: "reason", Type: TypeRef{Name: "text"}}},
-		"HttpConnectionFailed": {{Name: "origin", Type: TypeRef{Name: "text"}}, {Name: "reason", Type: TypeRef{Name: "text"}}},
-		"HttpTimeout":          {{Name: "phase", Type: TypeRef{Name: "text"}}, {Name: "duration", Type: TypeRef{Name: "duration"}}},
-		"HttpTlsFailure":       {{Name: "origin", Type: TypeRef{Name: "text"}}, {Name: "reason", Type: TypeRef{Name: "text"}}},
-		"HttpBodyTooLarge":     {{Name: "limit", Type: TypeRef{Name: "integer"}}, {Name: "observed", Type: TypeRef{Name: "integer", Optional: true}}},
-		"InvalidHttpResponse":  {{Name: "reason", Type: TypeRef{Name: "text"}}},
-		"UnexpectedHttpStatus": {{Name: "status", Type: TypeRef{Name: "integer"}}, {Name: "body_preview", Type: TypeRef{Name: "text", Optional: true}}},
-		"HttpRedirectRejected": {{Name: "reason", Type: TypeRef{Name: "text"}}},
-	}
-	for name, fields := range httpDefinitions {
-		failures[name] = &FailureDef{Name: name, Fields: fields}
-	}
-	addHTTPServerFailureDefinitions(failures)
-	return failures
 }
 
 func parseFailureDefinition(statement *Statement) (*FailureDef, []Diagnostic) {
