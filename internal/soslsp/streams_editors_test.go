@@ -264,15 +264,16 @@ stream follow called files`
 	}
 }
 
-func TestParameterizedStreamCompletionDoesNotInventArguments(t *testing.T) {
+func TestParameterizedStreamCompletionIncludesReadableArgumentSlots(t *testing.T) {
 	target := wordTarget{
 		Qualifier: "events",
 		Name:      "follow",
 		Result:    "stream of Event",
 		Params:    []sos.VocabularyParam{{Name: "service", Type: "text"}},
 	}
-	if form, offered := streamCompletionForm(target, completionForm{label: "events.follow", insert: "events.follow"}, "events.fo"); offered {
-		t.Fatalf("parameterized stream completion invented an argument: %+v", form)
+	form, offered := streamCompletionForm(target, completionForm{label: "events.follow", insert: "events.follow"}, "events.fo")
+	if !offered || form.insert != "stream events.follow with service called items" {
+		t.Fatalf("parameterized stream completion=%+v offered=%v", form, offered)
 	}
 }
 

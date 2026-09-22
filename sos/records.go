@@ -373,7 +373,7 @@ func parseActionDecl(text string) (ActionDecl, error) {
 	return d, nil
 }
 
-var actionHeaderRE = regexp.MustCompile(`^to ([A-Za-z_]\w*)(?: with (.*?))?(?:(?: returning ((?:optional )?(?:list of )?(?:text|file|folder|timestamp|number|integer|boolean|duration|[A-Z][A-Za-z0-9_]*)))|(?: streaming (text|file|folder|timestamp|number|integer|boolean|duration|[A-Z][A-Za-z0-9_]*)))?(?: may fail with (.+?))?:$`)
+var actionHeaderRE = regexp.MustCompile(`^to ([A-Za-z_]\w*)(?: with (.*?))?(?:(?: returning ((?:optional )?(?:list of )?(?:any|text|file|folder|timestamp|number|integer|boolean|duration|[A-Z][A-Za-z0-9_]*)))|(?: streaming (text|file|folder|timestamp|number|integer|boolean|duration|[A-Z][A-Za-z0-9_]*)))?(?: may fail with (.+?))?:$`)
 
 func validBindingName(name string) bool {
 	return validName(name) && (name[0] == '_' || name[0] >= 'a' && name[0] <= 'z')

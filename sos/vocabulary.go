@@ -440,6 +440,9 @@ func moduleEntries(lib vocabLib, enabled bool) []VocabularyEntry {
 				if decl.HasResult {
 					e.Result = decl.Result.String()
 				}
+				if decl.Streaming {
+					e.Result = "stream of " + decl.StreamItem.String()
+				}
 				e.PossibleFailures = append(e.PossibleFailures, decl.Failures...)
 				streaming = decl.Streaming
 			}

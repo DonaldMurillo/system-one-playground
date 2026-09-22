@@ -254,6 +254,10 @@ func runProcess(ctx context.Context, opts Options, args []any) (any, error) {
 		return nil, err
 	}
 	cmd := exec.Command(args[0].(string), argv...)
+	// Bound Wait when an escaped descendant inherits the process pipes. The
+	// process-group kill cannot reach a child that deliberately creates a new
+	// session, but WaitDelay still closes the pipes after the leader exits.
+	cmd.WaitDelay = time.Second
 	configureProcessTree(cmd)
 	cmd.Dir = opts.Dir
 	var stdout, stderr boundedOutput

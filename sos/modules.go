@@ -912,6 +912,11 @@ func buildModule(key string, files []*moduleFileDecls, embedded bool) (*Module, 
 					ds = append(ds, Diagnostic{m.Actions[name].Line, 1, "return type: " + err.Error()})
 				}
 			}
+			if decl.Streaming {
+				if err := validateTypeRefs(decl.StreamItem, definitionScope, map[string]bool{}); err != nil {
+					ds = append(ds, Diagnostic{m.Actions[name].Line, 1, "stream item type: " + err.Error()})
+				}
+			}
 		}
 		moduleStatements := make([]*Statement, 0, len(m.Actions))
 		for _, actionName := range sortedActionNames(m) {

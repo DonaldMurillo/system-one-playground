@@ -711,6 +711,13 @@ func (d *ExternalModuleDefinition) module() (*Module, error) {
 		}
 		resultType := a.Result.Type
 		if itemType, streaming := externalStreamItemType(resultType); streaming {
+			item, err := parseType(itemType, false)
+			if err != nil {
+				return nil, fmt.Errorf("action %s stream item: %w", a.Name, err)
+			}
+			if item.Optional || item.Element != nil {
+				return nil, fmt.Errorf("action %s stream item must be one concrete type", a.Name)
+			}
 			resultType = itemType
 		}
 		if resultType != "" && resultType != "none" && resultType != "any" {

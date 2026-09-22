@@ -13,6 +13,8 @@ import (
 
 const (
 	windowsCreateSuspended             = 0x4
+	windowsCreateNewProcessGroup       = 0x200
+	windowsCtrlBreakEvent              = 1
 	windowsJobExtendedLimitInformation = 9
 	windowsJobKillOnClose              = 0x2000
 )
@@ -24,6 +26,7 @@ var (
 	windowsSetInformationJobObject  = windowsKernel32.NewProc("SetInformationJobObject")
 	windowsAssignProcessToJobObject = windowsKernel32.NewProc("AssignProcessToJobObject")
 	windowsCloseHandle              = windowsKernel32.NewProc("CloseHandle")
+	windowsGenerateConsoleCtrlEvent = windowsKernel32.NewProc("GenerateConsoleCtrlEvent")
 	windowsNtResumeProcess          = windowsNTDLL.NewProc("NtResumeProcess")
 	windowsJobs                     sync.Map // *exec.Cmd -> syscall.Handle
 )
@@ -44,7 +47,7 @@ type windowsExtendedLimitInformation struct {
 }
 
 func configureProcessTree(cmd *exec.Cmd) {
-	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windowsCreateSuspended}
+	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windowsCreateSuspended | windowsCreateNewProcessGroup}
 }
 
 // startProcessTree assigns the suspended child to a kill-on-close Job Object
@@ -128,4 +131,13 @@ func killProcessTree(cmd *exec.Cmd) error {
 	}
 	return cmd.Process.Kill()
 }
-func requestProcessTreeStop(_ *exec.Cmd) error { return syscall.Errno(1) }
+func requestProcessTreeStop(cmd *exec.Cmd) error {
+	if cmd == nil || cmd.Process == nil {
+		return fmt.Errorf("process was not started")
+	}
+	ok, _, err := windowsGenerateConsoleCtrlEvent.Call(windowsCtrlBreakEvent, uintptr(cmd.Process.Pid))
+	if ok == 0 {
+		return fmt.Errorf("GenerateConsoleCtrlEvent: %w", err)
+	}
+	return nil
+}

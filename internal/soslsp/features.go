@@ -391,14 +391,16 @@ func (s *server) completion(params json.RawMessage) any {
 }
 
 func streamCompletionForm(t wordTarget, form completionForm, lineContext string) (completionForm, bool) {
-	// The server currently advertises plain-text completion, not snippet
-	// support. Inventing parameter identifiers produces undefined expressions,
-	// so parameterized streams are suppressed until real placeholders can be
-	// negotiated with the client.
-	if len(t.Params) > 0 {
-		return completionForm{}, false
-	}
 	call := form.insert
+	if len(t.Params) > 0 {
+		call += " with "
+		for i, param := range t.Params {
+			if i > 0 {
+				call += ", "
+			}
+			call += param.Name
+		}
+	}
 	call += " called items"
 	label := "stream " + call
 	if strings.HasPrefix(strings.TrimSpace(lineContext), "stream ") {

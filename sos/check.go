@@ -194,6 +194,11 @@ func analyze(p *Program) []Diagnostic {
 						add(s, "parameter "+param.Name+": "+err.Error())
 					}
 				}
+				if decl.Streaming {
+					if err := validateTypeRefs(decl.StreamItem, visibleDefs, map[string]bool{}); err != nil {
+						add(s, "stream item type: "+err.Error())
+					}
+				}
 				if len(decl.Using) > 0 {
 					if len(decl.Params) != 1 || decl.Params[0].Type.Name == "any" || decl.Params[0].Type.Element != nil {
 						add(s, "using is allowed only for one named-record parameter")
@@ -840,13 +845,13 @@ func checkStreamOwnership(p *Program, actions map[string]*Statement) []Diagnosti
 				}
 			case "remember":
 				expr := strings.TrimSpace(m[1])
-				if state := owned[expr]; state != nil && !state.consumed {
-					ds = append(ds, Diagnostic{s.Line, 1, "cannot copy stream " + expr + " with remember"})
+				if name := expressionOwnedStream(expr, owned); name != "" {
+					ds = append(ds, Diagnostic{s.Line, 1, "cannot copy stream " + name + " with remember"})
 				}
 			case "append":
 				expr := strings.TrimSpace(m[1])
-				if state := owned[expr]; state != nil && !state.consumed {
-					ds = append(ds, Diagnostic{s.Line, 1, "cannot copy stream " + expr + " with append"})
+				if name := expressionOwnedStream(expr, owned); name != "" {
+					ds = append(ds, Diagnostic{s.Line, 1, "cannot copy stream " + name + " with append"})
 				}
 			case "readEach":
 				if state := owned[m[1]]; state != nil && !state.consumed {
@@ -898,10 +903,22 @@ func checkStreamOwnership(p *Program, actions map[string]*Statement) []Diagnosti
 	return ds
 }
 
+func expressionOwnedStream(expr string, owned map[string]*streamOwnershipState) string {
+	for name, state := range owned {
+		if state != nil && !state.consumed && regexp.MustCompile(`\b`+regexp.QuoteMeta(name)+`\b`).MatchString(expr) {
+			return name
+		}
+	}
+	return ""
+}
+
 func openFailureHandlerRecovers(operation *Statement) bool {
 	var containsRecover func([]*Statement) bool
 	containsRecover = func(stmts []*Statement) bool {
 		for _, statement := range stmts {
+			if statement.Kind == "call" || statement.Kind == "openStream" {
+				continue
+			}
 			if statement.Kind == "recover" || containsRecover(statement.Body) {
 				return true
 			}
@@ -915,8 +932,26 @@ func openFailureHandlerRecovers(operation *Statement) bool {
 		if strings.HasPrefix(match("handler", handler.Text)[2], "recover") || containsRecover(handler.Body) {
 			return true
 		}
+		if !statementsTerminate(handler.Body) {
+			return true
+		}
 	}
 	return false
+}
+
+func statementsTerminate(stmts []*Statement) bool {
+	if len(stmts) == 0 {
+		return false
+	}
+	last := stmts[len(stmts)-1]
+	switch last.Kind {
+	case "finish", "fail", "passFailure", "return":
+		return true
+	case "when":
+		return false // an unpaired branch can always fall through
+	default:
+		return false
+	}
 }
 
 // checkActionContracts performs the deterministic part of typed failure
@@ -1337,6 +1372,9 @@ func checkRecoveryShape(operation *Statement, hasResult bool, add func(int, stri
 	var walk func([]*Statement)
 	walk = func(stmts []*Statement) {
 		for _, child := range stmts {
+			if child.Kind == "call" || child.Kind == "openStream" {
+				continue
+			}
 			if child.Kind == "recover" {
 				hasValue := match("recover", child.Text)[1] != ""
 				if hasResult && !hasValue {
