@@ -146,6 +146,16 @@ desktop app, see the [Studio guide](docs/studio-overview.md).
 
 ### Build the VS Code extension from the repository
 
+To build the current checkout, smoke-test its VSIX, and update the local `sos`,
+`sysone`, and VS Code extension installations together:
+
+```sh
+./scripts/sync-local-dev.sh
+```
+
+Reload any VS Code windows that were already open after the command completes.
+For the individual build steps, use:
+
 ```sh
 go generate ./internal/sosbuild
 mkdir -p vscode/bin

@@ -16,6 +16,15 @@ runtime used by the CLI.
 Build and install it from the repository root:
 
 ```sh
+./scripts/sync-local-dev.sh
+```
+
+That command builds and smoke-tests the current checkout before updating the
+standalone `sos` and `sysone` commands and the locally installed extension as
+one unit. Reload VS Code windows that were already open afterward. To package
+only the extension manually:
+
+```sh
 go generate ./internal/sosbuild
 mkdir -p vscode/bin
 go build -o vscode/bin/sos ./cmd/sos
