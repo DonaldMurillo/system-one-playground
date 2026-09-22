@@ -30,7 +30,7 @@ commands:
   canonicalize FILE [--write|--diff] [--line N]
                                       resolve canonical source or one line
   config FILE                         show effective configuration as JSON
-  check FILE [--json]                 report diagnostics and failure contracts
+  check FILE [--json] [--editor]      report diagnostics and failure contracts
   fmt FILE [--write]                  print formatted FILE, or rewrite it
   build FILE --output PATH [--target native|wasm-browser|wasm-wasi]
                                       build a standalone executable
@@ -52,7 +52,7 @@ script's command declarations; --help after FILE prints the script's usage.
 token available to scripts after FILE.
 `
 
-const checkUsage = "usage: sos check FILE [--json]\n"
+const checkUsage = "usage: sos check FILE [--json] [--editor]\n"
 
 const fmtUsage = "usage: sos fmt FILE [--write]\n"
 
@@ -381,6 +381,7 @@ parse:
 func cmdCheck(args []string, stdout, stderr io.Writer) int {
 	file := ""
 	jsonOut := false
+	editorMode := false
 	for _, arg := range args {
 		switch {
 		case arg == "-h" || arg == "--help":
@@ -388,6 +389,8 @@ func cmdCheck(args []string, stdout, stderr io.Writer) int {
 			return 0
 		case arg == "--json":
 			jsonOut = true
+		case arg == "--editor":
+			editorMode = true
 		case strings.HasPrefix(arg, "-"):
 			fmt.Fprintf(stderr, "sos: check: unknown flag %s\n%s", arg, checkUsage)
 			return 2
@@ -408,9 +411,14 @@ func cmdCheck(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	program, diagnostics := sos.LoadProgram(file, string(source))
+	editorDiagnostics := sos.EditorDiagnostics(file, string(source), diagnostics)
 	if jsonOut {
+		outputDiagnostics := any(diagnostics)
+		if editorMode {
+			outputDiagnostics = editorDiagnostics
+		}
 		payload := map[string]any{
-			"diagnostics":      diagnostics,
+			"diagnostics":      outputDiagnostics,
 			"actions":          program.ActionMetadata(),
 			"possibleFailures": failureMetadata(program),
 		}
@@ -418,7 +426,28 @@ func cmdCheck(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "sos: check: %v\n", err)
 			return 1
 		}
-		if len(diagnostics) > 0 {
+		if editorMode {
+			for _, diagnostic := range editorDiagnostics {
+				if diagnostic.Severity == "error" {
+					return 1
+				}
+			}
+		} else if len(diagnostics) > 0 {
+			return 1
+		}
+		return 0
+	}
+	if editorMode {
+		hasErrors := false
+		for _, diagnostic := range editorDiagnostics {
+			writer := stdout
+			if diagnostic.Severity == "error" {
+				writer = stderr
+				hasErrors = true
+			}
+			fmt.Fprintf(writer, "%s:%d:%d: %s: %s\n", file, diagnostic.Line, diagnostic.Column, diagnostic.Severity, diagnostic.Message)
+		}
+		if hasErrors {
 			return 1
 		}
 		return 0

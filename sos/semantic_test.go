@@ -518,6 +518,7 @@ func TestSemanticDeterministicParaphraseLowering(t *testing.T) {
 		{"read into", `read "tickets.json" as json into tickets`, `read "tickets.json" as json called tickets`, "read-json"},
 		{"write to", `write tickets as json to "out.json"`, `save tickets as json in "out.json"`, "save-in"},
 		{"store in", `store tickets as json in "out.json"`, `save tickets as json in "out.json"`, "save-in"},
+		{"display table", `display tickets as table with id, team`, `show tickets as table with id, team`, "output-table"},
 		{"group them", `group them by team called teams`, `group tickets by team called teams`, "group-by:tickets"},
 		{"sort them", `sort them by created`, `sort tickets by created ascending`, "sort-ascending:tickets"},
 		{"keep them", `keep them where status is "open"`, `keep tickets where status is "open"`, "keep-where:tickets"},

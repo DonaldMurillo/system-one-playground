@@ -2,6 +2,16 @@
 
 Every example is a self-contained folder with its entry point named `main.sos`.
 Run commands from the example directory unless its README says otherwise.
+Each runnable folder includes `sos.toml`, so VS Code treats it as an independent
+project and resolves relative fixtures from that folder. Open one example folder
+for the cleanest panel experience; right-clicking a file also uses its nearest
+example project boundary.
+
+Offline examples run without credentials. `primitives`, `jev-workflow`,
+`semantic-gauntlet`, `urgent-filter`, `urgent-tickets`, and semantic semlint
+checks require a configured Jev token when they execute model judgments.
+VS Code's **Check Project** remains offline and labels valid semantic sentences
+as pending analysis; **Analyze** or **Run** performs the configured requests.
 
 ## Language basics
 

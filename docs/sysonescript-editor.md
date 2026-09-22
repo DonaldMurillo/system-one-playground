@@ -230,6 +230,16 @@ have separate snapshots, and cached analysis does not represent new spending.
 
 ### Semantic diagnostics and decision evidence
 
+The extension runs project checks with `sos check FILE --editor`. This remains
+offline and preserves canonical errors, while reporting valid semantic phrases
+as pending analysis instead of failing the project check. Plain `sos check FILE`
+remains strict for CI and rejects source that has not been canonicalized or
+supplied with an explicit resolution.
+
+Run Project and Run File use the nearest `sos.toml` as the project boundary.
+For command entrypoints, the extension prompts for script arguments and appends
+them after `--`, preserving runner flags and the project's working directory.
+
 The local editor checker marks registered semantic sentences as informational
 "awaiting interpretation" notices when the effective policy allows them.
 Unknown syntax and malformed criterion declarations remain errors. Analyze/Run

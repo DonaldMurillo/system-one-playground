@@ -5,7 +5,7 @@ const crypto = require('node:crypto')
 const { spawn } = require('node:child_process')
 const vscode = require('vscode')
 const { LspClient } = require('./lsp-client')
-const { compareVersions, discoverEntrypoints, findProjectRoot, parseVersionLine, readExternalModules, readHelpers, relativeScript, resolveProjectEntrypoint } = require('./project')
+const { appendScriptArguments, compareVersions, discoverEntrypoints, findProjectRoot, parseVersionLine, readExternalModules, readHelpers, relativeScript, resolveProjectEntrypoint } = require('./project')
 const { decisionLensTitle, analyzedLineMatches } = require('./semantic')
 
 const LANGUAGE_ID = 'sos'
@@ -319,7 +319,9 @@ async function runProject(resource) {
     vscode.window.showWarningMessage('Run canceled because the workspace could not be saved.')
     return
   }
-  await runWithAnalysisCapture(selected.file, selected.root, `Run ${relativeScript(selected.root, selected.file)}`)
+  const scriptArgs = await promptScriptArguments(selected.file, 'Run')
+  if (scriptArgs === undefined) return
+  await runWithAnalysisCapture(selected.file, selected.root, `Run ${relativeScript(selected.root, selected.file)}`, scriptArgs)
 }
 
 async function runFile(resource) {
@@ -335,10 +337,12 @@ async function runFile(resource) {
     vscode.window.showWarningMessage('Run canceled because the workspace could not be saved.')
     return
   }
-  await runWithAnalysisCapture(file, root, `Run ${relativeScript(root, file)}`)
+  const scriptArgs = await promptScriptArguments(file, 'Run')
+  if (scriptArgs === undefined) return
+  await runWithAnalysisCapture(file, root, `Run ${relativeScript(root, file)}`, scriptArgs)
 }
 
-async function runWithAnalysisCapture(file, root, label) {
+async function runWithAnalysisCapture(file, root, label, scriptArgs = []) {
   const state = extensionState
   const document = vscode.workspace.textDocuments.find(item => item.uri.fsPath === file) || await vscode.workspace.openTextDocument(file)
   const source = document?.getText()
@@ -355,7 +359,7 @@ async function runWithAnalysisCapture(file, root, label) {
       args.push('--resolution', inputResolution)
     }
     args.push(relativeScript(root, file))
-    runPanelProcess('run', args, root, label, undefined, code => {
+    runPanelProcess('run', appendScriptArguments(args, scriptArgs), root, label, undefined, code => {
       try {
         if (code === 0 && document && document.version === version && document.getText() === source) {
           const analysis = JSON.parse(fs.readFileSync(resolution, 'utf8'))
@@ -382,7 +386,7 @@ async function checkProject(resource) {
   const selected = projectEntrypoint(resource)
   if (!selected) return
 	if (!await saveWorkspace()) return vscode.window.showWarningMessage('Check canceled because the workspace could not be saved.')
-  runPanelProcess('check', ['check', relativeScript(selected.root, selected.file)], selected.root, `Check ${relativeScript(selected.root, selected.file)}`)
+  runPanelProcess('check', ['check', relativeScript(selected.root, selected.file), '--editor'], selected.root, `Check ${relativeScript(selected.root, selected.file)}`)
 }
 
 async function buildProject(resource) {
@@ -511,6 +515,21 @@ function splitScriptArguments(value) {
   let match
   while ((match = pattern.exec(value)) !== null) result.push(match[1] ?? match[2] ?? match[3])
   return result
+}
+
+async function promptScriptArguments(file, action) {
+  try {
+    const source = fs.readFileSync(file, 'utf8')
+    if (!/^\s*command\b/m.test(source)) return []
+    const entered = await vscode.window.showInputBox({
+      prompt: `${action} command and arguments`,
+      placeHolder: 'for example: report team-tickets.json --output reports',
+      value: '',
+    })
+    return entered === undefined ? undefined : splitScriptArguments(entered)
+  } catch {
+    return []
+  }
 }
 
 async function debugProject(resource) {

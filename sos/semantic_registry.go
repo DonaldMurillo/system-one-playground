@@ -227,6 +227,13 @@ func (a *semanticAnalysis) candidatesFor(n *semNode, scope *semScope) ([]semCand
 			lines:   []string{line},
 		}}, problems
 
+	case "output-table":
+		return []semCandidate{{
+			id:      "output-table",
+			meaning: "display the requested table using the canonical show operation",
+			lines:   []string{"show " + m[1]},
+		}}, problems
+
 	case "keep-criterion-name", "keep-criterion-ones":
 		if a.policy.interpretation != "semantic" {
 			problems = append(problems, fmt.Sprintf("semantic criteria require interpretation mode semantic; interpretation mode is %q", a.policy.interpretation))
@@ -338,6 +345,8 @@ func (a *semanticAnalysis) explain(n *semNode, cand semCandidate, conf float64, 
 		return fmt.Sprintf("verb %q lowers to canonical read; path, representation, and result name are explicit", verb)
 	case cand.id == "save-in":
 		return fmt.Sprintf("verb %q lowers to canonical save; format and destination are explicit; no overwrite policy is invented", verb)
+	case cand.id == "output-table":
+		return fmt.Sprintf("verb %q lowers to canonical show; the output expression and presentation are preserved", verb)
 	}
 	return "resolved to " + cand.id
 }

@@ -128,6 +128,12 @@ function relativeScript(root, file) {
   return path.relative(root, file).split(path.sep).join('/')
 }
 
+function appendScriptArguments(args, scriptArgs) {
+  const result = [...args]
+  if (scriptArgs.length) result.push('--', ...scriptArgs)
+  return result
+}
+
 function parseVersionLine(value) {
   const match = String(value || '').match(/\b(?:sos|sysone)\s+v?(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)/i)
   return match?.[1]
@@ -144,4 +150,4 @@ function compareVersions(left, right) {
   return 0
 }
 
-module.exports = { compareVersions, discoverEntrypoints, findProjectRoot, isDirectory, parseVersionLine, readExternalModules, readHelpers, relativeScript, resolveProjectEntrypoint, walkScripts }
+module.exports = { appendScriptArguments, compareVersions, discoverEntrypoints, findProjectRoot, isDirectory, parseVersionLine, readExternalModules, readHelpers, relativeScript, resolveProjectEntrypoint, walkScripts }

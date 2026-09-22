@@ -37,6 +37,7 @@ var semanticForms = []struct {
 	{"read-into", `^read ("(?:[^"\\]|\\.)*") as (json|text|lines of json) into ([A-Za-z_]\w*)$`},
 	{"save-write", `^write (.+) as (json|text) to ("(?:[^"\\]|\\.)*")$`},
 	{"save-store", `^store (.+) as (json|text) (?:in|to) ("(?:[^"\\]|\\.)*")$`},
+	{"output-table", `^(?:display|emit|print) (.+ as table(?: with .+)?)$`},
 }
 
 var semanticPatterns = map[string]*regexp.Regexp{}

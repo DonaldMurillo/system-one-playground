@@ -26,7 +26,66 @@ func TestExamplesAreOrganizedAsProjects(t *testing.T) {
 		if !entry.IsDir() && filepath.Ext(entry.Name()) == ".sos" {
 			t.Errorf("flat example %q: put runnable examples in their own folder", entry.Name())
 		}
+		if !entry.IsDir() {
+			continue
+		}
+		dir := filepath.Join(examplesRoot(t), entry.Name())
+		if _, err := os.Stat(filepath.Join(dir, "main.sos")); err != nil {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(dir, "sos.toml")); err != nil {
+			t.Errorf("runnable example %q has no sos.toml project boundary", entry.Name())
+		}
 	}
+}
+
+func TestSemanticExamplesPassEditorAwareCheckWithoutCredentials(t *testing.T) {
+	for _, name := range []string{"jev-workflow", "semantic-gauntlet", "urgent-tickets"} {
+		dir := filepath.Join(examplesRoot(t), name)
+		stdout, stderr, code := runCLI(t, dir, "check", "main.sos", "--editor")
+		if code != 0 {
+			t.Errorf("%s editor check exit=%d stdout=%q stderr=%q", name, code, stdout, stderr)
+		}
+		if stderr != "" {
+			t.Errorf("%s editor check emitted errors: %q", name, stderr)
+		}
+	}
+}
+
+func TestOfflineExamplesRunFromTheirProjectDirectories(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "collections", want: "api"},
+		{name: "count", want: "Doubled: 20"},
+		{name: "greet", want: "Hello, world!"},
+		{name: "packages", want: "Support queue"},
+		{name: "standard-library", want: "SUPPORT QUEUE"},
+		{name: "vocabulary", want: "SUPPORT QUEUE"},
+		{name: "vocabulary-project", want: "PROJECT VOCABULARY"},
+		{name: "tickets", want: "Commands:"},
+		{name: "repo-assistant", want: "Commands:"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := filepath.Join(examplesRoot(t), tc.name)
+			args := append([]string{"run", "main.sos"}, tc.args...)
+			stdout, stderr, code := runCLI(t, dir, args...)
+			if code != 0 || !strings.Contains(stdout, tc.want) {
+				t.Fatalf("exit=%d stdout=%q stderr=%q; want %q", code, stdout, stderr, tc.want)
+			}
+		})
+	}
+
+	t.Run("team-report", func(t *testing.T) {
+		dir := filepath.Join(examplesRoot(t), "team-report")
+		stdout, stderr, code := runCLI(t, dir, "run", "main.sos", "--", "team-tickets.json", "--output", filepath.Join(t.TempDir(), "reports"))
+		if code != 0 || !strings.Contains(stdout, "billing") || !strings.Contains(stdout, "platform") {
+			t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+		}
+	})
 }
 
 func TestExternalStdioExampleCoversProjectWorkflow(t *testing.T) {

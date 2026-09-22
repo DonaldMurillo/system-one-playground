@@ -12,8 +12,8 @@ command report:
   option output as folder default "./team-reports"
 
   read source as json called tickets
-  retain tickets where status is "open"
-  order them by priority highest first
+  keep tickets where status is "open"
+  sort tickets by priority descending
   group tickets by team called teams
 
   create folder output if missing

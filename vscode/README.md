@@ -72,7 +72,9 @@ project discovery), then exposes folder-level Run, Check, Build,
 Debug, Stop, helper, generator, and Jev controls. Run, Check, and Build execute
 directly, keep concise status in the sidebar, and automatically open the
 dedicated **SysOneScript Run** Output channel with complete output and errors;
-they do not open an entrypoint picker or terminal. It does not mirror the file system. File Run
+they do not open an entrypoint picker or terminal. When the entrypoint declares
+a command, Run asks for that command's arguments and passes them across the
+script `--` boundary. It does not mirror the file system. File Run
 actions operate on the selected `.sos` file while retaining the containing
 project's `sos.toml`, working directory, and `.env`.
 The `.sos` mark is contributed as a language-default icon, allowing compatible

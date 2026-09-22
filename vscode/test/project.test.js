@@ -4,7 +4,7 @@ const os = require('node:os')
 const path = require('node:path')
 const test = require('node:test')
 
-const { compareVersions, discoverEntrypoints, findProjectRoot, parseVersionLine, readExternalModules, readHelpers, relativeScript, resolveProjectEntrypoint, walkScripts } = require('../project')
+const { appendScriptArguments, compareVersions, discoverEntrypoints, findProjectRoot, parseVersionLine, readExternalModules, readHelpers, relativeScript, resolveProjectEntrypoint, walkScripts } = require('../project')
 
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sysonescript-project-'))
@@ -38,6 +38,14 @@ test('resolves project actions without asking for an entrypoint', () => {
   assert.equal(relativeScript(root, resolveProjectEntrypoint(root)), 'src/main.sos')
   assert.equal(relativeScript(root, resolveProjectEntrypoint(root, 'src/helper.sos')), 'src/helper.sos')
   assert.equal(relativeScript(root, resolveProjectEntrypoint(root, '../outside.sos')), 'src/main.sos')
+})
+
+test('passes project command arguments after the runner boundary', () => {
+  assert.deepEqual(appendScriptArguments(['run', 'main.sos'], []), ['run', 'main.sos'])
+  assert.deepEqual(
+    appendScriptArguments(['run', '--save-resolution', 'result.json', 'main.sos'], ['report', 'tickets.json', '--output', 'reports']),
+    ['run', '--save-resolution', 'result.json', 'main.sos', '--', 'report', 'tickets.json', '--output', 'reports'],
+  )
 })
 
 test('reads project helper actions without accepting malformed entries', () => {
