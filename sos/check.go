@@ -936,7 +936,14 @@ func expressionIdentifiers(expr string) map[string]bool {
 			for i < len(expr) && (expr[i] == '_' || expr[i] >= 'A' && expr[i] <= 'Z' || expr[i] >= 'a' && expr[i] <= 'z' || expr[i] >= '0' && expr[i] <= '9') {
 				i++
 			}
-			result[expr[start:i]] = true
+			name := expr[start:i]
+			j := i
+			for j < len(expr) && (expr[j] == ' ' || expr[j] == '\t') {
+				j++
+			}
+			if j >= len(expr) || expr[j] != ':' {
+				result[name] = true
+			}
 			continue
 		}
 		i++
@@ -961,8 +968,12 @@ func openFailureHandlerRecovers(operation *Statement) bool {
 		if handler.Kind != "handler" || match("handler", handler.Text)[1] != "failure" {
 			continue
 		}
-		if strings.HasPrefix(match("handler", handler.Text)[2], "recover") || containsRecover(handler.Body) {
+		inline := strings.TrimSpace(match("handler", handler.Text)[2])
+		if strings.HasPrefix(inline, "recover") || containsRecover(handler.Body) {
 			return true
+		}
+		if inline == "finish" || inline == "fail" || inline == "stop" || inline == "rethrow" || inline == "pass failure on" || strings.HasPrefix(inline, "finish with ") || strings.HasPrefix(inline, "stop with ") || strings.HasPrefix(inline, "fail ") {
+			continue
 		}
 		if !statementsTerminate(handler.Body) {
 			return true

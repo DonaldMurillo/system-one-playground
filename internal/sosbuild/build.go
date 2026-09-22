@@ -15,7 +15,6 @@ import (
 	"errors"
 	"fmt"
 	"html"
-	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -289,6 +288,7 @@ func publishStagedPaths(paths []stagedPath) error {
 	type movedPath struct {
 		destination, backup string
 		published           bool
+		directory           bool
 	}
 	moved := make([]movedPath, 0, len(paths))
 	rollback := func() error {
@@ -296,6 +296,12 @@ func publishStagedPaths(paths []stagedPath) error {
 		for i := len(moved) - 1; i >= 0; i-- {
 			item := moved[i]
 			if item.backup != "" {
+				if item.directory {
+					if err := atomicSwapDirectories(item.backup, item.destination); err != nil {
+						problems = append(problems, fmt.Sprintf("restore %s: %v", item.destination, err))
+					}
+					continue
+				}
 				if info, err := os.Stat(item.backup); err == nil && info.IsDir() {
 					if err := os.RemoveAll(item.destination); err != nil {
 						problems = append(problems, fmt.Sprintf("remove %s: %v", item.destination, err))
@@ -328,7 +334,7 @@ func publishStagedPaths(paths []stagedPath) error {
 	}
 	for _, path := range paths {
 		item := movedPath{destination: path.destination}
-		if info, err := os.Stat(path.destination); err == nil {
+		if info, err := os.Lstat(path.destination); err == nil {
 			placeholder, err := os.CreateTemp(filepath.Dir(path.destination), ".sosbuild-backup-")
 			if err != nil {
 				return fail(err)
@@ -337,29 +343,21 @@ func publishStagedPaths(paths []stagedPath) error {
 			if info.IsDir() {
 				_ = placeholder.Close()
 				_ = os.Remove(item.backup)
-				if err := os.Rename(path.destination, item.backup); err != nil {
-					return fail(err)
+				item.backup = path.staged
+				item.directory = true
+				if err := atomicSwapDirectories(path.staged, path.destination); err != nil {
+					return fail(fmt.Errorf("atomically replace bundle directory: %w", err))
 				}
+				item.published = true
 				moved = append(moved, item)
-				if err := os.Rename(path.staged, path.destination); err != nil {
-					return fail(err)
-				}
-				moved[len(moved)-1].published = true
 				continue
 			}
-			source, err := os.Open(path.destination)
+			err = placeholder.Close()
 			if err == nil {
-				_, err = io.Copy(placeholder, source)
-				_ = source.Close()
+				err = os.Remove(item.backup)
 			}
 			if err == nil {
-				err = placeholder.Chmod(info.Mode())
-			}
-			if err == nil {
-				err = placeholder.Sync()
-			}
-			if closeErr := placeholder.Close(); err == nil {
-				err = closeErr
+				err = os.Link(path.destination, item.backup)
 			}
 			if err != nil {
 				_ = os.Remove(item.backup)

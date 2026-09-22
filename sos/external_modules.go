@@ -432,6 +432,7 @@ func DoctorExternalModule(ctx context.Context, dir, modulePath string) error {
 		if len(d.Runtime.Command) > 0 && strings.HasPrefix(filepath.Base(d.Runtime.Command[0]), runtimeName) {
 			program = d.Runtime.Command[0]
 		}
+		program = d.resolveDefinitionProgram(program)
 		resolved, err := exec.LookPath(program)
 		if err != nil {
 			return fmt.Errorf("module %s requires %s %s; %s was not found", d.Module.Path, runtimeName, requirement, program)
@@ -489,6 +490,7 @@ func runExternalProbe(ctx context.Context, dir string, env []string, program str
 		return nil, err
 	}
 	cmd := exec.Command(program, args...)
+	cmd.WaitDelay = time.Second
 	configureProcessTree(cmd)
 	cmd.Dir, cmd.Env = dir, env
 	stdout, stderr := newExternalOutput(nil), newExternalOutput(nil)
@@ -2224,6 +2226,7 @@ func (d *ExternalModuleDefinition) startStdio(ctx context.Context, opts Options)
 	// A plugin belongs to the whole run session. A worker-local context (for
 	// example parallel map's join context) must not kill a process retained for
 	// later calls in that same run; invoke cancellation still terminates it.
+	command[0] = d.resolveDefinitionProgram(command[0])
 	cmd := exec.CommandContext(context.WithoutCancel(ctx), command[0], command[1:]...)
 	configureProcessTree(cmd)
 	cmd.Dir = opts.Dir
