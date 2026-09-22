@@ -88,6 +88,30 @@ func TestOfflineExamplesRunFromTheirProjectDirectories(t *testing.T) {
 	})
 }
 
+func TestJevWorkflowDisplayExampleAnalyzesAndRuns(t *testing.T) {
+	fx := semNewFixture(t, semServeCooperative)
+	fx.noulYes = []string{"down", "twice"}
+	source, err := os.ReadFile(filepath.Join(examplesRoot(t), "jev-workflow", "main.sos"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	exact := strings.Replace(string(source), "show tickets as table with id, team, message", "display tickets as table with id, team, message", 1)
+	dir := t.TempDir()
+	script := writeScript(t, dir, "main.sos", exact)
+	resolution := filepath.Join(dir, "resolution.json")
+	stdout, stderr, code := runCLI(t, dir, "explain", script, "--save", resolution)
+	if code != 0 {
+		t.Fatalf("analyze exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	analysis := semParseAnalysis(t, stdout)
+	semRequireBodyLine(t, analysis.Canonical, "show tickets as table with id, team, message", "display table lowering")
+
+	stdout, stderr, code = runCLI(t, dir, "run", script, "--resolution", resolution)
+	if code != 0 || !strings.Contains(stdout, "Checkout") || !strings.Contains(stdout, "twice") || strings.Contains(stdout, "purple") {
+		t.Fatalf("run exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+}
+
 func TestExternalStdioExampleCoversProjectWorkflow(t *testing.T) {
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 is required for the stdio example")
