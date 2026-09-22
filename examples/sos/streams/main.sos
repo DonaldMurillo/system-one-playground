@@ -1,0 +1,10 @@
+import "example/streams" as events
+
+# Opening returns after producer startup; consumption remains ordered.
+stream events.finite with 3 called incoming
+show "Stream opened"
+
+for each event from incoming:
+  show "{sequence of event}: {message of event}"
+
+show "Stream finished"

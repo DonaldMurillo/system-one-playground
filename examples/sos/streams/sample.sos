@@ -1,0 +1,7 @@
+import "example/streams" as events
+
+stream events.infinite called incoming
+take first 3 items from incoming called sample
+
+for each event in sample:
+  show message of event

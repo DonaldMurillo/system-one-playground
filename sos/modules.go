@@ -272,6 +272,7 @@ type OperationInfo struct {
 	Kind             string      `json:"kind"` // action, failure, schema, or native
 	Params           []string    `json:"params,omitempty"`
 	Result           string      `json:"result,omitempty"`
+	StreamItem       string      `json:"streamItem,omitempty"`
 	PossibleFailures []string    `json:"possibleFailures,omitempty"`
 	Effects          []string    `json:"effects,omitempty"`
 	Failure          *FailureDef `json:"failure,omitempty"`
@@ -299,6 +300,9 @@ func (p *Program) ActionMetadata() []OperationInfo {
 		if decl.HasResult {
 			info.Result = decl.Result.String()
 		}
+		if decl.Streaming {
+			info.StreamItem = decl.StreamItem.String()
+		}
 		info.PossibleFailures = append(info.PossibleFailures, decl.Failures...)
 		info.PossibleFailures = append(info.PossibleFailures, p.actionPossibleFailures(decl.Name, map[string]bool{})...)
 		info.PossibleFailures = uniqueSorted(info.PossibleFailures)
@@ -320,14 +324,15 @@ func (p *Program) actionPossibleFailures(name string, visiting map[string]bool) 
 	defer delete(visiting, name)
 	decl, _ := parseActionDecl(fn.Text)
 	result := append([]string(nil), decl.Failures...)
+	streamFailures := map[string][]string{}
 	var walk func([]*Statement)
 	walk = func(stmts []*Statement) {
 		for _, statement := range stmts {
 			switch statement.Kind {
 			case "fail":
 				result = append(result, match("fail", statement.Text)[1])
-			case "call":
-				m := match("call", statement.Text)
+			case "call", "openStream":
+				m := match(statement.Kind, statement.Text)
 				var failures []string
 				if strings.Contains(m[1], ".") && p.Modules != nil {
 					alias, action, _ := strings.Cut(m[1], ".")
@@ -338,7 +343,19 @@ func (p *Program) actionPossibleFailures(name string, visiting map[string]bool) 
 					failures = p.actionPossibleFailures(m[1], visiting)
 				}
 				result = append(result, unhandledFailures(failures, statement)...)
+				if statement.Kind == "openStream" {
+					streamFailures[m[3]] = failures
+				}
 				walkFailureHandlerBodies(statement.Body, walk)
+				continue
+			case "streamFor", "collectStream", "take":
+				m := match(statement.Kind, statement.Text)
+				streamName := m[2]
+				if statement.Kind == "take" {
+					streamName = m[3]
+				}
+				result = append(result, unhandledFailures(streamFailures[strings.TrimSpace(streamName)], statement)...)
+				walk(statement.Body)
 				continue
 			case "sent":
 				var failures []string
@@ -445,6 +462,10 @@ func moduleOperations(m *Module) []OperationInfo {
 				info.Params = append(info.Params, p.Name)
 			}
 			info.Result = op.Result
+			if strings.HasPrefix(op.Result, "stream of ") {
+				info.StreamItem = strings.TrimSpace(strings.TrimPrefix(op.Result, "stream of "))
+				info.Result = ""
+			}
 			info.PossibleFailures = append([]string(nil), op.PossibleFailures...)
 			info.Effects = append([]string(nil), op.Effects...)
 		} else if s := m.Actions[name]; s != nil {
@@ -452,6 +473,9 @@ func moduleOperations(m *Module) []OperationInfo {
 			if decl, err := parseActionDecl(s.Text); err == nil {
 				if decl.HasResult {
 					info.Result = decl.Result.String()
+				}
+				if decl.Streaming {
+					info.StreamItem = decl.StreamItem.String()
 				}
 				info.PossibleFailures = append(info.PossibleFailures, decl.Failures...)
 			}

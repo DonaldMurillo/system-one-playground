@@ -1,0 +1,9 @@
+import "example/streams" as events
+
+stream events.infinite called incoming
+for each event from incoming:
+  show message of event
+  when sequence of event is 2:
+    stop reading
+
+show "Stopped intentionally"

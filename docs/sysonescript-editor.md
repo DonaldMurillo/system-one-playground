@@ -108,6 +108,16 @@ Opening, editing, completion, and ordinary project refreshes never launch a
 plugin. External calls appear as opaque debugger frames and write only redacted
 module/action status to traces and the run Output channel.
 
+Streaming actions receive completion, hover, diagnostics, and semantic
+highlighting. The checker distinguishes `from` stream loops from `in`
+collection loops and diagnoses copied, abandoned, or reused handles. Hover
+shows the item type and declared opening/terminal failures.
+Debugger Variables may show stream state, producer, received/buffered item
+counts, and available credit, but expanding that value never requests the next
+item. Dedicated active-stream panels, individual Cancel buttons, and stream
+lifecycle trace/progress events are not implemented. Use **Stop processes** to
+cancel the active run and all of its producers.
+
 Project helpers and generators are configured in `.vscode/sysonescript.json`:
 
 ```json

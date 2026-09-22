@@ -1,0 +1,7 @@
+import "example/streams" as events
+
+stream events.finite with 3 called incoming
+collect at most 5 items from incoming called buffered
+
+for each event in buffered:
+  show message of event

@@ -1,0 +1,6 @@
+import "example/streams" as events
+
+stream events.infinite called incoming
+show "Producer started"
+close stream incoming
+show "Producer closed"

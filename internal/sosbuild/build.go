@@ -147,27 +147,45 @@ func Build(ctx context.Context, opts BuildOptions) error {
 		return err
 	}
 	graph := opts.Program.Modules.Graph()
+	finalOutput := output
 	bundled := false
 	for _, external := range graph.External {
 		bundled = bundled || external.DistributionMode == "bundled"
 	}
-	if bundled {
-		bundleDir := output
-		if _, statErr := os.Stat(filepath.Join(bundleDir, "manifest.json")); statErr == nil {
-			if err := os.RemoveAll(filepath.Join(bundleDir, "modules")); err != nil {
-				return fmt.Errorf("clean previous bundled modules: %w", err)
-			}
+	if info, statErr := os.Stat(finalOutput); statErr == nil {
+		if !bundled && info.IsDir() {
+			return fmt.Errorf("output path %s is a directory", finalOutput)
 		}
-		if err := os.MkdirAll(bundleDir, 0o755); err != nil {
+		if bundled && !info.IsDir() {
+			return fmt.Errorf("bundled output path %s is not a directory", finalOutput)
+		}
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return statErr
+	}
+	stageParent := filepath.Dir(finalOutput)
+	if err := os.MkdirAll(stageParent, 0o755); err != nil {
+		return err
+	}
+	stageDir, err := os.MkdirTemp(stageParent, "."+filepath.Base(finalOutput)+"-stage-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(stageDir)
+	var bundleStage string
+	if bundled {
+		bundleStage = filepath.Join(stageDir, "bundle")
+		if err := os.MkdirAll(bundleStage, 0o755); err != nil {
 			return err
 		}
-		output = filepath.Join(bundleDir, filepath.Base(bundleDir))
+		output = filepath.Join(bundleStage, filepath.Base(finalOutput))
 		if runtime.GOOS == "windows" && filepath.Ext(output) == "" {
 			output += ".exe"
 		}
-		if err := prepareExternalBundle(graph, bundleDir, filepath.Base(output)); err != nil {
+		if err := prepareExternalBundle(graph, bundleStage, filepath.Base(output)); err != nil {
 			return err
 		}
+	} else {
+		output = filepath.Join(stageDir, filepath.Base(finalOutput))
 	}
 	normalizeGraphForDistribution(graph, opts.Dir)
 	if err := os.MkdirAll(filepath.Dir(output), 0o755); err != nil {
@@ -244,6 +262,74 @@ func Build(ctx context.Context, opts BuildOptions) error {
 	if target == TargetWasmBrowser {
 		if err := writeBrowserHost(filepath.Dir(output), filepath.Base(output), goBin); err != nil {
 			return err
+		}
+	}
+	if bundled {
+		return publishStagedPaths([]stagedPath{{bundleStage, finalOutput}})
+	}
+	paths := []stagedPath{{output, finalOutput}}
+	if target == TargetWasmBrowser {
+		for _, name := range []string{"wasm_exec.js", "index.html"} {
+			staged := filepath.Join(filepath.Dir(output), name)
+			if _, err := os.Stat(staged); err == nil {
+				paths = append(paths, stagedPath{staged, filepath.Join(filepath.Dir(finalOutput), name)})
+			}
+		}
+	}
+	return publishStagedPaths(paths)
+}
+
+type stagedPath struct{ staged, destination string }
+
+// publishStagedPaths replaces destinations only after every build output has
+// been materialized successfully. Existing artifacts are moved aside and
+// restored if publishing any member fails.
+func publishStagedPaths(paths []stagedPath) error {
+	type movedPath struct {
+		destination, backup string
+		published           bool
+	}
+	moved := make([]movedPath, 0, len(paths))
+	rollback := func() {
+		for i := len(moved) - 1; i >= 0; i-- {
+			item := moved[i]
+			if item.published {
+				_ = os.RemoveAll(item.destination)
+			}
+			if item.backup != "" {
+				_ = os.Rename(item.backup, item.destination)
+			}
+		}
+	}
+	for _, path := range paths {
+		item := movedPath{destination: path.destination}
+		if _, err := os.Lstat(path.destination); err == nil {
+			placeholder, err := os.CreateTemp(filepath.Dir(path.destination), ".sosbuild-backup-")
+			if err != nil {
+				rollback()
+				return err
+			}
+			item.backup = placeholder.Name()
+			_ = placeholder.Close()
+			_ = os.Remove(item.backup)
+			if err := os.Rename(path.destination, item.backup); err != nil {
+				rollback()
+				return err
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			rollback()
+			return err
+		}
+		moved = append(moved, item)
+		if err := os.Rename(path.staged, path.destination); err != nil {
+			rollback()
+			return err
+		}
+		moved[len(moved)-1].published = true
+	}
+	for _, item := range moved {
+		if item.backup != "" {
+			_ = os.RemoveAll(item.backup)
 		}
 	}
 	return nil

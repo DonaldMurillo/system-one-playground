@@ -252,6 +252,11 @@ func analyze(p *Program) []Diagnostic {
 					} else if want, known := sentArity(target, action); known && len(args) != want {
 						add(s, fmt.Sprintf("%s expects %d argument(s)", m[1], want))
 					}
+					if target != nil {
+						if _, streaming, _ := streamTarget(p, actions, action, target); streaming {
+							add(s, "streaming action "+m[1]+" must be opened with stream")
+						}
+					}
 				}
 				args, e := sentArguments(m)
 				if e != nil {
@@ -261,6 +266,9 @@ func analyze(p *Program) []Diagnostic {
 					checkExpr(s, v, false)
 				}
 				checkActionArgs(s, m[1], args, false)
+				checkRecoveryShape(s, operationStaticResult(p, actions, s), func(line int, format string, args ...any) {
+					ds = append(ds, Diagnostic{line, 1, fmt.Sprintf(format, args...)})
+				})
 				if m[4] != "" {
 					names[m[4]] = true
 				}
@@ -296,10 +304,74 @@ func analyze(p *Program) []Diagnostic {
 					checkExpr(s, v, false)
 				}
 				checkActionArgs(s, m[1], args, true)
+				checkRecoveryShape(s, operationStaticResult(p, actions, s), func(line int, format string, args ...any) {
+					ds = append(ds, Diagnostic{line, 1, fmt.Sprintf(format, args...)})
+				})
+				if fn := actions[m[1]]; fn != nil {
+					if decl, err := parseActionDecl(fn.Text); err == nil && decl.Streaming {
+						add(s, "streaming action "+m[1]+" must be opened with stream")
+					}
+				} else if strings.Contains(m[1], ".") {
+					alias, action, _ := strings.Cut(m[1], ".")
+					if mod := moduleAlias(p, alias); mod != nil {
+						if op, ok := mod.Native[action]; ok && strings.HasPrefix(op.Result, "stream of ") {
+							add(s, "streaming action "+m[1]+" must be opened with stream")
+						}
+					}
+				}
 				if m[3] != "" {
 					names[m[3]] = true
 					delete(types, m[3])
 				}
+			case "openStream":
+				args, e := splitExpressions(m[2])
+				if e != nil {
+					add(s, e.Error())
+				}
+				for _, v := range args {
+					checkExpr(s, v, false)
+				}
+				checkActionArgs(s, m[1], args, true)
+				checkRecoveryShape(s, false, func(line int, format string, args ...any) {
+					ds = append(ds, Diagnostic{line, 1, fmt.Sprintf(format, args...)})
+				})
+				if known, streaming, hosted := streamTarget(p, actions, m[1], nil); known && streaming && !hosted {
+					add(s, "streaming action "+m[1]+" has no host implementation and cannot be opened")
+				}
+				if strings.Contains(m[1], ".") {
+					alias, action, _ := strings.Cut(m[1], ".")
+					if mod := moduleAlias(p, alias); mod != nil {
+						if op, ok := mod.Native[action]; ok && len(args) != len(op.Params) {
+							add(s, fmt.Sprintf("%s expects %d argument(s)", m[1], len(op.Params)))
+						}
+					}
+				}
+				names[m[3]] = true
+			case "closeStream":
+				if !names[m[1]] {
+					add(s, "unknown stream "+m[1])
+				}
+			case "collectStream":
+				checkExpr(s, m[1], false)
+				checkExpr(s, m[2], false)
+				names[m[3]] = true
+				checkRecoveryShape(s, true, func(line int, format string, args ...any) {
+					ds = append(ds, Diagnostic{line, 1, fmt.Sprintf(format, args...)})
+				})
+			case "streamFor":
+				checkExpr(s, m[2], false)
+				old := names
+				names = copyNames(names)
+				names[m[1]] = true
+				names["number"] = true
+				checkRecoveryShape(s, false, func(line int, format string, args ...any) {
+					ds = append(ds, Diagnostic{line, 1, fmt.Sprintf(format, args...)})
+				})
+				walk(s.Body)
+				names = old
+				continue
+			case "stopReading":
+				// Stream-loop placement is validated by the ownership pass.
 			case "remember":
 				checkExpr(s, m[1], false)
 				names[m[2]] = true
@@ -479,10 +551,16 @@ func analyze(p *Program) []Diagnostic {
 				}
 				names[m[3]] = true
 				types[m[3]] = TypeRef{Name: "Result"}
+				if _, streaming, _ := streamTarget(p, actions, m[1], nil); streaming {
+					add(s, "cannot capture streaming action "+m[1]+"; handle opening and terminal failures separately")
+				}
 			case "take":
 				checkExpr(s, m[2], false)
 				checkExpr(s, m[3], false)
 				names[m[4]] = true
+				checkRecoveryShape(s, true, func(line int, format string, args ...any) {
+					ds = append(ds, Diagnostic{line, 1, fmt.Sprintf(format, args...)})
+				})
 			case "evaluate":
 				checkExpr(s, m[1], false)
 				checkExpr(s, m[2], false)
@@ -602,7 +680,243 @@ func analyze(p *Program) []Diagnostic {
 	}
 	walk(p.Statements)
 	ds = append(ds, checkActionContracts(p, actions, visibleDefs)...)
+	ds = append(ds, checkStreamOwnership(p, actions)...)
 	return ds
+}
+
+type streamOwnershipState struct {
+	line     int
+	consumed bool
+}
+
+func streamTarget(p *Program, actions map[string]*Statement, name string, explicit *Module) (known, streaming, hosted bool) {
+	if explicit != nil {
+		action := name
+		if _, suffix, ok := strings.Cut(name, "."); ok {
+			action = suffix
+		}
+		if op, ok := explicit.Native[action]; ok {
+			return true, strings.HasPrefix(op.Result, "stream of "), true
+		}
+		if fn := explicit.Actions[action]; fn != nil {
+			decl, err := parseActionDecl(fn.Text)
+			return err == nil, err == nil && decl.Streaming, false
+		}
+		return false, false, false
+	}
+	if !strings.Contains(name, ".") {
+		fn := actions[name]
+		if fn == nil {
+			return false, false, false
+		}
+		decl, err := parseActionDecl(fn.Text)
+		return err == nil, err == nil && decl.Streaming, false
+	}
+	alias, action, _ := strings.Cut(name, ".")
+	if mod := moduleAlias(p, alias); mod != nil {
+		return streamTarget(p, actions, action, mod)
+	}
+	return false, false, false
+}
+
+func checkStreamOwnership(p *Program, actions map[string]*Statement) []Diagnostic {
+	var ds []Diagnostic
+	clone := func(in map[string]*streamOwnershipState) map[string]*streamOwnershipState {
+		out := make(map[string]*streamOwnershipState, len(in))
+		for name, state := range in {
+			copy := *state
+			out[name] = &copy
+		}
+		return out
+	}
+	streaming := func(name string) (known, isStream bool) {
+		if !strings.Contains(name, ".") {
+			fn := actions[name]
+			if fn == nil {
+				return false, false
+			}
+			decl, err := parseActionDecl(fn.Text)
+			return err == nil, err == nil && decl.Streaming
+		}
+		alias, action, _ := strings.Cut(name, ".")
+		if mod := moduleAlias(p, alias); mod != nil {
+			if op, ok := mod.Native[action]; ok {
+				return true, strings.HasPrefix(op.Result, "stream of ")
+			}
+			if fn := mod.Actions[action]; fn != nil {
+				decl, err := parseActionDecl(fn.Text)
+				return err == nil, err == nil && decl.Streaming
+			}
+		}
+		return false, false
+	}
+	var walk func([]*Statement, map[string]*streamOwnershipState, bool, bool)
+	walk = func(sts []*Statement, owned map[string]*streamOwnershipState, inStreamLoop, closeScope bool) {
+		initial := map[string]bool{}
+		for name := range owned {
+			initial[name] = true
+		}
+		for i := 0; i < len(sts); i++ {
+			s := sts[i]
+			m := match(s.Kind, s.Text)
+			if binding := statementBindingName(s); binding != "" && s.Kind != "openStream" {
+				if state := owned[binding]; state != nil && !state.consumed {
+					ds = append(ds, Diagnostic{s.Line, 1, "cannot overwrite active stream " + binding + "; consume or close it first"})
+				}
+			}
+			switch s.Kind {
+			case "openStream":
+				known, isStream := streaming(m[1])
+				if !known {
+					ds = append(ds, Diagnostic{s.Line, 1, "unknown streaming action " + m[1]})
+					continue
+				}
+				if !isStream {
+					ds = append(ds, Diagnostic{s.Line, 1, m[1] + " is not a streaming action"})
+					continue
+				}
+				if openFailureHandlerRecovers(s) {
+					ds = append(ds, Diagnostic{s.Line, 1, "an opening failure handler cannot recover and continue because no stream handle exists; finish, fail, stop, or pass the failure on"})
+					continue
+				}
+				if existing := owned[m[3]]; existing != nil && !existing.consumed {
+					ds = append(ds, Diagnostic{s.Line, 1, "stream " + m[3] + " is already active; consume or close it before reopening"})
+					continue
+				}
+				owned[m[3]] = &streamOwnershipState{line: s.Line}
+			case "streamFor":
+				name := strings.TrimSpace(m[2])
+				state := owned[name]
+				if state == nil {
+					ds = append(ds, Diagnostic{s.Line, 1, name + " is not an owned stream"})
+				} else if state.consumed {
+					ds = append(ds, Diagnostic{s.Line, 1, name + " was already consumed"})
+				} else {
+					state.consumed = true
+				}
+				walk(s.Body, owned, true, true)
+			case "closeStream":
+				state := owned[m[1]]
+				if state == nil {
+					ds = append(ds, Diagnostic{s.Line, 1, m[1] + " is not an owned stream"})
+				} else if state.consumed {
+					ds = append(ds, Diagnostic{s.Line, 1, m[1] + " was already consumed"})
+				} else {
+					state.consumed = true
+				}
+			case "collectStream":
+				name := strings.TrimSpace(m[2])
+				state := owned[name]
+				if state == nil {
+					ds = append(ds, Diagnostic{s.Line, 1, name + " is not an owned stream"})
+				} else if state.consumed {
+					ds = append(ds, Diagnostic{s.Line, 1, name + " was already consumed"})
+				} else {
+					state.consumed = true
+				}
+			case "take":
+				name := strings.TrimSpace(m[3])
+				if state := owned[name]; state != nil {
+					if m[1] == "last" {
+						ds = append(ds, Diagnostic{s.Line, 1, "take last requires a collection, but " + name + " is a stream"})
+					} else if state.consumed {
+						ds = append(ds, Diagnostic{s.Line, 1, name + " was already consumed"})
+					} else {
+						state.consumed = true
+					}
+				}
+			case "make":
+				expr := strings.TrimSpace(strings.TrimPrefix(m[2], "as "))
+				if state := owned[expr]; state != nil && !state.consumed {
+					ds = append(ds, Diagnostic{s.Line, 1, "cannot copy stream " + expr + " with make"})
+				}
+				for _, field := range s.Body {
+					if _, expression, ok := strings.Cut(field.Text, " from "); ok {
+						expression = strings.TrimSpace(expression)
+						if state := owned[expression]; state != nil && !state.consumed {
+							ds = append(ds, Diagnostic{field.Line, 1, "cannot copy stream " + expression + " with make"})
+						}
+					}
+				}
+			case "remember":
+				expr := strings.TrimSpace(m[1])
+				if state := owned[expr]; state != nil && !state.consumed {
+					ds = append(ds, Diagnostic{s.Line, 1, "cannot copy stream " + expr + " with remember"})
+				}
+			case "append":
+				expr := strings.TrimSpace(m[1])
+				if state := owned[expr]; state != nil && !state.consumed {
+					ds = append(ds, Diagnostic{s.Line, 1, "cannot copy stream " + expr + " with append"})
+				}
+			case "readEach":
+				if state := owned[m[1]]; state != nil && !state.consumed {
+					ds = append(ds, Diagnostic{s.Line, 1, "cannot overwrite active stream " + m[1] + "; consume or close it first"})
+				}
+			case "stopReading":
+				if !inStreamLoop {
+					ds = append(ds, Diagnostic{s.Line, 1, "stop reading requires an active stream loop"})
+				}
+			case "to":
+				actionOwned := map[string]*streamOwnershipState{}
+				walk(s.Body, actionOwned, false, true)
+			case "when":
+				before := clone(owned)
+				thenState := clone(owned)
+				walk(s.Body, thenState, inStreamLoop, true)
+				elseState := clone(before)
+				if i+1 < len(sts) && sts[i+1].Kind == "otherwise" {
+					walk(sts[i+1].Body, elseState, inStreamLoop, true)
+					i++
+				}
+				for name, original := range before {
+					owned[name].consumed = thenState[name].consumed && elseState[name].consumed
+					owned[name].line = original.line
+				}
+			case "otherwise":
+				// Paired otherwise blocks are consumed with their when above.
+			default:
+				if len(s.Body) > 0 {
+					walk(s.Body, owned, inStreamLoop, true)
+				}
+			}
+		}
+		if closeScope {
+			for name, state := range owned {
+				if !initial[name] && !state.consumed {
+					ds = append(ds, Diagnostic{state.line, 1, "stream " + name + " remains active; consume it, close it, or transfer ownership"})
+				}
+			}
+		}
+	}
+	owned := map[string]*streamOwnershipState{}
+	walk(p.Statements, owned, false, false)
+	for name, state := range owned {
+		if !state.consumed {
+			ds = append(ds, Diagnostic{state.line, 1, "stream " + name + " remains active; consume it, close it, or transfer ownership"})
+		}
+	}
+	return ds
+}
+
+func openFailureHandlerRecovers(operation *Statement) bool {
+	var containsRecover func([]*Statement) bool
+	containsRecover = func(stmts []*Statement) bool {
+		for _, statement := range stmts {
+			if statement.Kind == "recover" || containsRecover(statement.Body) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, handler := range operation.Body {
+		if handler.Kind != "handler" || match("handler", handler.Text)[1] != "failure" {
+			continue
+		}
+		if strings.HasPrefix(match("handler", handler.Text)[2], "recover") || containsRecover(handler.Body) {
+			return true
+		}
+	}
+	return false
 }
 
 // checkActionContracts performs the deterministic part of typed failure
@@ -620,7 +934,7 @@ func checkActionContracts(p *Program, actions map[string]*Statement, defs map[st
 		if err != nil {
 			continue
 		}
-		typed := decl.HasResult || len(decl.Failures) > 0
+		typed := decl.HasResult || decl.Streaming || len(decl.Failures) > 0
 		if !typed {
 			continue
 		}
@@ -635,6 +949,7 @@ func checkActionContracts(p *Program, actions map[string]*Statement, defs map[st
 				add(fn.Line, "%s declares unknown failure %s", name, failure)
 			}
 		}
+		streamFailures := map[string][]string{}
 		var visit func([]*Statement, bool)
 		visit = func(stmts []*Statement, inHandler bool) {
 			for _, s := range stmts {
@@ -685,6 +1000,34 @@ func checkActionContracts(p *Program, actions map[string]*Statement, defs map[st
 							continue
 						}
 						add(s.Line, "%s may pass %s on; handle it or add it to \"may fail with\"", name, failure)
+					}
+				case "openStream":
+					possible := possibleFailuresForCall(p, actions, s)
+					checkFailureHandlers(s, possible, add)
+					streamFailures[m[3]] = possible
+					visit(s.Body, true)
+					for _, failure := range possible {
+						if !declared[failure] && !callHasFailureHandler(s, failure) {
+							add(s.Line, "%s may pass %s on while opening a stream; handle it or add it to \"may fail with\"", name, failure)
+						}
+					}
+				case "streamFor", "collectStream", "take":
+					streamName := ""
+					switch s.Kind {
+					case "streamFor":
+						streamName = strings.TrimSpace(m[2])
+					case "collectStream":
+						streamName = strings.TrimSpace(m[2])
+					case "take":
+						streamName = strings.TrimSpace(m[3])
+					}
+					possible := streamFailures[streamName]
+					checkFailureHandlers(s, possible, add)
+					visit(s.Body, true)
+					for _, failure := range possible {
+						if !declared[failure] && !callHasFailureHandler(s, failure) {
+							add(s.Line, "%s may pass terminal stream failure %s on; handle it or add it to \"may fail with\"", name, failure)
+						}
 					}
 				case "sent":
 					possible := possibleFailuresForCall(p, actions, s)
@@ -786,8 +1129,8 @@ func possibleFailuresForCall(p *Program, actions map[string]*Statement, s *State
 	if p == nil || s == nil {
 		return nil
 	}
-	if s.Kind == "call" {
-		m := match("call", s.Text)
+	if s.Kind == "call" || s.Kind == "openStream" {
+		m := match(s.Kind, s.Text)
 		if strings.Contains(m[1], ".") {
 			alias, action, _ := strings.Cut(m[1], ".")
 			if p.Modules != nil {
@@ -831,14 +1174,15 @@ func modulePossibleFailures(m *Module, action string, visiting map[string]bool) 
 	defer delete(visiting, visitKey)
 	decl, _ := parseActionDecl(fn.Text)
 	result := append([]string(nil), decl.Failures...)
+	streamFailures := map[string][]string{}
 	var walk func([]*Statement)
 	walk = func(stmts []*Statement) {
 		for _, statement := range stmts {
 			switch statement.Kind {
 			case "fail":
 				result = append(result, match("fail", statement.Text)[1])
-			case "call":
-				callMatch := match("call", statement.Text)
+			case "call", "openStream":
+				callMatch := match(statement.Kind, statement.Text)
 				callee := callMatch[1]
 				calleeModule := callMatch
 				var failures []string
@@ -853,7 +1197,19 @@ func modulePossibleFailures(m *Module, action string, visiting map[string]bool) 
 					failures = modulePossibleFailures(m, callee, visiting)
 				}
 				result = append(result, unhandledFailures(failures, statement)...)
+				if statement.Kind == "openStream" {
+					streamFailures[callMatch[3]] = failures
+				}
 				walkFailureHandlerBodies(statement.Body, walk)
+				continue
+			case "streamFor", "collectStream", "take":
+				m := match(statement.Kind, statement.Text)
+				streamName := m[2]
+				if statement.Kind == "take" {
+					streamName = m[3]
+				}
+				result = append(result, unhandledFailures(streamFailures[strings.TrimSpace(streamName)], statement)...)
+				walk(statement.Body)
 				continue
 			case "sent":
 				var failures []string
@@ -933,6 +1289,81 @@ func checkFailureHandlers(operation *Statement, possible []string, add func(int,
 		if general >= 0 && i > general {
 			add(child.Line, "general failure handler must be last")
 		}
+	}
+}
+
+func operationStaticResult(p *Program, actions map[string]*Statement, s *Statement) bool {
+	if s == nil {
+		return false
+	}
+	if s.Kind == "collectStream" || s.Kind == "take" {
+		return true
+	}
+	var mod *Module
+	var name string
+	if s.Kind == "call" {
+		m := match("call", s.Text)
+		name = m[1]
+		if !strings.Contains(name, ".") {
+			if fn := actions[name]; fn != nil {
+				decl, _ := parseActionDecl(fn.Text)
+				return decl.HasResult
+			}
+			return false
+		}
+		alias, action, _ := strings.Cut(name, ".")
+		name = action
+		mod = moduleAlias(p, alias)
+	} else if s.Kind == "sent" && p != nil && p.Modules != nil && p.Modules.vocab != nil {
+		m := matchSent(s.Text)
+		mod, name, _ = p.Modules.vocab.resolveName(m[1])
+	} else {
+		return false
+	}
+	if mod == nil {
+		return false
+	}
+	if op, ok := mod.Native[name]; ok {
+		return op.Result != "" && op.Result != "none" && !strings.HasPrefix(op.Result, "stream of ")
+	}
+	if fn := mod.Actions[name]; fn != nil {
+		decl, _ := parseActionDecl(fn.Text)
+		return decl.HasResult
+	}
+	return false
+}
+
+func checkRecoveryShape(operation *Statement, hasResult bool, add func(int, string, ...any)) {
+	var walk func([]*Statement)
+	walk = func(stmts []*Statement) {
+		for _, child := range stmts {
+			if child.Kind == "recover" {
+				hasValue := match("recover", child.Text)[1] != ""
+				if hasResult && !hasValue {
+					add(child.Line, "recover requires a value for this operation")
+				}
+				if !hasResult && hasValue {
+					add(child.Line, "recover with is only valid for a value-returning operation")
+				}
+			}
+			walk(child.Body)
+		}
+	}
+	for _, child := range operation.Body {
+		if child.Kind != "handler" || match("handler", child.Text)[1] != "failure" {
+			continue
+		}
+		h := match("handler", child.Text)
+		if strings.HasPrefix(h[2], "recover") {
+			hasValue := strings.HasPrefix(h[2], "recover with ")
+			if hasResult && !hasValue {
+				add(child.Line, "recover requires a value for this operation")
+			}
+			if !hasResult && hasValue {
+				add(child.Line, "recover with is only valid for a value-returning operation")
+			}
+		}
+		walk(child.Body)
 	}
 }
 

@@ -71,12 +71,14 @@ type ActionParam struct {
 }
 
 type ActionDecl struct {
-	Name      string
-	Params    []ActionParam
-	Using     []string
-	Result    TypeRef
-	HasResult bool
-	Failures  []string
+	Name       string
+	Params     []ActionParam
+	Using      []string
+	Result     TypeRef
+	HasResult  bool
+	StreamItem TypeRef
+	Streaming  bool
+	Failures   []string
 }
 
 var failureCommonFields = map[string]bool{
@@ -308,13 +310,21 @@ func parseActionDecl(text string) (ActionDecl, error) {
 	d := ActionDecl{Name: m[1]}
 	params := strings.TrimSpace(m[2])
 	resultText := strings.TrimSpace(m[3])
-	failureText := strings.TrimSpace(m[4])
+	streamText := strings.TrimSpace(m[4])
+	failureText := strings.TrimSpace(m[5])
 	if resultText != "" {
 		t, err := parseType(resultText, false)
 		if err != nil {
 			return ActionDecl{}, fmt.Errorf("return type: %w", err)
 		}
 		d.Result, d.HasResult = t, true
+	}
+	if streamText != "" {
+		t, err := parseType(streamText, false)
+		if err != nil {
+			return ActionDecl{}, fmt.Errorf("stream item type: %w", err)
+		}
+		d.StreamItem, d.Streaming = t, true
 	}
 	if failureText != "" {
 		for _, name := range strings.Split(failureText, ",") {
@@ -363,7 +373,7 @@ func parseActionDecl(text string) (ActionDecl, error) {
 	return d, nil
 }
 
-var actionHeaderRE = regexp.MustCompile(`^to ([A-Za-z_]\w*)(?: with (.*?))?(?: returning ((?:optional )?(?:list of )?(?:text|file|folder|timestamp|number|integer|boolean|duration|[A-Z][A-Za-z0-9_]*)))?(?: may fail with (.+?))?:$`)
+var actionHeaderRE = regexp.MustCompile(`^to ([A-Za-z_]\w*)(?: with (.*?))?(?:(?: returning ((?:optional )?(?:list of )?(?:text|file|folder|timestamp|number|integer|boolean|duration|[A-Z][A-Za-z0-9_]*)))|(?: streaming (text|file|folder|timestamp|number|integer|boolean|duration|[A-Z][A-Za-z0-9_]*)))?(?: may fail with (.+?))?:$`)
 
 func validBindingName(name string) bool {
 	return validName(name) && (name[0] == '_' || name[0] >= 'a' && name[0] <= 'z')

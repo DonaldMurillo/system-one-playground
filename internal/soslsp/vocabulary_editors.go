@@ -25,6 +25,8 @@ type wordTarget struct {
 	Params           []sos.VocabularyParam
 	Result           string // result type when known
 	PossibleFailures []string
+	Effects          []string
+	Targets          []string
 	Doc              string   // prose
 	Origin           string   // core origin string: import / config <layer> / standard library / local <path>
 	ImportLine       string   // enabling import statement for auto-import edits
@@ -47,7 +49,8 @@ func (s *server) wordTargets(uri, filename, source string) []wordTarget {
 			Bare: hasBarePattern(e), Qualifier: qualifierOf(e),
 			Params: e.Params, Result: e.Result,
 			PossibleFailures: e.PossibleFailures,
-			Doc:              e.Description, Origin: e.Origin, ImportLine: e.Import,
+			Effects:          append([]string(nil), e.Effects...), Targets: append([]string(nil), e.Targets...),
+			Doc: e.Description, Origin: e.Origin, ImportLine: e.Import,
 			Synonyms: e.Synonyms,
 		})
 	}
@@ -85,7 +88,10 @@ func qualifierOf(e sos.VocabularyEntry) string {
 			return alias
 		}
 	}
-	return ""
+	// External/module actions may expose no sentence patterns because they are
+	// called only through explicit `call`/`stream` syntax. Their resolved import
+	// alias is still the valid qualifier.
+	return e.Alias
 }
 
 // entrySignature renders an entry's callable signature, e.g.

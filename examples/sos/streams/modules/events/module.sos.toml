@@ -1,0 +1,69 @@
+schema = 1
+
+[module]
+path = "example/streams"
+version = "1.0.0"
+description = "Deterministic finite, failing, and cancellable example streams."
+
+[runtime]
+kind = "stdio"
+protocol = "sos-plugin/1"
+command = ["python3", "plugin.py"]
+working_directory = "${definition_dir}"
+max_in_flight = 1
+shutdown_timeout = "1s"
+
+[runtime.requires]
+python = ">=3.10.0"
+
+[capabilities]
+process = true
+filesystem = "none"
+
+[[type]]
+name = "Event"
+
+[[type.field]]
+name = "sequence"
+type = "integer"
+
+[[type.field]]
+name = "message"
+type = "text"
+
+[[failure]]
+name = "ConnectionLost"
+
+[[failure.field]]
+name = "after"
+type = "integer"
+
+[[action]]
+name = "finite"
+description = "Emits count deterministic events and completes."
+
+[[action.parameter]]
+name = "count"
+type = "integer"
+
+[action.result]
+type = "stream of Event"
+
+[[action]]
+name = "failing"
+description = "Emits count events and then fails with ConnectionLost."
+failures = ["ConnectionLost"]
+
+[[action.parameter]]
+name = "count"
+type = "integer"
+
+[action.result]
+type = "stream of Event"
+
+[[action]]
+name = "infinite"
+description = "Emits deterministic events until canceled."
+
+[action.result]
+type = "stream of Event"

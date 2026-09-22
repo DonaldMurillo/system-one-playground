@@ -99,6 +99,11 @@
     "title": "Files, streams and values"
   },
   {
+    "source": "docs/sysonescript-streams.md",
+    "slug": "streams",
+    "title": "Streams and long-running operations"
+  },
+  {
     "source": "docs/sysonescript-parallel.md",
     "slug": "parallel",
     "title": "Parallel maps and failures"

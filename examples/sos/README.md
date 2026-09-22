@@ -40,3 +40,5 @@ as pending analysis; **Analyze** or **Run** performs the configured requests.
   records, typed failures, secrets, process reuse, and deadline cleanup.
 - `external-bundled` builds a checksummed external artifact into a relocatable
   standalone application and locked manifest.
+- `streams` demonstrates finite and failing external producers, early stop,
+  explicit close, bounded collection, and sampling without unbounded buffering.

@@ -29,6 +29,11 @@ var forms = []struct{ kind, pattern string }{
 	{"group", `^group (\w+) by (.+) called (\w+)$`},
 	{"folder", `^create folder (.+) if missing$`},
 	{"make", `^(?:make|assign|set) (\w+) (.+)$`},
+	{"openStream", `^stream ([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?)(?: with (.+?))? called ([A-Za-z_]\w*)$`},
+	{"closeStream", `^close stream ([A-Za-z_]\w*)$`},
+	{"collectStream", `^collect at most (.+) items from (.+) called ([A-Za-z_]\w*)$`},
+	{"streamFor", `^for each ([A-Za-z_]\w*) from (.+):$`},
+	{"stopReading", `^stop reading$`},
 	{"map", `^map each (\w+) in (.+) with at most (.+) running called (\w+)( collecting failures)?:$`},
 	{"for", `^for each (\w+) in (.+?)(?: numbered from (\d+))?:$`},
 	{"while", `^while (.+):$`},
@@ -50,7 +55,7 @@ var forms = []struct{ kind, pattern string }{
 	{"fail", `^fail ([A-Z][A-Za-z0-9_]*) with (.+?)(?::)?$`},
 	{"capture", `^capture ([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?)(?: with (.+?))? called ([A-Za-z_]\w*)$`},
 	{"stop", `^stop(?: with (.+))?$`},
-	{"to", `^to ([A-Za-z_]\w*)(?: with (.*?))?(?: returning ((?:optional )?(?:list of )?(?:text|file|folder|timestamp|number|integer|boolean|duration|[A-Z][A-Za-z0-9_]*)))?(?: may fail with (.+?))?:$`},
+	{"to", `^to ([A-Za-z_]\w*)(?: with (.*?))?(?:(?: returning ((?:optional )?(?:list of )?(?:text|file|folder|timestamp|number|integer|boolean|duration|[A-Z][A-Za-z0-9_]*)))|(?: streaming (text|file|folder|timestamp|number|integer|boolean|duration|[A-Z][A-Za-z0-9_]*)))?(?: may fail with (.+?))?:$`},
 	{"call", `^call ([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?)(?: with (.+?))?(?: called (\w+))?$`},
 	{"return", `^return (.+)$`},
 	{"handler", `^on (failure|success|uncertain|existing)(?::| (.+))$`},
@@ -86,7 +91,7 @@ func match(kind, text string) []string {
 }
 
 func Keywords() []string {
-	return []string{"finish", "fail", "recover", "pass failure on", "capture", "rethrow", "map", "evaluate", "describe", "choices", "read", "keep", "sort", "group", "save", "show", "make", "assign", "remember", "find", "for each", "when", "otherwise", "classify", "jev", "called", "where", "by", "as", "optional", "into", "on failure", "may fail with", "returning", "to", "call", "return", "while", "repeat", "judge", "score", "create folder", "take", "append", "require", "expect", "define", "failure", "command", "option", "argument", "switch", "using", "ask", "accept", "model", "on uncertain", "on existing", "package", "import", "export"}
+	return []string{"stream", "streaming", "from", "close stream", "stop reading", "collect at most", "finish", "fail", "recover", "pass failure on", "capture", "rethrow", "map", "evaluate", "describe", "choices", "read", "keep", "sort", "group", "save", "show", "make", "assign", "remember", "find", "for each", "when", "otherwise", "classify", "jev", "called", "where", "by", "as", "optional", "into", "on failure", "may fail with", "returning", "to", "call", "return", "while", "repeat", "judge", "score", "create folder", "take", "append", "require", "expect", "define", "failure", "command", "option", "argument", "switch", "using", "ask", "accept", "model", "on uncertain", "on existing", "package", "import", "export"}
 }
 func classifyLine(text string) string {
 	for _, f := range forms {
@@ -110,7 +115,7 @@ func joinWrappedActionHeaders(lines []string) {
 		if previousIndex >= 0 {
 			previous = strings.TrimSpace(lines[previousIndex])
 		}
-		if (strings.HasPrefix(continuation, "returning ") || strings.HasPrefix(continuation, "may fail with ")) && strings.HasPrefix(previous, "to ") && !strings.HasSuffix(previous, ":") {
+		if (strings.HasPrefix(continuation, "returning ") || strings.HasPrefix(continuation, "streaming ") || strings.HasPrefix(continuation, "may fail with ")) && strings.HasPrefix(previous, "to ") && !strings.HasSuffix(previous, ":") {
 			lines[previousIndex] = previous + " " + continuation
 			lines[i] = ""
 		}
@@ -252,7 +257,7 @@ func Parse(source string) (*Program, []Diagnostic) {
 	var validate func([]*Statement)
 	validate = func(sts []*Statement) {
 		for _, s := range sts {
-			block := semanticCriterionDeclRe.MatchString(s.Text) || s.Kind == "map" || s.Kind == "for" || s.Kind == "while" || s.Kind == "repeat" || s.Kind == "when" || s.Kind == "otherwise" || s.Kind == "to" || s.Kind == "command" || s.Kind == "schema" || s.Kind == "define" || s.Kind == "failure" || (s.Kind == "fail" && strings.HasSuffix(s.Text, ":")) || s.Kind == "classify" || s.Kind == "score" || strings.HasSuffix(s.Text, "with:") || strings.HasSuffix(s.Text, "jev:") || s.Kind == "handler" && strings.HasSuffix(s.Text, ":")
+			block := semanticCriterionDeclRe.MatchString(s.Text) || s.Kind == "map" || s.Kind == "for" || s.Kind == "streamFor" || s.Kind == "while" || s.Kind == "repeat" || s.Kind == "when" || s.Kind == "otherwise" || s.Kind == "to" || s.Kind == "command" || s.Kind == "schema" || s.Kind == "define" || s.Kind == "failure" || (s.Kind == "fail" && strings.HasSuffix(s.Text, ":")) || s.Kind == "classify" || s.Kind == "score" || strings.HasSuffix(s.Text, "with:") || strings.HasSuffix(s.Text, "jev:") || s.Kind == "handler" && strings.HasSuffix(s.Text, ":")
 			if block && len(s.Body) == 0 && s.Kind != "failure" {
 				ds = append(ds, Diagnostic{s.Line, 1, "expected an indented body"})
 			}

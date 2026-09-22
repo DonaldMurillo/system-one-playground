@@ -24,3 +24,37 @@ func TestDebuggerRedactsSecretsAcrossEvaluateLogpointsAndContainers(t *testing.T
 		t.Fatal("ordinary container should remain expandable")
 	}
 }
+
+type debugStreamFixture struct{ snapshots *int }
+
+func (s debugStreamFixture) DebugStreamState() map[string]any {
+	*s.snapshots++
+	return map[string]any{"state": "active", "item type": "Event", "items received": 3, "items buffered": 1, "credit available": 15, "producer": "events.finite"}
+}
+
+func TestDebugStreamInspectionUsesSnapshotWithoutReadingItems(t *testing.T) {
+	snapshots := 0
+	stream := debugStreamFixture{snapshots: &snapshots}
+	if !debugCanExpand("events", stream) {
+		t.Fatal("stream state must be expandable")
+	}
+	refs := map[int]any{}
+	next := 100
+	variables := debugVariables(stream, &refs, &next, nil)
+	if snapshots != 1 {
+		t.Fatalf("snapshot calls = %d, want 1", snapshots)
+	}
+	if len(variables) != 6 {
+		t.Fatalf("stream variables = %#v", variables)
+	}
+	found := false
+	for _, raw := range variables {
+		variable := raw.(map[string]any)
+		if variable["name"] == "state" && variable["value"] == "active" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("active state missing: %#v", variables)
+	}
+}

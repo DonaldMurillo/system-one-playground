@@ -3,6 +3,7 @@ package studio
 import (
 	"encoding/json"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -10,6 +11,30 @@ import (
 	"strings"
 	"testing"
 )
+
+func TestEmbeddedStudioBundleIncludesStreamLanguageSupport(t *testing.T) {
+	var javascript strings.Builder
+	err := fs.WalkDir(webdistFS, "webdist", func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil || entry.IsDir() || filepath.Ext(path) != ".js" {
+			return walkErr
+		}
+		data, err := webdistFS.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		javascript.Write(data)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle := javascript.String()
+	for _, phrase := range []string{`"stream","streaming","close","collect"`, `"using","reading"`, `"off","at","most","running"`} {
+		if !strings.Contains(bundle, phrase) {
+			t.Errorf("embedded Studio bundle lacks stream lexer word %q; rebuild studio/webdist", phrase)
+		}
+	}
+}
 
 func newTestServer(t *testing.T) (*Server, *httptest.Server) {
 	t.Helper()

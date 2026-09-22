@@ -1,0 +1,8 @@
+version = 1
+
+[external]
+process = true
+
+[[module.external]]
+path = "example/streams"
+definition = "modules/events/module.sos.toml"

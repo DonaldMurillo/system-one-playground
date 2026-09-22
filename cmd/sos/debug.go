@@ -702,6 +702,9 @@ func interpolateLogpoint(message string, variables map[string]any) string {
 }
 
 func isDebugContainer(value any) bool {
+	if _, ok := value.(interface{ DebugStreamState() map[string]any }); ok {
+		return true
+	}
 	switch value.(type) {
 	case map[string]any, []any:
 		return true
@@ -716,6 +719,9 @@ func debugCanExpand(name string, value any) bool {
 
 func debugValue(name string, value any) map[string]any {
 	result := map[string]any{"value": debugDisplay(name, value), "type": fmt.Sprintf("%T", value), "variablesReference": 0}
+	if _, ok := value.(interface{ DebugStreamState() map[string]any }); ok {
+		result["type"] = "stream"
+	}
 	return result
 }
 
@@ -725,6 +731,10 @@ func debugDisplay(name string, value any) string {
 	}
 	if secretValue(name, value) {
 		return "<redacted>"
+	}
+	if stream, ok := value.(interface{ DebugStreamState() map[string]any }); ok {
+		data, _ := json.Marshal(redactDebugSecrets(stream.DebugStreamState()))
+		return string(data)
 	}
 	if isDebugContainer(value) {
 		data, _ := json.Marshal(redactDebugSecrets(value))
@@ -766,6 +776,9 @@ func secretValue(name string, value any) bool {
 
 func debugVariables(value any, refs *map[int]any, next *int, knownTypes map[string]string) []any {
 	var out []any
+	if stream, ok := value.(interface{ DebugStreamState() map[string]any }); ok {
+		value = stream.DebugStreamState()
+	}
 	switch typed := value.(type) {
 	case map[string]any:
 		keys := make([]string, 0, len(typed))
@@ -786,7 +799,14 @@ func debugVariables(value any, refs *map[int]any, next *int, knownTypes map[stri
 			} else if isDebugContainer(item) {
 				ref := *next
 				*next++
-				(*refs)[ref] = item
+				if stream, ok := item.(interface{ DebugStreamState() map[string]any }); ok {
+					// debugValue already took the read-only snapshot used for the
+					// summary. A fresh snapshot is safe and still never receives an
+					// item or changes producer credit.
+					(*refs)[ref] = stream.DebugStreamState()
+				} else {
+					(*refs)[ref] = item
+				}
 				result["variablesReference"] = ref
 			}
 			out = append(out, result)

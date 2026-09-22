@@ -334,50 +334,56 @@ func (p *indexedPackage) hasAction(name string) bool {
 // opDocs describes the effect of every core statement kind. Effects are the
 // honest taxonomy: provider call, filesystem, output, control flow, memory.
 var opDocs = map[string]struct{ effect, binds string }{
-	"command":   {"defines a runnable command block", "the command name"},
-	"parameter": {"declares a command line parameter", "the parameter name"},
-	"describe":  {"documentation prose; no runtime effect", ""},
-	"schema":    {"names a validation schema for values", "the schema name"},
-	"remember":  {"keeps a value in memory", "the called name"},
-	"find":      {"scans the filesystem and binds the matches", "a list of matches"},
-	"readEach":  {"reads a file line by line as JSON", "a list of parsed lines"},
-	"read":      {"reads a file into memory", "the parsed file content"},
-	"require":   {"validates every item against a schema", ""},
-	"keep":      {"filters a list", "the kept items"},
-	"sort":      {"sorts a list or table", "the ordered result"},
-	"group":     {"groups a table by a column", "the grouped table"},
-	"folder":    {"creates a directory if missing (filesystem write)", ""},
-	"make":      {"binds a value to a name", "the value"},
-	"for":       {"control flow: iterates a list", "the loop singular"},
-	"map":       {"control flow: maps isolated iterations with a bounded number of workers; collects returned results in input order", "the called list, or outcome records when collecting failures"},
-	"while":     {"control flow: repeats while a condition holds", ""},
-	"repeat":    {"control flow: repeats a fixed number of times", ""},
-	"when":      {"control flow: conditional block", ""},
-	"otherwise": {"control flow: fallback block", ""},
-	"take":      {"selects the first or last items", "the selected list"},
-	"classify":  {"organizes items into named buckets", "the classified table"},
-	"evaluate":  {"evaluates a named question batch with Jev in one request", "the named answers"},
-	"judge":     {"judges values against a criterion", "the verdict"},
-	"score":     {"scores values against a criterion", "the scored table"},
-	"append":    {"appends a value to a list (mutation)", ""},
-	"save":      {"writes a file (filesystem write)", ""},
-	"show":      {"prints output", ""},
-	"stop":      {"stops the run", ""},
-	"to":        {"defines a handler block", ""},
-	"call":      {"calls an imported action", "the called result"},
-	"sent":      {"calls vocabulary as a sentence: bare word or qualifier.word", "the called result"},
-	"handler":   {"registers an outcome handler", ""},
-	"ask":       {"configures the prompt of a provider call", ""},
-	"using":     {"selects the model for provider calls", ""},
-	"model":     {"overrides the model for this scope", ""},
-	"accept":    {"sets the acceptance probability threshold", ""},
+	"command":       {"defines a runnable command block", "the command name"},
+	"parameter":     {"declares a command line parameter", "the parameter name"},
+	"describe":      {"documentation prose; no runtime effect", ""},
+	"schema":        {"names a validation schema for values", "the schema name"},
+	"remember":      {"keeps a value in memory", "the called name"},
+	"find":          {"scans the filesystem and binds the matches", "a list of matches"},
+	"readEach":      {"reads a file line by line as JSON", "a list of parsed lines"},
+	"read":          {"reads a file into memory", "the parsed file content"},
+	"require":       {"validates every item against a schema", ""},
+	"keep":          {"filters a list", "the kept items"},
+	"sort":          {"sorts a list or table", "the ordered result"},
+	"group":         {"groups a table by a column", "the grouped table"},
+	"folder":        {"creates a directory if missing (filesystem write)", ""},
+	"make":          {"binds a value to a name", "the value"},
+	"for":           {"control flow: iterates a list", "the loop singular"},
+	"map":           {"control flow: maps isolated iterations with a bounded number of workers; collects returned results in input order", "the called list, or outcome records when collecting failures"},
+	"while":         {"control flow: repeats while a condition holds", ""},
+	"repeat":        {"control flow: repeats a fixed number of times", ""},
+	"when":          {"control flow: conditional block", ""},
+	"otherwise":     {"control flow: fallback block", ""},
+	"take":          {"selects bounded items; taking first items from a stream consumes it and cancels after the limit", "the selected list"},
+	"classify":      {"organizes items into named buckets", "the classified table"},
+	"evaluate":      {"evaluates a named question batch with Jev in one request", "the named answers"},
+	"judge":         {"judges values against a criterion", "the verdict"},
+	"score":         {"scores values against a criterion", "the scored table"},
+	"append":        {"appends a value to a list (mutation)", ""},
+	"save":          {"writes a file (filesystem write)", ""},
+	"show":          {"prints output", ""},
+	"stop":          {"stops the run", ""},
+	"to":            {"defines a handler block", ""},
+	"call":          {"calls an imported action", "the called result"},
+	"stream":        {"opens a bounded producer and takes ownership of its stream", "an owned, single-consumer stream handle"},
+	"streamFor":     {"consumes a stream sequentially and blocks until its terminal outcome", "the current stream item"},
+	"closeStream":   {"cancels an owned stream and waits for bounded shutdown", ""},
+	"stopReading":   {"cancels the source and exits the nearest stream loop successfully", ""},
+	"collectStream": {"consumes a stream into a list with an explicit overflow limit", "the bounded list"},
+	"sent":          {"calls vocabulary as a sentence: bare word or qualifier.word", "the called result"},
+	"handler":       {"registers an outcome handler", ""},
+	"ask":           {"configures the prompt of a provider call", ""},
+	"using":         {"selects the model for provider calls", ""},
+	"model":         {"overrides the model for this scope", ""},
+	"accept":        {"sets the acceptance probability threshold", ""},
 }
 
 var (
-	reNewPackage  = regexp.MustCompile(`^\s*package\s+([A-Za-z_]\w*)`)
-	reNewExport   = regexp.MustCompile(`^\s*export\s+([A-Za-z_]\w*)`)
-	reNewImport   = regexp.MustCompile(`^\s*import\s+"([^"]*)"(?:\s+as\s+([A-Za-z_]\w*))?`)
-	reNewCallLine = regexp.MustCompile(`^\s*call\s+([A-Za-z_]\w*)\.([A-Za-z_]\w*)(?:\s+with\s+.*?)?(?:\s+called\s+([A-Za-z_]\w*))?\s*$`)
+	reNewPackage    = regexp.MustCompile(`^\s*package\s+([A-Za-z_]\w*)`)
+	reNewExport     = regexp.MustCompile(`^\s*export\s+([A-Za-z_]\w*)`)
+	reNewImport     = regexp.MustCompile(`^\s*import\s+"([^"]*)"(?:\s+as\s+([A-Za-z_]\w*))?`)
+	reNewCallLine   = regexp.MustCompile(`^\s*call\s+([A-Za-z_]\w*)\.([A-Za-z_]\w*)(?:\s+with\s+.*?)?(?:\s+called\s+([A-Za-z_]\w*))?\s*$`)
+	reNewStreamLine = regexp.MustCompile(`^\s*stream\s+([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?)(?:\s+with\s+.*?)?\s+called\s+([A-Za-z_]\w*)\s*$`)
 )
 
 // newSyntaxHover explains package/export/import/call lines the core does not
@@ -385,6 +391,38 @@ var (
 // vocabulary. ok is false for lines that are none of these.
 func (s *server) newSyntaxHover(uri, text, line string) (string, bool) {
 	code := strings.TrimSpace(stripLineComment(line))
+	if m := reNewStreamLine.FindStringSubmatch(code); m != nil {
+		detail := ""
+		if !strings.Contains(m[1], ".") {
+			if item, failures, ok := localStreamMetadata(text, m[1]); ok {
+				detail = fmt.Sprintf("\n\n**Item type:** `%s`", item)
+				if len(failures) > 0 {
+					detail += "\n\n**May fail while opening or consuming:** `" + strings.Join(failures, "`, `") + "`"
+				}
+			}
+		} else {
+			alias, action, _ := strings.Cut(m[1], ".")
+			for _, target := range s.wordTargets(uri, vocabFilename(uri, s.workspaceRoot), text) {
+				if !target.Enabled || target.Qualifier != alias || target.Name != action {
+					continue
+				}
+				if item := strings.TrimSpace(strings.TrimPrefix(target.Result, "stream of ")); item != "" && item != target.Result {
+					detail += fmt.Sprintf("\n\n**Item type:** `%s`", item)
+				}
+				if len(target.PossibleFailures) > 0 {
+					detail += "\n\n**May fail while opening or consuming:** `" + strings.Join(target.PossibleFailures, "`, `") + "`"
+				}
+				if len(target.Effects) > 0 {
+					detail += "\n\n**Effects:** `" + strings.Join(target.Effects, "`, `") + "`"
+				}
+				if len(target.Targets) > 0 {
+					detail += "\n\n**Targets:** `" + strings.Join(target.Targets, "`, `") + "`"
+				}
+				break
+			}
+		}
+		return fmt.Sprintf("```sos\n%s\n```\n\n**Opens stream** `%s` from `%s`.%s The handle owns one bounded producer, may be consumed once, and must be consumed or closed before its scope exits. Opening waits only for producer confirmation; terminal failures occur while consuming.", code, m[2], m[1], detail), true
+	}
 	if m := reNewPackage.FindStringSubmatch(code); m != nil {
 		return fmt.Sprintf("```sos\n%s\n```\n\n**Declares package** `%s` — the actions exported below belong to it.", code, m[1]), true
 	}
@@ -403,6 +441,20 @@ func (s *server) newSyntaxHover(uri, text, line string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+func localStreamMetadata(source, name string) (string, []string, bool) {
+	program, _ := sos.Parse(source)
+	if program == nil {
+		return "", nil, false
+	}
+	for _, action := range program.ActionMetadata() {
+		if action.Name != name || action.StreamItem == "" {
+			continue
+		}
+		return action.StreamItem, append([]string(nil), action.PossibleFailures...), true
+	}
+	return "", nil, false
 }
 
 // sentHover documents one resolved sentence call.

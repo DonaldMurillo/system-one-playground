@@ -84,7 +84,9 @@ type roleSpan struct {
 
 var (
 	reCallQualified = regexp.MustCompile(`^\s*call\s+([A-Za-z_]\w*)\.([A-Za-z_]\w*)`)
+	reStreamAction  = regexp.MustCompile(`^\s*stream\s+(?:([A-Za-z_]\w*)\.)?([A-Za-z_]\w*)`)
 	reAsType        = regexp.MustCompile(`\bas\s+((?:optional\s+)?(?:text|timestamp|number|integer|folder|file|duration|boolean|json|table|lines\s+of\s+json|empty\s+list|[A-Z][A-Za-z0-9_]*))\b`)
+	reStreamingType = regexp.MustCompile(`\bstreaming\s+([A-Z][A-Za-z0-9_]*|text|timestamp|number|integer|file|folder|duration|boolean|json)\b`)
 	reDefineName    = regexp.MustCompile(`^\s*define\s+([A-Z][A-Za-z0-9_]*)`)
 	reFailureName   = regexp.MustCompile(`^\s*define\s+failure\s+([A-Z][A-Za-z0-9_]*)`)
 	reDefineField   = regexp.MustCompile(`^\s*([a-z_][A-Za-z0-9_]*)\s+as\s+`)
@@ -127,6 +129,14 @@ func lineRoles(line string) []roleSpan {
 		add(tokNamespace, m[2], m[3])
 		add(tokFunction, m[4], m[5])
 	}
+	// Stream opening resolves the producer like a call, but binds an owned,
+	// single-consumer handle instead of a final result.
+	if m := reStreamAction.FindStringSubmatchIndex(code); m != nil {
+		if m[2] >= 0 {
+			add(tokNamespace, m[2], m[3])
+		}
+		add(tokFunction, m[4], m[5])
+	}
 	for _, r := range nameRoleRegexes {
 		for _, m := range r.re.FindAllStringSubmatchIndex(code, -1) {
 			add(r.kind, m[2], m[3])
@@ -150,6 +160,9 @@ func lineRoles(line string) []roleSpan {
 	// "empty list": every word inside the captured phrase is a type token.
 	for _, m := range reAsType.FindAllStringSubmatchIndex(code, -1) {
 		spans = append(spans, roleSpan{start: m[2], end: m[3], kind: tokType})
+	}
+	for _, m := range reStreamingType.FindAllStringSubmatchIndex(code, -1) {
+		add(tokType, m[2], m[3])
 	}
 	return spans
 }

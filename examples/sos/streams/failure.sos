@@ -1,0 +1,10 @@
+import "example/streams" as events
+
+stream events.failing with 2 called incoming
+for each event from incoming:
+  show message of event
+  on failure ConnectionLost using after:
+    show "Connection lost after {after} items"
+    recover
+
+show "Kept the items already processed"

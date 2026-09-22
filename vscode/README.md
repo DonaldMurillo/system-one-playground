@@ -56,6 +56,8 @@ Using the `sysone` entry point directly is also supported:
   Jev trace output
 - secure Jev token setup through VS Code SecretStorage (`TYPESAFE_API_KEY`)
 - external-module project controls for opening, offline checking, and explicit diagnostic handshakes
+- stream syntax, ownership diagnostics, producer/action hover, and non-consuming
+  debugger inspection of state, item counts, buffering, and credit
 - additive `.sos` language icon, fallback file-icon theme, and extension icon
 - a matching monochrome S/1 Activity Bar glyph designed for VS Code chrome
 - terminal CLI version detection, out-of-sync warnings, and an explicit update action
@@ -77,6 +79,10 @@ a command, Run asks for that command's arguments and passes them across the
 script `--` boundary. It does not mirror the file system. File Run
 actions operate on the selected `.sos` file while retaining the containing
 project's `sos.toml`, working directory, and `.env`.
+Long-running runs remain cancellable from **Stop processes**, which also closes
+their owned streams. Inspecting a stream in Variables never advances its
+producer. Per-stream status panels, individual Cancel actions, and stream
+lifecycle progress/trace events are not implemented yet.
 The `.sos` mark is contributed as a language-default icon, allowing compatible
 file-icon packs to display it without replacing the active pack. A pack's own
 `.sos` mapping takes precedence, and packs can disable language-mode icons. The

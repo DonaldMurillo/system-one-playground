@@ -586,6 +586,42 @@ stderr, `describe` prints SOS interface source, and `generate` appends a
 `external_module_doctor`) and reads each tool's `structuredContent` object
 instead of parsing CLI prose.
 
+## Streaming actions
+
+For stdio plugins, an external action whose result type is `stream of TYPE` opens through
+`stream.open` rather than `invoke`. The request includes an initial positive
+item credit. A successful response returns the stream ID and item type; later
+`stream.item`, `stream.end`, and `stream.error` notifications carry the
+producer's ordered values and one terminal outcome. The host replenishes
+capacity with `stream.credit` only as downstream space becomes available.
+
+`stream.cancel` is acknowledged within the module cancellation deadline. The
+host closes or kills an unresponsive process tree. Unknown IDs, sequence gaps
+or duplicates, invalid item shapes, sends beyond credit, and any item after a
+terminal message are protocol violations. Progress stays on the diagnostic
+channel and is never converted into a stream item. See [Streams and long-running
+operations](/docs/streams) for SOS ownership and consumption rules.
+Command adapters expose a `stream of TYPE` result with `stdout = "json-lines"`.
+Every complete line is decoded and validated as one item; malformed JSON,
+invalid item types, partial final lines, and rejected exit codes terminate the
+stream. Cancellation kills the complete process tree after the configured grace
+period. OS pipe pressure and the host's bounded decoder queue provide
+backpressure; command adapters do not use stdio-plugin credit messages.
+
+Command streams recognize three conventional typed terminal failures, but only
+when the action declares the exact name and the corresponding failure
+definition accepts an empty payload:
+
+- `StreamDecodeFailure`: malformed JSON-lines output, a partial final line, or
+  an item that fails declared-type validation;
+- `ProcessFailure`: stdout read failure or an exit status outside the accepted
+  exit-code set; and
+- `StreamTimeout`: the action deadline expires while producing the stream.
+
+Without a compatible declaration, the same condition is returned as an
+ordinary terminal runtime error. The adapter does not invent payload fields,
+and items delivered before the terminal failure remain visible.
+
 ## Versioning
 
 Definition `schema`, stdio `protocol`, and author-facing module `version` are

@@ -228,6 +228,17 @@ func decodeExternalModuleDefinition(path string, b []byte) (*ExternalModuleDefin
 			if len(action.Command.ExitCodes) == 0 {
 				action.Command.ExitCodes = []int{0}
 			}
+			if action.Command.StdinParameter == "" && action.Command.Stdin != "none" {
+				return nil, fmt.Errorf("external module definition: action %s stdin mode requires stdin_parameter", action.Name)
+			}
+			if _, streaming := externalStreamItemType(action.Result.Type); streaming {
+				if action.Command.Stdout != "json-lines" {
+					return nil, fmt.Errorf("external module definition: streaming command action %s requires stdout = json-lines", action.Name)
+				}
+				if action.Command.Stderr == "merge" {
+					return nil, fmt.Errorf("external module definition: streaming command action %s cannot merge stderr into JSON lines", action.Name)
+				}
+			}
 		}
 	}
 	failureNames := map[string]bool{}
@@ -355,24 +366,35 @@ func (d *ExternalModuleDefinition) GenerateInterface() string {
 		}
 	}
 	for _, a := range d.Actions {
-		fmt.Fprintf(&b, "to %s", a.Name)
-		for i, p := range a.Parameters {
-			if i == 0 {
-				fmt.Fprintf(&b, " with ")
-			} else {
-				fmt.Fprintf(&b, ", ")
-			}
-			fmt.Fprintf(&b, "%s as %s", p.Name, p.Type)
-		}
-		if a.Result.Type != "" {
-			fmt.Fprintf(&b, " returning %s", a.Result.Type)
-		}
-		if len(a.Failures) > 0 {
-			fmt.Fprintf(&b, " may fail with %s", strings.Join(a.Failures, ", "))
-		}
-		b.WriteString(":\n")
+		b.WriteString(externalActionHeader(a))
+		b.WriteByte('\n')
 		b.WriteString("  # implemented by external command\n")
 	}
+	return b.String()
+}
+
+func externalActionHeader(a ExternalAction) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "to %s", a.Name)
+	for i, p := range a.Parameters {
+		if i == 0 {
+			b.WriteString(" with ")
+		} else {
+			b.WriteString(", ")
+		}
+		fmt.Fprintf(&b, "%s as %s", p.Name, p.Type)
+	}
+	if a.Result.Type != "" {
+		if itemType, streaming := externalStreamItemType(a.Result.Type); streaming {
+			fmt.Fprintf(&b, " streaming %s", itemType)
+		} else {
+			fmt.Fprintf(&b, " returning %s", a.Result.Type)
+		}
+	}
+	if len(a.Failures) > 0 {
+		fmt.Fprintf(&b, " may fail with %s", strings.Join(a.Failures, ", "))
+	}
+	b.WriteByte(':')
 	return b.String()
 }
 
@@ -414,9 +436,7 @@ func DoctorExternalModule(ctx context.Context, dir, modulePath string) error {
 		if err != nil {
 			return fmt.Errorf("module %s requires %s %s; %s was not found", d.Module.Path, runtimeName, requirement, program)
 		}
-		probe := exec.CommandContext(ctx, resolved, "--version")
-		probe.Env = []string{"PATH=" + os.Getenv("PATH")}
-		output, err := probe.CombinedOutput()
+		output, err := runExternalProbe(ctx, "", []string{"PATH=" + os.Getenv("PATH")}, resolved, "--version")
 		if err != nil {
 			return fmt.Errorf("module %s %s version probe: %w", d.Module.Path, runtimeName, err)
 		}
@@ -427,9 +447,7 @@ func DoctorExternalModule(ctx context.Context, dir, modulePath string) error {
 	}
 	if d.Distribution.Mode == "external" && len(d.Distribution.VersionCommand) > 0 {
 		command := d.Distribution.VersionCommand
-		probe := exec.CommandContext(ctx, command[0], command[1:]...)
-		probe.Dir, probe.Env = dir, []string{"PATH=" + os.Getenv("PATH")}
-		output, err := probe.CombinedOutput()
+		output, err := runExternalProbe(ctx, dir, []string{"PATH=" + os.Getenv("PATH")}, command[0], command[1:]...)
 		if err != nil {
 			return fmt.Errorf("module %s version probe: %w", d.Module.Path, err)
 		}
@@ -461,6 +479,41 @@ func DoctorExternalModule(ctx context.Context, dir, modulePath string) error {
 	d.unlockClients()
 	d.closeSession(session)
 	return nil
+}
+
+// runExternalProbe uses the same process-tree containment as module actions so
+// a timed-out version probe cannot leave descendants behind. Output is bounded
+// independently of process lifetime.
+func runExternalProbe(ctx context.Context, dir string, env []string, program string, args ...string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	cmd := exec.Command(program, args...)
+	configureProcessTree(cmd)
+	cmd.Dir, cmd.Env = dir, env
+	stdout, stderr := newExternalOutput(nil), newExternalOutput(nil)
+	cmd.Stdout, cmd.Stderr = stdout, stderr
+	if err := startProcessTree(cmd); err != nil {
+		return nil, err
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Wait()
+		releaseProcessTree(cmd)
+	}()
+	select {
+	case err := <-done:
+		if stdout.exceeded || stderr.exceeded {
+			return nil, fmt.Errorf("version probe output exceeds 1 MiB")
+		}
+		output := append([]byte(nil), stdout.Bytes()...)
+		output = append(output, stderr.Bytes()...)
+		return output, err
+	case <-ctx.Done():
+		_ = killProcessTree(cmd)
+		<-done
+		return nil, ctx.Err()
+	}
 }
 
 func firstSemanticVersion(value string) string {
@@ -656,8 +709,12 @@ func (d *ExternalModuleDefinition) module() (*Module, error) {
 			}
 			params = append(params, NativeParam{Name: p.Name, Type: p.Type})
 		}
-		if a.Result.Type != "" && a.Result.Type != "none" && a.Result.Type != "any" {
-			typ, err := parseType(a.Result.Type, true)
+		resultType := a.Result.Type
+		if itemType, streaming := externalStreamItemType(resultType); streaming {
+			resultType = itemType
+		}
+		if resultType != "" && resultType != "none" && resultType != "any" {
+			typ, err := parseType(resultType, true)
 			if err != nil {
 				return nil, fmt.Errorf("action %s result: %w", a.Name, err)
 			}
@@ -666,7 +723,9 @@ func (d *ExternalModuleDefinition) module() (*Module, error) {
 			}
 		}
 		action := a
-		m.Native[a.Name] = NativeOp{Name: a.Name, Params: params, Result: a.Result.Type, Targets: append([]string(nil), a.Targets...), Effects: append([]string(nil), a.Effects...), Description: a.Description, PossibleFailures: append([]string(nil), a.Failures...), ContextFn: func(ctx context.Context, opts Options, args []any) (any, error) {
+		m.Actions[a.Name] = &Statement{Kind: "to", Text: externalActionHeader(a), Line: 1}
+		nativeResult := a.Result.Type
+		m.Native[a.Name] = NativeOp{Name: a.Name, Params: params, Result: nativeResult, Targets: append([]string(nil), a.Targets...), Effects: append([]string(nil), a.Effects...), Description: a.Description, PossibleFailures: append([]string(nil), a.Failures...), ContextFn: func(ctx context.Context, opts Options, args []any) (any, error) {
 			if d.Runtime.Kind == "stdio" {
 				return d.invokeStdio(ctx, opts, action, args)
 			}
@@ -719,6 +778,9 @@ func (d *ExternalModuleDefinition) runCommand(ctx context.Context, opts Options,
 		ctx, cancel = context.WithTimeout(ctx, duration)
 		defer cancel()
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	program := a.Command.Program
 	if d.bundleProgram != "" {
 		program, err = d.verifiedBundleProgram()
@@ -736,30 +798,11 @@ func (d *ExternalModuleDefinition) runCommand(ctx context.Context, opts Options,
 		return nil, fmt.Errorf("module %s has unsupported working_directory %s", d.Module.Path, d.Runtime.WorkingDirectory)
 	}
 	if p := a.Command.WorkingDirectoryParameter; p != "" {
-		declaredFolder := false
-		for _, parameter := range a.Parameters {
-			declaredFolder = declaredFolder || (parameter.Name == p && parameter.Type == "folder")
-		}
-		if !declaredFolder {
-			return nil, fmt.Errorf("module %s working directory parameter %s must be declared as folder", d.Module.Path, p)
-		}
-		candidate, pathErr := filepath.Abs(fmt.Sprint(params[p]))
-		if pathErr != nil {
-			return nil, pathErr
-		}
-		workspace, _ := filepath.Abs(opts.Dir)
-		resolvedCandidate, resolveErr := filepath.EvalSymlinks(candidate)
+		resolved, resolveErr := d.resolveActionWorkingDirectory(opts, a, params)
 		if resolveErr != nil {
 			return nil, resolveErr
 		}
-		resolvedWorkspace, resolveErr := filepath.EvalSymlinks(workspace)
-		if resolveErr != nil {
-			return nil, resolveErr
-		}
-		if opts.Config.ExternalFilesystem != "explicit" && resolvedCandidate != resolvedWorkspace && !strings.HasPrefix(resolvedCandidate, resolvedWorkspace+string(filepath.Separator)) {
-			return nil, fmt.Errorf("module %s working directory is outside the workspace", d.Module.Path)
-		}
-		cmd.Dir = resolvedCandidate
+		cmd.Dir = resolved
 	}
 	if parameter := a.Command.StdinParameter; parameter != "" {
 		value, ok := params[parameter]
@@ -783,9 +826,12 @@ func (d *ExternalModuleDefinition) runCommand(ctx context.Context, opts Options,
 	}
 	stdout, stderr := newExternalOutput(d.Capabilities.Secrets), newExternalOutput(d.Capabilities.Secrets)
 	cmd.Stdout, cmd.Stderr = stdout, stderr
-	if err = cmd.Start(); err == nil {
+	if err = ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err = startProcessTree(cmd); err == nil {
 		done := make(chan error, 1)
-		go func() { done <- cmd.Wait() }()
+		go func() { done <- cmd.Wait(); releaseProcessTree(cmd) }()
 		select {
 		case err = <-done:
 		case <-ctx.Done():
@@ -840,6 +886,7 @@ func (d *ExternalModuleDefinition) runCommand(ctx context.Context, opts Options,
 	case "json-lines":
 		values := []any{}
 		scanner := bufio.NewScanner(bytes.NewReader(stdout.Bytes()))
+		scanner.Buffer(make([]byte, 64<<10), 1<<20)
 		for scanner.Scan() {
 			var value any
 			if err := decodeExternalJSON(scanner.Bytes(), &value); err != nil {
@@ -856,6 +903,416 @@ func (d *ExternalModuleDefinition) runCommand(ctx context.Context, opts Options,
 	default:
 		return nil, fmt.Errorf("module %s has unsupported stdout mode %s", d.Module.Path, a.Command.Stdout)
 	}
+}
+
+func (d *ExternalModuleDefinition) resolveActionWorkingDirectory(opts Options, action ExternalAction, params map[string]any) (string, error) {
+	parameter := action.Command.WorkingDirectoryParameter
+	declaredFolder := false
+	for _, candidate := range action.Parameters {
+		declaredFolder = declaredFolder || (candidate.Name == parameter && candidate.Type == "folder")
+	}
+	if !declaredFolder {
+		return "", fmt.Errorf("module %s working directory parameter %s must be declared as folder", d.Module.Path, parameter)
+	}
+	candidate := fmt.Sprint(params[parameter])
+	if !filepath.IsAbs(candidate) {
+		candidate = filepath.Join(opts.Dir, candidate)
+	}
+	candidate, err := filepath.Abs(candidate)
+	if err != nil {
+		return "", err
+	}
+	workspace, err := filepath.Abs(opts.Dir)
+	if err != nil {
+		return "", err
+	}
+	resolvedCandidate, err := filepath.EvalSymlinks(candidate)
+	if err != nil {
+		return "", err
+	}
+	resolvedWorkspace, err := filepath.EvalSymlinks(workspace)
+	if err != nil {
+		return "", err
+	}
+	if opts.Config.ExternalFilesystem != "explicit" && resolvedCandidate != resolvedWorkspace && !strings.HasPrefix(resolvedCandidate, resolvedWorkspace+string(filepath.Separator)) {
+		return "", fmt.Errorf("module %s working directory is outside the workspace", d.Module.Path)
+	}
+	return resolvedCandidate, nil
+}
+
+type commandStreamSource struct {
+	cmd             *exec.Cmd
+	out             *bufio.Reader
+	stderr          *externalOutput
+	stderrSink      io.Writer
+	secrets         []string
+	itemType        TypeRef
+	definitions     map[string]*RecordDef
+	exitCodes       []int
+	shutdown        time.Duration
+	deadline        time.Time
+	lifecycleCancel context.CancelFunc
+	waitOnce        sync.Once
+	waitErr         error
+	resultOnce      sync.Once
+	resultErr       error
+	done            atomic.Bool
+	definition      *ExternalModuleDefinition
+	action          ExternalAction
+	deadlineMu      sync.Mutex
+	deadlineStop    func() bool
+	deadlineDone    chan struct{}
+	stopped         chan struct{}
+	stopOnce        sync.Once
+	terminalMu      sync.Mutex
+	terminalErr     error
+	terminalTaken   bool
+	now             func() time.Time
+}
+
+func (d *ExternalModuleDefinition) openCommandStream(ctx context.Context, opts Options, a ExternalAction, values []any) (streamSource, error) {
+	var lifecycleCancel context.CancelFunc
+	if a.Timeout != "" {
+		duration, err := time.ParseDuration(a.Timeout)
+		if err != nil {
+			return nil, err
+		}
+		ctx, lifecycleCancel = context.WithTimeout(ctx, duration)
+	} else {
+		ctx, lifecycleCancel = context.WithCancel(ctx)
+	}
+	if err := ctx.Err(); err != nil {
+		lifecycleCancel()
+		return nil, err
+	}
+	success := false
+	defer func() {
+		if !success {
+			lifecycleCancel()
+		}
+	}()
+	fail := func(err error) (streamSource, error) {
+		lifecycleCancel()
+		return nil, err
+	}
+	if a.Command.Stdout != "json-lines" {
+		return fail(fmt.Errorf("module %s streaming action %s requires stdout = json-lines", d.Module.Path, a.Name))
+	}
+	environment, err := d.authorize(opts)
+	if err != nil {
+		return fail(err)
+	}
+	module, err := d.module()
+	if err != nil {
+		return fail(err)
+	}
+	params := map[string]any{}
+	for i, parameter := range a.Parameters {
+		typ, _ := parseType(parameter.Type, true)
+		params[parameter.Name] = externalEncodeValue(values[i], typ, module.Definitions)
+	}
+	argv := make([]string, 0, len(a.Command.Arguments)+len(d.Distribution.Arguments))
+	if d.bundleProgram != "" {
+		argv = append(argv, d.Distribution.Arguments...)
+	}
+	for _, raw := range a.Command.Arguments {
+		if strings.HasPrefix(raw, "${") {
+			value := params[strings.TrimSuffix(strings.TrimPrefix(raw, "${"), "}")]
+			if text, ok := value.(string); ok {
+				raw = text
+			} else {
+				encoded, encodeErr := json.Marshal(value)
+				if encodeErr != nil {
+					return nil, encodeErr
+				}
+				raw = string(encoded)
+			}
+		}
+		argv = append(argv, raw)
+	}
+	program := a.Command.Program
+	if d.bundleProgram != "" {
+		program, err = d.verifiedBundleProgram()
+		if err != nil {
+			return nil, err
+		}
+	}
+	cmd := exec.Command(program, argv...)
+	configureProcessTree(cmd)
+	cmd.Env, cmd.Dir = environment, opts.Dir
+	if d.Runtime.WorkingDirectory == "${definition_dir}" {
+		cmd.Dir = d.definitionDirectory()
+	}
+	if parameter := a.Command.WorkingDirectoryParameter; parameter != "" {
+		resolved, resolveErr := d.resolveActionWorkingDirectory(opts, a, params)
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+		cmd.Dir = resolved
+	}
+	if parameter := a.Command.StdinParameter; parameter != "" {
+		value := params[parameter]
+		switch a.Command.Stdin {
+		case "", "text":
+			cmd.Stdin = strings.NewReader(fmt.Sprint(value))
+		case "json":
+			encoded, encodeErr := json.Marshal(value)
+			if encodeErr != nil {
+				return nil, encodeErr
+			}
+			cmd.Stdin = bytes.NewReader(append(encoded, '\n'))
+		default:
+			return nil, fmt.Errorf("module %s has unsupported stdin mode %s", d.Module.Path, a.Command.Stdin)
+		}
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	stderr := newExternalOutput(d.Capabilities.Secrets)
+	cmd.Stderr = stderr
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := startProcessTree(cmd); err != nil {
+		return nil, err
+	}
+	itemName, _ := externalStreamItemType(a.Result.Type)
+	itemType, err := parseType(itemName, true)
+	if err != nil {
+		_ = killProcessTree(cmd)
+		_ = cmd.Wait()
+		releaseProcessTree(cmd)
+		return nil, err
+	}
+	shutdown, _ := time.ParseDuration(d.Runtime.ShutdownTimeout)
+	stderrSink := opts.Stderr
+	if a.Command.Stderr == "discard" {
+		stderrSink = nil
+	}
+	deadline, _ := ctx.Deadline()
+	success = true
+	stream := &commandStreamSource{cmd: cmd, out: bufio.NewReaderSize(stdout, 64<<10), stderr: stderr, stderrSink: stderrSink, secrets: d.Capabilities.Secrets, itemType: itemType, definitions: module.Definitions, exitCodes: append([]int(nil), a.Command.ExitCodes...), shutdown: shutdown, deadline: deadline, lifecycleCancel: lifecycleCancel, definition: d, action: a, stopped: make(chan struct{}), now: time.Now}
+	stream.deadlineDone = make(chan struct{})
+	stream.setDeadlineStop(context.AfterFunc(ctx, func() {
+		stream.setTerminal(stream.terminalFailure("StreamTimeout", context.DeadlineExceeded))
+		close(stream.deadlineDone)
+		_ = stream.cancel(context.Background())
+	}))
+	return stream, nil
+}
+
+func (s *commandStreamSource) next(ctx context.Context) (any, bool, error) {
+	if s.done.Load() {
+		<-s.stopped
+		return nil, false, s.takeTerminal()
+	}
+	if !s.deadline.IsZero() {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadline(ctx, s.deadline)
+		defer cancel()
+	}
+	type readResult struct {
+		line []byte
+		err  error
+	}
+	read := make(chan readResult, 1)
+	go func() {
+		line, err := readProtocolLine(s.out, 1<<20)
+		read <- readResult{line, err}
+	}()
+	var incoming readResult
+	select {
+	case <-ctx.Done():
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			s.setTerminal(s.terminalFailure("StreamTimeout", ctx.Err()))
+		}
+		_ = s.cancel(context.Background())
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return nil, false, s.takeTerminal()
+		}
+		return nil, false, ctx.Err()
+	case incoming = <-read:
+	}
+	if incoming.err == io.EOF {
+		if len(incoming.line) != 0 {
+			_ = s.cancel(context.Background())
+			return nil, false, s.terminalFailure("StreamDecodeFailure", fmt.Errorf("external command returned a partial final JSON line"))
+		}
+		s.done.Store(true)
+		err := s.waitResult()
+		// Waiting for the producer can cross the action deadline even when EOF
+		// was observed just before it. Resolve that ordering before clean EOF.
+		if s.deadlineExpired() {
+			s.setTerminal(s.terminalFailure("StreamTimeout", context.DeadlineExceeded))
+		}
+		s.stopDeadline()
+		if s.lifecycleCancel != nil {
+			s.lifecycleCancel()
+		}
+		s.signalStopped()
+		if terminal := s.takeTerminal(); terminal != nil {
+			return nil, false, terminal
+		}
+		if err != nil {
+			err = s.terminalFailure("ProcessFailure", err)
+		}
+		return nil, false, err
+	}
+	if incoming.err != nil {
+		_ = s.cancel(context.Background())
+		return nil, false, s.terminalFailure("ProcessFailure", incoming.err)
+	}
+	var value any
+	if err := decodeExternalJSON(incoming.line, &value); err != nil {
+		_ = s.cancel(context.Background())
+		return nil, false, s.terminalFailure("StreamDecodeFailure", fmt.Errorf("external command returned invalid JSON line: %w", err))
+	}
+	decoded, err := externalDecodeValue(value, s.itemType, s.definitions)
+	if err != nil || !typeMatchesRef(decoded, s.itemType, s.definitions) {
+		_ = s.cancel(context.Background())
+		return nil, false, s.terminalFailure("StreamDecodeFailure", fmt.Errorf("external command stream item must be %s", s.itemType.String()))
+	}
+	return decoded, true, nil
+}
+
+func (s *commandStreamSource) terminalFailure(kind string, cause error) error {
+	if s.definition == nil || !containsString(s.action.Failures, kind) {
+		return cause
+	}
+	if err := s.definition.validateFailurePayload(kind, map[string]any{}); err != nil {
+		return fmt.Errorf("command stream failure %s declaration: %w", kind, err)
+	}
+	return &typedFailure{kind: kind, value: map[string]any{
+		"kind": kind, "message": cause.Error(), "retryable": false,
+		"module": s.definition.Module.Path, "phase": "stream",
+	}}
+}
+
+func (s *commandStreamSource) waitResult() error {
+	s.resultOnce.Do(func() {
+		s.waitOnce.Do(func() { s.waitErr = s.cmd.Wait(); releaseProcessTree(s.cmd) })
+		if s.stderrSink != nil && s.stderr.Len() > 0 {
+			_, _ = io.WriteString(s.stderrSink, s.stderr.redacted(s.secrets))
+		}
+		if s.stderr.exceeded {
+			s.resultErr = fmt.Errorf("external command stderr exceeds 1 MiB")
+			return
+		}
+		code := 0
+		if s.waitErr != nil {
+			if exit, ok := s.waitErr.(*exec.ExitError); ok {
+				code = exit.ExitCode()
+			} else {
+				s.resultErr = s.waitErr
+				return
+			}
+		}
+		allowed := append([]int(nil), s.exitCodes...)
+		if len(allowed) == 0 {
+			allowed = []int{0}
+		}
+		if !containsInt(allowed, code) {
+			s.resultErr = fmt.Errorf("external command exited %d", code)
+		}
+	})
+	return s.resultErr
+}
+
+func (s *commandStreamSource) cancel(ctx context.Context) error {
+	if s.done.Swap(true) {
+		select {
+		case <-s.stopped:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	defer s.signalStopped()
+	s.stopDeadline()
+	if s.lifecycleCancel != nil {
+		defer s.lifecycleCancel()
+	}
+	if s.shutdown > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, s.shutdown)
+		defer cancel()
+	}
+	graceful := requestProcessTreeStop(s.cmd) == nil
+	done := make(chan error, 1)
+	go func() { done <- s.waitResult() }()
+	if !graceful {
+		_ = killProcessTree(s.cmd)
+	}
+	select {
+	case <-ctx.Done():
+		_ = killProcessTree(s.cmd)
+		select {
+		case <-done:
+			return nil
+		case <-time.After(time.Second):
+			return ctx.Err()
+		}
+	case <-done:
+		// The leader may exit cooperatively while a descendant ignores TERM.
+		// Always sweep the original process group before reporting cancellation.
+		_ = killProcessTree(s.cmd)
+		return nil
+	}
+}
+
+func (s *commandStreamSource) signalStopped() {
+	s.stopOnce.Do(func() { close(s.stopped) })
+}
+
+func (s *commandStreamSource) setDeadlineStop(stop func() bool) {
+	s.deadlineMu.Lock()
+	s.deadlineStop = stop
+	s.deadlineMu.Unlock()
+}
+
+func (s *commandStreamSource) stopDeadline() {
+	s.deadlineMu.Lock()
+	stop := s.deadlineStop
+	s.deadlineMu.Unlock()
+	if stop != nil {
+		if !stop() && s.deadlineDone != nil {
+			<-s.deadlineDone
+		}
+	}
+}
+
+func (s *commandStreamSource) setTerminal(err error) {
+	s.terminalMu.Lock()
+	if s.terminalErr == nil && !s.terminalTaken {
+		s.terminalErr = err
+	}
+	s.terminalMu.Unlock()
+}
+
+func (s *commandStreamSource) takeTerminal() error {
+	s.terminalMu.Lock()
+	defer s.terminalMu.Unlock()
+	if s.terminalTaken {
+		return nil
+	}
+	s.terminalTaken = true
+	err := s.terminalErr
+	s.terminalErr = nil
+	return err
+}
+
+func (s *commandStreamSource) streamMetrics() (int, int) { return 0, 0 }
+
+func (s *commandStreamSource) deadlineExpired() bool {
+	if s.deadline.IsZero() {
+		return false
+	}
+	now := time.Now
+	if s.now != nil {
+		now = s.now
+	}
+	return !now().Before(s.deadline)
 }
 
 func redactExternalOutput(value string, secretNames []string) string {
@@ -950,17 +1407,20 @@ func currentExternalTarget() string {
 }
 
 type stdioClient struct {
-	mu         sync.Mutex
-	cmd        *exec.Cmd
-	in         io.WriteCloser
-	out        *bufio.Reader
-	nextID     int
-	definition *ExternalModuleDefinition
-	ctx        context.Context
-	deadline   time.Time
-	stderr     *externalOutput
-	stderrSink io.Writer
-	stderrOnce sync.Once
+	mu            sync.Mutex
+	cmd           *exec.Cmd
+	in            io.WriteCloser
+	out           *bufio.Reader
+	nextID        int
+	definition    *ExternalModuleDefinition
+	ctx           context.Context
+	deadline      time.Time
+	stderr        *externalOutput
+	stderrSink    io.Writer
+	stderrOnce    sync.Once
+	terminateOnce sync.Once
+	poisoned      atomic.Bool
+	activeStream  atomic.Bool
 }
 
 type rpcResponse struct {
@@ -972,6 +1432,414 @@ type rpcResponse struct {
 		Message string         `json:"message"`
 		Data    map[string]any `json:"data"`
 	} `json:"error"`
+}
+
+// stdioProtocolStream owns the stdio client's response boundary from
+// stream.open until one terminal stream message is observed. Keeping the
+// client locked prevents an ordinary invocation from consuming a stream
+// notification as its response while max_in_flight is one.
+type stdioProtocolStream struct {
+	opMu            sync.Mutex
+	client          *stdioClient
+	id              string
+	action          string
+	itemType        TypeRef
+	definitions     map[string]*RecordDef
+	nextSequence    int64
+	credit          atomic.Int64
+	needCredit      bool
+	done            atomic.Bool
+	shutdown        time.Duration
+	deadline        time.Time
+	lifecycleCancel context.CancelFunc
+	release         func(bool)
+	deadlineMu      sync.Mutex
+	deadlineStop    func() bool
+	deadlineDone    chan struct{}
+	stopped         chan struct{}
+	stopOnce        sync.Once
+	terminalMu      sync.Mutex
+	terminalErr     error
+	terminalTaken   bool
+	releaseOnce     sync.Once
+	now             func() time.Time
+}
+
+type streamNotification struct {
+	JSONRPC string          `json:"jsonrpc"`
+	Method  string          `json:"method"`
+	Params  json.RawMessage `json:"params"`
+}
+
+func (c *stdioClient) openStream(ctx context.Context, action string, arguments map[string]any, itemTypeName string) (*stdioProtocolStream, error) {
+	if c.poisoned.Load() {
+		return nil, fmt.Errorf("plugin session is closed after stream termination")
+	}
+	for !c.mu.TryLock() {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(time.Millisecond):
+		}
+	}
+	release := true
+	defer func() {
+		if release {
+			c.mu.Unlock()
+		}
+	}()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	id := c.nextID
+	c.nextID++
+	params := map[string]any{"action": action, "arguments": arguments, "credit": 1}
+	if deadline, ok := ctx.Deadline(); ok {
+		params["deadline"] = deadline.Format(time.RFC3339Nano)
+	}
+	if err := c.writeProtocolMessage(ctx, map[string]any{"jsonrpc": "2.0", "id": id, "method": "stream.open", "params": params}); err != nil {
+		return nil, err
+	}
+	line, err := c.readProtocolMessage(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var response rpcResponse
+	if err := decodeExternalJSON(line, &response); err != nil {
+		return nil, fmt.Errorf("plugin wrote non-protocol data: %w", err)
+	}
+	if response.JSONRPC != "2.0" || response.ID != id {
+		return nil, fmt.Errorf("plugin response id mismatch")
+	}
+	if response.Error != nil {
+		return nil, c.protocolFailure(action, response.Error.Code, response.Error.Message, response.Error.Data, "open")
+	}
+	var opened struct {
+		StreamID string `json:"streamId"`
+		ItemType string `json:"itemType"`
+	}
+	if err := decodeExternalJSON(response.Result, &opened); err != nil {
+		return nil, fmt.Errorf("plugin stream.open result: %w", err)
+	}
+	if opened.StreamID == "" || opened.ItemType != itemTypeName {
+		return nil, fmt.Errorf("plugin stream.open identity mismatch")
+	}
+	itemType, err := parseType(itemTypeName, true)
+	if err != nil {
+		return nil, err
+	}
+	module, err := c.definition.module()
+	if err != nil {
+		return nil, err
+	}
+	stream := &stdioProtocolStream{client: c, id: opened.StreamID, action: action, itemType: itemType, definitions: module.Definitions, stopped: make(chan struct{}), now: time.Now}
+	stream.credit.Store(1)
+	release = false
+	return stream, nil
+}
+
+func (c *stdioClient) writeProtocolMessage(ctx context.Context, message any) error {
+	encoded, err := json.Marshal(message)
+	if err != nil {
+		return fmt.Errorf("plugin request encoding: %w", err)
+	}
+	if len(encoded)+1 > 1<<20 {
+		return fmt.Errorf("plugin request exceeds 1 MiB")
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, writeErr := c.in.Write(append(encoded, '\n'))
+		done <- writeErr
+	}()
+	select {
+	case <-ctx.Done():
+		c.terminate()
+		<-done
+		return ctx.Err()
+	case err := <-done:
+		return err
+	}
+}
+
+func (c *stdioClient) readProtocolMessage(ctx context.Context) ([]byte, error) {
+	type result struct {
+		line []byte
+		err  error
+	}
+	read := make(chan result, 1)
+	go func() {
+		line, err := readProtocolLine(c.out, 1<<20)
+		read <- result{line: line, err: err}
+	}()
+	select {
+	case <-ctx.Done():
+		c.terminate()
+		<-read
+		return nil, ctx.Err()
+	case incoming := <-read:
+		if incoming.err != nil {
+			return nil, incoming.err
+		}
+		if !utf8.Valid(incoming.line) {
+			return nil, fmt.Errorf("plugin response is not valid UTF-8")
+		}
+		return incoming.line, nil
+	}
+}
+
+func (s *stdioProtocolStream) next(ctx context.Context) (any, bool, error) {
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+	if s.done.Load() {
+		<-s.stopped
+		return nil, false, s.takeTerminal()
+	}
+	var cancel context.CancelFunc
+	ctx, cancel = s.withDeadline(ctx)
+	defer cancel()
+	if s.needCredit {
+		if err := s.client.writeProtocolMessage(ctx, map[string]any{"jsonrpc": "2.0", "method": "stream.credit", "params": map[string]any{"streamId": s.id, "credit": 1}}); err != nil {
+			s.finish(true)
+			return nil, false, err
+		}
+		s.credit.Add(1)
+		s.needCredit = false
+	}
+	line, err := s.client.readProtocolMessage(ctx)
+	if err != nil {
+		s.finish(true)
+		return nil, false, err
+	}
+	var notification streamNotification
+	if err := decodeExternalJSON(line, &notification); err != nil || notification.JSONRPC != "2.0" || notification.Method == "" {
+		s.violation()
+		return nil, false, fmt.Errorf("plugin wrote non-protocol stream data")
+	}
+	switch notification.Method {
+	case "stream.item":
+		var params struct {
+			StreamID string `json:"streamId"`
+			Sequence int64  `json:"sequence"`
+			Value    any    `json:"value"`
+		}
+		if err := decodeExternalJSON(notification.Params, &params); err != nil || params.StreamID != s.id {
+			s.violation()
+			return nil, false, fmt.Errorf("plugin sent an item for an unknown stream")
+		}
+		if s.credit.Load() <= 0 {
+			s.violation()
+			return nil, false, fmt.Errorf("%s exceeded its stream credit", s.action)
+		}
+		if params.Sequence != s.nextSequence {
+			s.violation()
+			return nil, false, fmt.Errorf("%s sent stream item sequence %d; expected %d", s.action, params.Sequence, s.nextSequence)
+		}
+		decoded, err := externalDecodeValue(params.Value, s.itemType, s.definitions)
+		if err != nil || !typeMatchesRef(decoded, s.itemType, s.definitions) {
+			s.violation()
+			return nil, false, fmt.Errorf("stream item %d must be %s", params.Sequence, s.itemType.String())
+		}
+		s.credit.Add(-1)
+		s.nextSequence++
+		s.needCredit = true
+		return decoded, true, nil
+	case "stream.end":
+		var params struct {
+			StreamID     string `json:"streamId"`
+			LastSequence int64  `json:"lastSequence"`
+		}
+		if err := decodeExternalJSON(notification.Params, &params); err != nil || params.StreamID != s.id || params.LastSequence != s.nextSequence-1 {
+			s.violation()
+			return nil, false, fmt.Errorf("%s sent an invalid stream end", s.action)
+		}
+		if s.deadlineExpired() {
+			s.setTerminal(context.DeadlineExceeded)
+		}
+		s.finish(false)
+		return nil, false, s.takeTerminal()
+	case "stream.error":
+		var params struct {
+			StreamID string `json:"streamId"`
+			Failure  struct {
+				Kind      string         `json:"kind"`
+				Message   string         `json:"message"`
+				Retryable bool           `json:"retryable"`
+				Payload   map[string]any `json:"payload"`
+			} `json:"failure"`
+		}
+		if err := decodeExternalJSON(notification.Params, &params); err != nil || params.StreamID != s.id {
+			s.violation()
+			return nil, false, fmt.Errorf("plugin sent an error for an unknown stream")
+		}
+		payload := params.Failure.Payload
+		if payload == nil {
+			payload = map[string]any{}
+		}
+		data := map[string]any{"kind": params.Failure.Kind, "retryable": params.Failure.Retryable, "payload": payload}
+		failure := s.client.protocolFailure(s.action, -32000, params.Failure.Message, data, "stream")
+		var declared *typedFailure
+		if !errors.As(failure, &declared) {
+			s.violation()
+			return nil, false, failure
+		}
+		s.finish(false)
+		return nil, false, failure
+	default:
+		s.violation()
+		return nil, false, fmt.Errorf("plugin sent unsupported stream method %s", notification.Method)
+	}
+}
+
+func (s *stdioProtocolStream) cancel(ctx context.Context) error {
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+	if s.done.Load() {
+		return nil
+	}
+	if s.shutdown > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, s.shutdown)
+		defer cancel()
+	}
+	var deadlineCancel context.CancelFunc
+	ctx, deadlineCancel = s.withDeadline(ctx)
+	defer deadlineCancel()
+	if err := s.client.writeProtocolMessage(ctx, map[string]any{"jsonrpc": "2.0", "method": "stream.cancel", "params": map[string]any{"streamId": s.id}}); err != nil {
+		s.violation()
+		return err
+	}
+	for {
+		line, err := s.client.readProtocolMessage(ctx)
+		if err != nil {
+			s.finish(true)
+			return err
+		}
+		var notification streamNotification
+		if err := decodeExternalJSON(line, &notification); err != nil || notification.JSONRPC != "2.0" {
+			s.violation()
+			return fmt.Errorf("plugin did not acknowledge stream cancellation")
+		}
+		switch notification.Method {
+		case "stream.item":
+			// The initial credit may already be in flight when source code closes a
+			// newly opened stream. Validate and discard that bounded item; never
+			// replenish its credit while cancellation is pending.
+			var params struct {
+				StreamID string `json:"streamId"`
+				Sequence int64  `json:"sequence"`
+				Value    any    `json:"value"`
+			}
+			if err := decodeExternalJSON(notification.Params, &params); err != nil || params.StreamID != s.id || params.Sequence != s.nextSequence || s.credit.Load() <= 0 {
+				s.violation()
+				return fmt.Errorf("plugin sent an invalid item while canceling stream")
+			}
+			decoded, decodeErr := externalDecodeValue(params.Value, s.itemType, s.definitions)
+			if decodeErr != nil || !typeMatchesRef(decoded, s.itemType, s.definitions) {
+				s.violation()
+				return fmt.Errorf("stream item %d must be %s", params.Sequence, s.itemType.String())
+			}
+			s.credit.Add(-1)
+			s.nextSequence++
+		case "stream.end":
+			var params struct {
+				StreamID     string `json:"streamId"`
+				LastSequence int64  `json:"lastSequence"`
+			}
+			if err := decodeExternalJSON(notification.Params, &params); err != nil || params.StreamID != s.id || params.LastSequence != s.nextSequence-1 {
+				s.violation()
+				return fmt.Errorf("plugin sent an invalid stream cancellation acknowledgement")
+			}
+			s.finish(false)
+			return nil
+		default:
+			s.violation()
+			return fmt.Errorf("plugin did not acknowledge stream cancellation")
+		}
+	}
+}
+
+func (s *stdioProtocolStream) withDeadline(ctx context.Context) (context.Context, context.CancelFunc) {
+	if s.deadline.IsZero() {
+		return context.WithCancel(ctx)
+	}
+	return context.WithDeadline(ctx, s.deadline)
+}
+
+func (s *stdioProtocolStream) streamMetrics() (int, int) {
+	return 0, int(s.credit.Load())
+}
+
+func (s *stdioProtocolStream) deadlineExpired() bool {
+	if s.deadline.IsZero() {
+		return false
+	}
+	now := time.Now
+	if s.now != nil {
+		now = s.now
+	}
+	return !now().Before(s.deadline)
+}
+
+func (s *stdioProtocolStream) setDeadlineStop(stop func() bool) {
+	s.deadlineMu.Lock()
+	s.deadlineStop = stop
+	s.deadlineMu.Unlock()
+}
+
+func (s *stdioProtocolStream) stopDeadline() {
+	s.deadlineMu.Lock()
+	stop := s.deadlineStop
+	s.deadlineMu.Unlock()
+	if stop != nil {
+		if !stop() && s.deadlineDone != nil {
+			<-s.deadlineDone
+		}
+	}
+}
+
+func (s *stdioProtocolStream) setTerminal(err error) {
+	s.terminalMu.Lock()
+	if s.terminalErr == nil && !s.terminalTaken {
+		s.terminalErr = err
+	}
+	s.terminalMu.Unlock()
+}
+
+func (s *stdioProtocolStream) takeTerminal() error {
+	s.terminalMu.Lock()
+	defer s.terminalMu.Unlock()
+	if s.terminalTaken {
+		return nil
+	}
+	s.terminalTaken = true
+	err := s.terminalErr
+	s.terminalErr = nil
+	return err
+}
+
+func (s *stdioProtocolStream) violation() {
+	s.client.kill()
+	s.finish(true)
+}
+
+func (s *stdioProtocolStream) finish(poison bool) {
+	s.done.Store(true)
+	s.releaseOnce.Do(func() {
+		defer s.stopOnce.Do(func() { close(s.stopped) })
+		s.stopDeadline()
+		if poison {
+			s.client.poisoned.Store(true)
+		}
+		if s.lifecycleCancel != nil {
+			s.lifecycleCancel()
+		}
+		s.client.mu.Unlock()
+		if s.release != nil {
+			s.release(poison)
+		} else if poison {
+			s.client.terminate()
+		}
+	})
 }
 
 func (d *ExternalModuleDefinition) invokeStdio(ctx context.Context, opts Options, action ExternalAction, values []any) (any, error) {
@@ -1010,7 +1878,11 @@ func (d *ExternalModuleDefinition) invokeStdio(ctx context.Context, opts Options
 	var result struct {
 		Value any `json:"value"`
 	}
-	if err := client.call(ctx, "invoke", map[string]any{"action": action.Name, "arguments": arguments, "context": map[string]any{"workingDirectory": opts.Dir}}, &result); err != nil {
+	callContext := map[string]any{"workingDirectory": opts.Dir}
+	if deadline, ok := ctx.Deadline(); ok {
+		callContext["deadline"] = deadline.Format(time.RFC3339Nano)
+	}
+	if err := client.call(ctx, "invoke", map[string]any{"action": action.Name, "arguments": arguments, "context": callContext}, &result); err != nil {
 		var declared *typedFailure
 		if errors.As(err, &declared) {
 			return nil, err
@@ -1026,6 +1898,127 @@ func (d *ExternalModuleDefinition) invokeStdio(ctx context.Context, opts Options
 		return nil, err
 	}
 	return externalDecodeResult(result.Value, action.Result.Type, module.Definitions)
+}
+
+// openStdioStream opens an external producer while leaving consumption and
+// cancellation to the returned source. The source retains exclusive ownership
+// of the stdio response boundary until it ends or is canceled.
+func (d *ExternalModuleDefinition) openStdioStream(ctx context.Context, opts Options, action ExternalAction, values []any) (streamSource, error) {
+	var lifecycleCancel context.CancelFunc
+	if action.Timeout != "" {
+		duration, err := time.ParseDuration(action.Timeout)
+		if err != nil {
+			return nil, err
+		}
+		ctx, lifecycleCancel = context.WithTimeout(ctx, duration)
+	} else {
+		ctx, lifecycleCancel = context.WithCancel(ctx)
+	}
+	if err := d.lockClients(ctx); err != nil {
+		lifecycleCancel()
+		return nil, err
+	}
+	client := d.clients[opts.externalSession]
+	pooled := true
+	if client == nil {
+		var err error
+		client, err = d.startStdio(ctx, opts)
+		if err != nil {
+			d.unlockClients()
+			lifecycleCancel()
+			return nil, err
+		}
+		d.clients[opts.externalSession] = client
+		client.activeStream.Store(true)
+	} else if !client.activeStream.CompareAndSwap(false, true) {
+		// max_in_flight=1 applies per plugin process. A second concurrently
+		// owned stream receives a dedicated process instead of waiting on the
+		// first stream's lifetime mutex.
+		pooled = false
+		var err error
+		client, err = d.startStdio(ctx, opts)
+		if err != nil {
+			d.unlockClients()
+			lifecycleCancel()
+			return nil, err
+		}
+		client.activeStream.Store(true)
+	}
+	d.unlockClients()
+	releaseSelection := func(poison bool) {
+		client.activeStream.Store(false)
+		if !pooled {
+			client.terminate()
+			return
+		}
+		if poison {
+			d.retireStdioClient(opts.externalSession, client)
+		}
+	}
+	arguments := map[string]any{}
+	module, err := d.module()
+	if err != nil {
+		lifecycleCancel()
+		releaseSelection(false)
+		return nil, err
+	}
+	for i, parameter := range action.Parameters {
+		typ, _ := parseType(parameter.Type, true)
+		arguments[parameter.Name] = externalEncodeValue(values[i], typ, module.Definitions)
+	}
+	itemType, ok := externalStreamItemType(action.Result.Type)
+	if !ok {
+		lifecycleCancel()
+		releaseSelection(false)
+		return nil, fmt.Errorf("module %s action %s is not streaming", d.Module.Path, action.Name)
+	}
+	stream, err := client.openStream(ctx, action.Name, arguments, itemType)
+	if err != nil {
+		lifecycleCancel()
+		var declared *typedFailure
+		if errors.As(err, &declared) {
+			releaseSelection(false)
+			return nil, err
+		}
+		releaseSelection(true)
+		return nil, err
+	}
+	stream.shutdown, _ = time.ParseDuration(d.Runtime.ShutdownTimeout)
+	stream.deadline, _ = ctx.Deadline()
+	stream.lifecycleCancel = lifecycleCancel
+	stream.release = releaseSelection
+	stream.deadlineDone = make(chan struct{})
+	stream.setDeadlineStop(context.AfterFunc(ctx, func() {
+		data := map[string]any{"kind": "StreamTimeout", "retryable": false, "payload": map[string]any{}}
+		failure := stream.client.protocolFailure(stream.action, -32000, context.DeadlineExceeded.Error(), data, "stream")
+		var declared *typedFailure
+		if !errors.As(failure, &declared) {
+			failure = context.DeadlineExceeded
+		}
+		stream.setTerminal(failure)
+		close(stream.deadlineDone)
+		_ = stream.cancel(context.Background())
+	}))
+	return stream, nil
+}
+
+func (d *ExternalModuleDefinition) retireStdioClient(key *externalSessionKey, client *stdioClient) {
+	if err := d.lockClients(context.Background()); err == nil {
+		if d.clients[key] == client {
+			delete(d.clients, key)
+		}
+		d.unlockClients()
+	}
+	client.terminate()
+}
+
+func externalStreamItemType(result string) (string, bool) {
+	const prefix = "stream of "
+	result = strings.TrimSpace(result)
+	if !strings.HasPrefix(result, prefix) || strings.TrimSpace(strings.TrimPrefix(result, prefix)) == "" {
+		return "", false
+	}
+	return strings.TrimSpace(strings.TrimPrefix(result, prefix)), true
 }
 
 func externalEncodeValue(value any, typ TypeRef, defs map[string]*RecordDef) any {
@@ -1201,6 +2194,9 @@ func externalDecodeValue(value any, typ TypeRef, defs map[string]*RecordDef) (an
 }
 
 func (d *ExternalModuleDefinition) startStdio(ctx context.Context, opts Options) (*stdioClient, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	environment, err := d.authorize(opts)
 	if err != nil {
 		return nil, err
@@ -1234,13 +2230,16 @@ func (d *ExternalModuleDefinition) startStdio(ctx context.Context, opts Options)
 	}
 	pluginStderr := newExternalOutput(d.Capabilities.Secrets)
 	cmd.Stderr = pluginStderr
-	if err := cmd.Start(); err != nil {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := startProcessTree(cmd); err != nil {
 		return nil, fmt.Errorf("module %s start: %w", d.Module.Path, err)
 	}
 	deadline, _ := ctx.Deadline()
 	client := &stdioClient{cmd: cmd, in: in, out: bufio.NewReaderSize(out, 64<<10), nextID: 1, definition: d, ctx: ctx, deadline: deadline, stderr: pluginStderr, stderrSink: opts.Stderr}
 	var initialized struct{ Protocol, Module, Version, DefinitionDigest string }
-	params := map[string]any{"protocol": "sos-plugin/1", "module": d.Module.Path, "version": d.Module.Version, "definitionDigest": d.digest, "host": map[string]any{"sosVersion": Version}, "limits": map[string]any{"maxMessageBytes": 1 << 20, "maxInFlight": 1}}
+	params := map[string]any{"protocol": "sos-plugin/1", "module": d.Module.Path, "version": d.Module.Version, "definitionDigest": d.digest, "host": map[string]any{"sosVersion": Version, "target": currentExternalTarget()}, "limits": map[string]any{"maxMessageBytes": 1 << 20, "maxInFlight": 1}}
 	startupCtx, startupCancel, err := timeoutContext(ctx, d.Runtime.StartupTimeout, 10*time.Second)
 	if err != nil {
 		client.terminate()
@@ -1388,6 +2387,9 @@ func (d *ExternalModuleDefinition) authorize(opts Options) ([]string, error) {
 }
 
 func (c *stdioClient) call(ctx context.Context, method string, params any, result any) error {
+	if c.poisoned.Load() {
+		return fmt.Errorf("plugin session is closed after stream termination")
+	}
 	for !c.mu.TryLock() {
 		select {
 		case <-ctx.Done():
@@ -1467,16 +2469,20 @@ func (c *stdioClient) call(ctx context.Context, method string, params any, resul
 	case incoming = <-read:
 	}
 	if incoming.err != nil {
+		c.poisonProtocol()
 		return incoming.err
 	}
 	if !utf8.Valid(incoming.line) {
+		c.poisonProtocol()
 		return fmt.Errorf("plugin response is not valid UTF-8")
 	}
 	var response rpcResponse
 	if err := decodeExternalJSON(incoming.line, &response); err != nil {
+		c.poisonProtocol()
 		return fmt.Errorf("plugin wrote non-protocol data: %w", err)
 	}
 	if response.JSONRPC != "2.0" || response.ID != id {
+		c.poisonProtocol()
 		return fmt.Errorf("plugin response id mismatch")
 	}
 	if response.Error != nil {
@@ -1508,6 +2514,42 @@ func (c *stdioClient) call(ctx context.Context, method string, params any, resul
 		return decodeExternalJSON(response.Result, result)
 	}
 	return nil
+}
+
+func (c *stdioClient) poisonProtocol() {
+	c.poisoned.Store(true)
+	c.terminate()
+}
+
+func (c *stdioClient) protocolFailure(action string, code int, message string, data map[string]any, phase string) error {
+	kind, _ := data["kind"].(string)
+	if kind == "" || !containsString(c.definition.actionFailureNames(action), kind) {
+		return fmt.Errorf("plugin error %d: %s", code, redactExternalOutput(message, c.definition.Capabilities.Secrets))
+	}
+	value := map[string]any{
+		"kind": kind, "message": redactExternalOutput(message, c.definition.Capabilities.Secrets),
+		"retryable": false, "module": c.definition.Module.Path, "phase": phase,
+	}
+	if retryable, ok := data["retryable"].(bool); ok {
+		value["retryable"] = retryable
+	}
+	payloadValue, payloadPresent := data["payload"]
+	if payloadPresent && payloadValue == nil {
+		payloadValue = map[string]any{}
+	}
+	if payload, ok := payloadValue.(map[string]any); ok {
+		if err := c.definition.validateFailurePayload(kind, payload); err != nil {
+			return fmt.Errorf("plugin failure payload: %w", err)
+		}
+		for key, item := range payload {
+			value[key] = redactExternalValue(item, c.definition.Capabilities.Secrets)
+		}
+	} else if payloadPresent {
+		return fmt.Errorf("plugin failure payload must be an object")
+	} else if err := c.definition.validateFailurePayload(kind, nil); err != nil {
+		return fmt.Errorf("plugin failure payload: %w", err)
+	}
+	return &typedFailure{kind: kind, value: value}
 }
 
 func decodeExternalJSON(data []byte, destination any) error {
@@ -1594,6 +2636,15 @@ func (d *ExternalModuleDefinition) definitionFailureNames(method string, params 
 	return nil
 }
 
+func (d *ExternalModuleDefinition) actionFailureNames(actionName string) []string {
+	for _, action := range d.Actions {
+		if action.Name == actionName {
+			return action.Failures
+		}
+	}
+	return nil
+}
+
 func (c *stdioClient) kill() {
 	if c.cmd != nil && c.cmd.Process != nil {
 		_ = killProcessTree(c.cmd)
@@ -1601,11 +2652,17 @@ func (c *stdioClient) kill() {
 }
 
 func (c *stdioClient) terminate() {
-	c.kill()
-	if c.cmd != nil {
-		_ = c.cmd.Wait()
-	}
-	c.flushStderr()
+	c.terminateOnce.Do(func() {
+		if c.in != nil {
+			_ = c.in.Close()
+		}
+		c.kill()
+		if c.cmd != nil {
+			_ = c.cmd.Wait()
+			releaseProcessTree(c.cmd)
+		}
+		c.flushStderr()
+	})
 }
 
 func (c *stdioClient) flushStderr() {
@@ -1646,7 +2703,7 @@ func (d *ExternalModuleDefinition) closeSession(key *externalSessionKey) {
 	_ = client.call(ctx, "shutdown", map[string]any{}, nil)
 	_ = client.in.Close()
 	done := make(chan struct{})
-	go func() { _ = client.cmd.Wait(); close(done) }()
+	go func() { _ = client.cmd.Wait(); releaseProcessTree(client.cmd); close(done) }()
 	select {
 	case <-done:
 		client.flushStderr()

@@ -215,7 +215,16 @@ func Run(ctx context.Context, p *Program, opts Options) (result *Result, err err
 		execution = append(execution, leaf.Statements...)
 	}
 	defer func() {
-		r.result.Variables = r.env
+		variables := make(map[string]any, len(r.env))
+		for name, value := range r.env {
+			if stream, ok := value.(*streamHandle); ok {
+				_ = stream.close(context.Background())
+				variables[name] = stream.debugValue()
+			} else {
+				variables[name] = value
+			}
+		}
+		r.result.Variables = variables
 		r.result.Steps = int(r.shared.steps.Load())
 		r.result.Usage = opts.Budget.Snapshot()
 		result = r.result
@@ -430,7 +439,15 @@ func (r *runtime) debugBefore(s *Statement) error {
 	frame := DebugFrame{Path: r.logicalPath, Line: s.Line, Column: 1, Kind: s.Kind, Text: s.Text, Depth: r.depth, VariableTypes: knownTypes}
 	stack := make([]DebugFrame, len(r.debugStack))
 	copy(stack, r.debugStack)
-	variables, err := cloneValue(r.env)
+	debugEnv := make(map[string]any, len(r.env))
+	for name, value := range r.env {
+		if stream, ok := value.(*streamHandle); ok {
+			debugEnv[name] = stream.debugValue()
+		} else {
+			debugEnv[name] = value
+		}
+	}
+	variables, err := cloneValue(debugEnv)
 	if err != nil {
 		return fmt.Errorf("debugger snapshot: %w", err)
 	}
@@ -544,6 +561,9 @@ func (r *runtime) callHasResult(s *Statement) bool {
 		}
 		return false
 	}
+	if s.Kind == "collectStream" || s.Kind == "take" {
+		return true
+	}
 	if s.Kind == "sent" {
 		m := matchSent(s.Text)
 		mod, action, ok := r.vocabLookup(m[1])
@@ -568,6 +588,18 @@ func (r *runtime) callResultType(s *Statement) (TypeRef, bool) {
 	}
 	var declaration *Statement
 	var nativeResult string
+	if s.Kind == "collectStream" || s.Kind == "take" {
+		m := match(s.Kind, s.Text)
+		streamName := m[2]
+		if s.Kind == "take" {
+			streamName = m[3]
+		}
+		if stream, ok := r.env[strings.TrimSpace(streamName)].(*streamHandle); ok {
+			item := stream.itemType
+			return TypeRef{Element: &item}, true
+		}
+		return TypeRef{}, false
+	}
 	if s.Kind == "call" {
 		m := match("call", s.Text)
 		if strings.Contains(m[1], ".") {
@@ -613,6 +645,14 @@ func bindCallResult(s *Statement, value any, r *runtime) bool {
 		if name != "" {
 			r.env[name] = value
 		}
+		return true
+	}
+	if s.Kind == "collectStream" {
+		r.env[match("collectStream", s.Text)[3]] = value
+		return true
+	}
+	if s.Kind == "take" {
+		r.env[match("take", s.Text)[4]] = value
 		return true
 	}
 	if s.Kind == "sent" {
@@ -725,6 +765,16 @@ func isFatalFailure(err error) bool {
 
 func (r *runtime) execute(s *Statement) error {
 	m := match(s.Kind, s.Text)
+	if binding := statementBindingName(s); binding != "" && s.Kind != "openStream" {
+		if existing, ok := r.env[binding].(*streamHandle); ok {
+			existing.mu.Lock()
+			active := existing.state == streamActive
+			existing.mu.Unlock()
+			if active {
+				return fmt.Errorf("cannot overwrite active stream %s; consume or close it first", binding)
+			}
+		}
+	}
 	switch s.Kind {
 	case "command", "parameter", "import", "package", "export", "define", "failure":
 		return nil
@@ -884,6 +934,7 @@ func (r *runtime) execute(s *Statement) error {
 		}
 		r.debugStack = append(r.debugStack, DebugFrame{Path: actionPath, Line: fn.Line, Column: 1, Name: m[1], Kind: "action", Text: fn.Text, Depth: r.depth})
 		e = r.block(fn.Body)
+		closeActionOwnedStreams(r.env, outer)
 		r.debugStack = r.debugStack[:len(r.debugStack)-1]
 		r.depth--
 		calleeDefinitions := r.definitions
@@ -915,14 +966,92 @@ func (r *runtime) execute(s *Statement) error {
 			return fmt.Errorf("action %s did not return a value", m[1])
 		}
 		return e
+	case "openStream":
+		if existing, ok := r.env[m[3]].(*streamHandle); ok {
+			existing.mu.Lock()
+			active := existing.state == streamActive
+			existing.mu.Unlock()
+			if active {
+				return fmt.Errorf("stream %s is already active; consume or close it before reopening", m[3])
+			}
+		}
+		args, e := splitExpressions(m[2])
+		if e != nil {
+			return e
+		}
+		stream, e := r.openExternalStream(m[1], args)
+		if e == nil {
+			r.env[m[3]] = stream
+		}
+		return e
+	case "closeStream":
+		stream, ok := r.env[m[1]].(*streamHandle)
+		if !ok {
+			return fmt.Errorf("%s is not an owned stream", m[1])
+		}
+		if e := stream.beginConsumption(); e != nil {
+			return fmt.Errorf("%s was already consumed", m[1])
+		}
+		return stream.close(r.ctx)
+	case "stopReading":
+		return stopReadingValue{}
+	case "streamFor":
+		name := strings.TrimSpace(m[2])
+		stream, ok := r.env[name].(*streamHandle)
+		if !ok {
+			return fmt.Errorf("%s is not an owned stream", name)
+		}
+		if e := stream.beginConsumption(); e != nil {
+			return fmt.Errorf("%s was already consumed", name)
+		}
+		old, had := r.env[m[1]]
+		defer func() {
+			if had {
+				r.env[m[1]] = old
+			} else {
+				delete(r.env, m[1])
+			}
+		}()
+		for {
+			item, more, e := stream.next(r.ctx)
+			if e != nil {
+				_ = stream.close(context.Background())
+				return e
+			}
+			if !more {
+				return nil
+			}
+			if !typeMatchesRef(item, stream.itemType, r.definitions) {
+				_ = stream.close(context.Background())
+				return fmt.Errorf("stream item must be %s; received %s", stream.itemType.String(), valueTypeName(item))
+			}
+			r.env[m[1]] = item
+			e = r.block(s.Body)
+			var stopped stopReadingValue
+			if errors.As(e, &stopped) {
+				return stream.close(r.ctx)
+			}
+			if e != nil {
+				_ = stream.close(context.Background())
+				return e
+			}
+		}
+	case "collectStream":
+		return r.materializeStream(s, m, false)
 	case "remember":
 		v, e := r.eval(m[1], nil)
+		if containsStreamHandle(v) {
+			return fmt.Errorf("cannot copy a stream with remember")
+		}
 		if e == nil {
 			r.env[m[2]] = v
 		}
 		return e
 	case "make":
 		name, expr := m[1], strings.TrimPrefix(m[2], "as ")
+		if source, ok := r.env[strings.TrimSpace(expr)].(*streamHandle); ok && source != nil {
+			return fmt.Errorf("cannot copy stream %s with make", strings.TrimSpace(expr))
+		}
 		if !strings.HasPrefix(s.Text, "make ") {
 			if _, ok := r.env[name]; !ok {
 				return fmt.Errorf("cannot assign unknown name %q", name)
@@ -940,6 +1069,9 @@ func (r *runtime) execute(s *Statement) error {
 					v, e := r.eval(value, nil)
 					if e != nil {
 						return e
+					}
+					if containsStreamHandle(v) {
+						return fmt.Errorf("cannot copy a stream with make")
 					}
 					record[key] = v
 				}
@@ -970,6 +1102,9 @@ func (r *runtime) execute(s *Statement) error {
 				if e != nil {
 					return e
 				}
+				if containsStreamHandle(v) {
+					return fmt.Errorf("cannot copy a stream with make")
+				}
 				if !typeMatchesRef(v, field.Type, r.definitions) {
 					return fmt.Errorf("%s.%s must be %s; received %s", typeText, key, field.Type.String(), valueTypeName(v))
 				}
@@ -985,6 +1120,9 @@ func (r *runtime) execute(s *Statement) error {
 			return nil
 		}
 		v, e := r.eval(expr, nil)
+		if e == nil && containsStreamHandle(v) {
+			return fmt.Errorf("cannot copy a stream with make")
+		}
 		if e == nil {
 			if strings.HasPrefix(strings.TrimSpace(m[2]), "as ") {
 				typeText := strings.TrimSpace(strings.TrimPrefix(m[2], "as "))
@@ -1038,6 +1176,14 @@ func (r *runtime) execute(s *Statement) error {
 		r.env[m[3]] = files
 		return nil
 	case "readEach":
+		if existing, ok := r.env[m[1]].(*streamHandle); ok {
+			existing.mu.Lock()
+			active := existing.state == streamActive
+			existing.mu.Unlock()
+			if active {
+				return fmt.Errorf("cannot overwrite active stream %s; consume or close it first", m[1])
+			}
+		}
 		v, e := r.eval(m[2], nil)
 		if e != nil {
 			return e
@@ -1289,6 +1435,12 @@ func (r *runtime) execute(s *Statement) error {
 		}
 		return nil
 	case "take":
+		if m[1] == "first" {
+			if _, ok := r.env[strings.TrimSpace(m[3])].(*streamHandle); ok {
+				adapted := []string{m[0], m[2], m[3], m[4]}
+				return r.materializeStream(s, adapted, true)
+			}
+		}
 		n, e := r.eval(m[2], nil)
 		if e != nil {
 			return e
@@ -1310,6 +1462,9 @@ func (r *runtime) execute(s *Statement) error {
 		v, e := r.eval(m[1], nil)
 		if e != nil {
 			return e
+		}
+		if containsStreamHandle(v) {
+			return fmt.Errorf("cannot copy a stream with append")
 		}
 		a, e := r.list(m[2])
 		if e != nil {
@@ -1603,6 +1758,7 @@ func (r *runtime) callModule(s *Statement, mod *Module, action, display string, 
 	}
 	r.debugStack = append(r.debugStack, DebugFrame{Path: modulePath, Line: fn.Line, Column: 1, Name: display, Kind: "action", Text: fn.Text, Depth: r.depth})
 	e := r.block(fn.Body)
+	closeActionOwnedStreams(r.env, outer)
 	r.debugStack = r.debugStack[:len(r.debugStack)-1]
 	r.depth--
 	r.env = outer

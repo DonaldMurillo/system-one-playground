@@ -250,14 +250,29 @@ func runProcess(ctx context.Context, opts Options, args []any) (any, error) {
 	parentCtx := ctx
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, args[0].(string), argv...)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	cmd := exec.Command(args[0].(string), argv...)
+	configureProcessTree(cmd)
 	cmd.Dir = opts.Dir
-	cmd.WaitDelay = time.Second
 	var stdout, stderr boundedOutput
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	err := cmd.Run()
-	if ctx.Err() != nil {
+	if err := startProcessTree(cmd); err != nil {
+		return nil, err
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Wait()
+		releaseProcessTree(cmd)
+	}()
+	var err error
+	select {
+	case err = <-done:
+	case <-ctx.Done():
+		_ = killProcessTree(cmd)
+		<-done
 		if parentCtx.Err() == nil {
 			return nil, &operationTimeoutError{"process operation timed out"}
 		}

@@ -183,6 +183,13 @@ func (s *server) sentenceHover(params json.RawMessage) any {
 		return nil
 	}
 	line := lineAt(text, pos.Line)
+	// Stream hover supplements the core statement meaning with ownership and
+	// lifecycle guarantees that are essential at the call site.
+	if reNewStreamLine.MatchString(strings.TrimSpace(stripLineComment(line))) {
+		if value, is := s.newSyntaxHover(uri, text, line); is {
+			return map[string]any{"contents": map[string]any{"kind": "markdown", "value": value}}
+		}
+	}
 	if info, exists := sos.EditorMeanings(text)[pos.Line+1]; exists {
 		return map[string]any{"contents": map[string]any{"kind": "markdown", "value": "```sos\n" + strings.TrimSpace(line) + "\n```\n\n**" + info.Kind + "**\n\n" + info.Description}}
 	}
@@ -347,6 +354,13 @@ func (s *server) completion(params json.RawMessage) any {
 		stdLib := strings.HasPrefix(t.Origin, "standard library")
 		forms, importAliasToUse := completionForms(t, stdLib, text)
 		for _, form := range forms {
+			if strings.HasPrefix(t.Result, "stream of ") && !t.Bare && t.Qualifier != "" {
+				var offer bool
+				form, offer = streamCompletionForm(t, form, lineContext)
+				if !offer {
+					continue
+				}
+			}
 			if !completionAddresses(t, form.label, prefix) {
 				continue
 			}
@@ -374,6 +388,23 @@ func (s *server) completion(params json.RawMessage) any {
 		}
 	}
 	return items
+}
+
+func streamCompletionForm(t wordTarget, form completionForm, lineContext string) (completionForm, bool) {
+	// The server currently advertises plain-text completion, not snippet
+	// support. Inventing parameter identifiers produces undefined expressions,
+	// so parameterized streams are suppressed until real placeholders can be
+	// negotiated with the client.
+	if len(t.Params) > 0 {
+		return completionForm{}, false
+	}
+	call := form.insert
+	call += " called items"
+	label := "stream " + call
+	if strings.HasPrefix(strings.TrimSpace(lineContext), "stream ") {
+		return completionForm{label: label, insert: call}, true
+	}
+	return completionForm{label: label, insert: label}, true
 }
 
 func failureCompletionContext(line string) bool {

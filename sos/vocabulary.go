@@ -315,6 +315,7 @@ type VocabularyEntry struct {
 	Result           string            `json:"result,omitempty"`
 	PossibleFailures []string          `json:"possibleFailures,omitempty"`
 	Effects          []string          `json:"effects,omitempty"`
+	Targets          []string          `json:"targets,omitempty"`
 	Origin           string            `json:"origin"`
 	Enabled          bool              `json:"enabled"`
 	Import           string            `json:"import,omitempty"`
@@ -406,6 +407,7 @@ func moduleEntries(lib vocabLib, enabled bool) []VocabularyEntry {
 			Origin:  lib.origin,
 			Enabled: enabled,
 		}
+		streaming := false
 		if enabled {
 			e.Alias = lib.alias
 		}
@@ -421,6 +423,9 @@ func moduleEntries(lib vocabLib, enabled bool) []VocabularyEntry {
 			e.Result = op.Result
 			e.Description = op.Description
 			e.Effects = append([]string(nil), op.Effects...)
+			e.Targets = append([]string(nil), op.Targets...)
+			e.PossibleFailures = append([]string(nil), op.PossibleFailures...)
+			streaming = strings.HasPrefix(op.Result, "stream of ")
 			for _, p := range op.Params {
 				e.Params = append(e.Params, VocabularyParam{Name: p.Name, Type: p.Type})
 			}
@@ -436,6 +441,7 @@ func moduleEntries(lib vocabLib, enabled bool) []VocabularyEntry {
 					e.Result = decl.Result.String()
 				}
 				e.PossibleFailures = append(e.PossibleFailures, decl.Failures...)
+				streaming = decl.Streaming
 			}
 			e.PossibleFailures = append(e.PossibleFailures, modulePossibleFailures(mod, name, map[string]bool{})...)
 			e.PossibleFailures = uniqueSorted(e.PossibleFailures)
@@ -450,7 +456,9 @@ func moduleEntries(lib vocabLib, enabled bool) []VocabularyEntry {
 		} else {
 			continue // schemas are not callable vocabulary
 		}
-		if enabled {
+		if streaming {
+			e.Patterns = nil
+		} else if enabled {
 			e.Alias = lib.alias
 			e.Patterns = sentencePatterns(e.Alias, words, len(e.Params), !lib.bare)
 		} else {
@@ -508,6 +516,7 @@ func stdPreviewEntries(enabledKeys map[string]bool) []VocabularyEntry {
 			Description: op.Description,
 			Result:      op.Result,
 			Effects:     append([]string(nil), op.Effects...),
+			Targets:     append([]string(nil), op.Targets...),
 			Origin:      "standard library",
 			Enabled:     false,
 			Import:      `import "` + op.ImportPath + `"`,

@@ -326,6 +326,72 @@ type = "number"
 	}
 }
 
+func TestExternalCommandJSONLinesStreamsThroughCLI(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 is required for the command stream fixture")
+	}
+	dir := t.TempDir()
+	moduleDir := filepath.Join(dir, "modules", "events")
+	if err := os.MkdirAll(moduleDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(moduleDir, "producer.py"), []byte("import json\nfor n in range(3): print(json.dumps({'sequence': n}), flush=True)\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	definition := `schema=1
+[module]
+path="local/command-events"
+version="1.0.0"
+[runtime]
+kind="command"
+working_directory="${definition_dir}"
+[capabilities]
+process=true
+[[type]]
+name="Event"
+[[type.field]]
+name="sequence"
+type="integer"
+[[failure]]
+name="StreamDecodeFailure"
+[[action]]
+name="follow"
+[action.result]
+type="stream of Event"
+[action.command]
+program="python3"
+arguments=["producer.py"]
+stdout="json-lines"
+stderr="diagnostic"
+[[action]]
+name="broken"
+failures=["StreamDecodeFailure"]
+[action.result]
+type="stream of Event"
+[action.command]
+program="python3"
+arguments=["-c", "print('not-json')"]
+stdout="json-lines"
+`
+	if err := os.WriteFile(filepath.Join(moduleDir, "module.sos.toml"), []byte(definition), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	config := "version=1\n[external]\nprocess=true\n[[module.external]]\npath=\"local/command-events\"\ndefinition=\"modules/events/module.sos.toml\"\n"
+	if err := os.WriteFile(filepath.Join(dir, "sos.toml"), []byte(config), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	script := writeScript(t, dir, "main.sos", "import \"local/command-events\" as events\nstream events.follow called source\nfor each event from source:\n  show sequence of event\n")
+	stdout, stderr, code := runCLI(t, dir, "run", script)
+	if code != 0 || stdout != "0\n1\n2\n" {
+		t.Fatalf("command stream exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	failureScript := writeScript(t, dir, "failure.sos", "import \"local/command-events\" as events\nstream events.broken called source\nfor each event from source:\n  show sequence of event\n  on failure StreamDecodeFailure using message:\n    show message\n    recover\nshow \"caught\"\n")
+	stdout, stderr, code = runCLI(t, dir, "run", failureScript)
+	if code != 0 || !strings.Contains(stdout, "invalid JSON line") || !strings.Contains(stdout, "caught") {
+		t.Fatalf("command stream typed decode failure exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+}
+
 func TestExternalNodePluginUsesSameProtocol(t *testing.T) {
 	if _, err := exec.LookPath("node"); err != nil {
 		t.Skip("node is required for the protocol fixture")
