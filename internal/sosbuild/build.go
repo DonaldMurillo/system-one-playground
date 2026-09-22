@@ -295,7 +295,7 @@ func publishStagedPaths(paths []stagedPath) error {
 		var problems []string
 		for i := len(moved) - 1; i >= 0; i-- {
 			item := moved[i]
-			if item.published && item.backup != "" {
+			if item.backup != "" {
 				if info, err := os.Stat(item.backup); err == nil && info.IsDir() {
 					if err := os.RemoveAll(item.destination); err != nil {
 						problems = append(problems, fmt.Sprintf("remove %s: %v", item.destination, err))
@@ -376,9 +376,9 @@ func publishStagedPaths(paths []stagedPath) error {
 	}
 	for _, item := range moved {
 		if item.backup != "" {
-			if err := os.RemoveAll(item.backup); err != nil && !errors.Is(err, os.ErrNotExist) {
-				return fmt.Errorf("remove build backup: %w", err)
-			}
+			// Publication is already committed. A stale hidden backup is safer
+			// than reporting failure after installing the new artifact.
+			_ = os.RemoveAll(item.backup)
 		}
 	}
 	return nil

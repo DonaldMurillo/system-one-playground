@@ -313,7 +313,7 @@ func parseActionDecl(text string) (ActionDecl, error) {
 	streamText := strings.TrimSpace(m[4])
 	failureText := strings.TrimSpace(m[5])
 	if resultText != "" {
-		t, err := parseType(resultText, false)
+		t, err := parseType(resultText, true)
 		if err != nil {
 			return ActionDecl{}, fmt.Errorf("return type: %w", err)
 		}

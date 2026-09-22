@@ -795,7 +795,9 @@ func (d *ExternalModuleDefinition) runCommand(ctx context.Context, opts Options,
 			return nil, err
 		}
 	}
+	program = d.resolveDefinitionProgram(program)
 	cmd := exec.Command(program, argv...)
+	cmd.WaitDelay = time.Second
 	configureProcessTree(cmd)
 	cmd.Env = environment
 	cmd.Dir = opts.Dir
@@ -1044,7 +1046,9 @@ func (d *ExternalModuleDefinition) openCommandStream(ctx context.Context, opts O
 			return nil, err
 		}
 	}
+	program = d.resolveDefinitionProgram(program)
 	cmd := exec.Command(program, argv...)
+	cmd.WaitDelay = time.Second
 	configureProcessTree(cmd)
 	cmd.Env, cmd.Dir = environment, opts.Dir
 	if d.Runtime.WorkingDirectory == "${definition_dir}" {
@@ -2295,6 +2299,17 @@ func (d *ExternalModuleDefinition) definitionDirectory() string {
 		}
 	}
 	return filepath.Dir(d.definitionPath)
+}
+
+func (d *ExternalModuleDefinition) resolveDefinitionProgram(program string) string {
+	if stdruntime.GOOS != "windows" || filepath.IsAbs(program) || strings.ContainsAny(program, `/\\`) {
+		return program
+	}
+	candidate := filepath.Join(d.definitionDirectory(), program+".cmd")
+	if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+		return candidate
+	}
+	return program
 }
 
 func (d *ExternalModuleDefinition) verifiedBundleProgram() (string, error) {

@@ -832,14 +832,14 @@ func checkStreamOwnership(p *Program, actions map[string]*Statement) []Diagnosti
 				}
 			case "make":
 				expr := strings.TrimSpace(strings.TrimPrefix(m[2], "as "))
-				if state := owned[expr]; state != nil && !state.consumed {
-					ds = append(ds, Diagnostic{s.Line, 1, "cannot copy stream " + expr + " with make"})
+				if name := expressionOwnedStream(expr, owned); name != "" {
+					ds = append(ds, Diagnostic{s.Line, 1, "cannot copy stream " + name + " with make"})
 				}
 				for _, field := range s.Body {
 					if _, expression, ok := strings.Cut(field.Text, " from "); ok {
 						expression = strings.TrimSpace(expression)
-						if state := owned[expression]; state != nil && !state.consumed {
-							ds = append(ds, Diagnostic{field.Line, 1, "cannot copy stream " + expression + " with make"})
+						if name := expressionOwnedStream(expression, owned); name != "" {
+							ds = append(ds, Diagnostic{field.Line, 1, "cannot copy stream " + name + " with make"})
 						}
 					}
 				}
@@ -904,12 +904,44 @@ func checkStreamOwnership(p *Program, actions map[string]*Statement) []Diagnosti
 }
 
 func expressionOwnedStream(expr string, owned map[string]*streamOwnershipState) string {
+	identifiers := expressionIdentifiers(expr)
 	for name, state := range owned {
-		if state != nil && !state.consumed && regexp.MustCompile(`\b`+regexp.QuoteMeta(name)+`\b`).MatchString(expr) {
+		if state != nil && !state.consumed && identifiers[name] {
 			return name
 		}
 	}
 	return ""
+}
+
+func expressionIdentifiers(expr string) map[string]bool {
+	result := map[string]bool{}
+	for i := 0; i < len(expr); {
+		if expr[i] == '"' {
+			i++
+			for i < len(expr) {
+				if expr[i] == '\\' && i+1 < len(expr) {
+					i += 2
+					continue
+				}
+				if expr[i] == '"' {
+					i++
+					break
+				}
+				i++
+			}
+			continue
+		}
+		if expr[i] == '_' || expr[i] >= 'A' && expr[i] <= 'Z' || expr[i] >= 'a' && expr[i] <= 'z' {
+			start := i
+			for i < len(expr) && (expr[i] == '_' || expr[i] >= 'A' && expr[i] <= 'Z' || expr[i] >= 'a' && expr[i] <= 'z' || expr[i] >= '0' && expr[i] <= '9') {
+				i++
+			}
+			result[expr[start:i]] = true
+			continue
+		}
+		i++
+	}
+	return result
 }
 
 func openFailureHandlerRecovers(operation *Statement) bool {
@@ -940,18 +972,7 @@ func openFailureHandlerRecovers(operation *Statement) bool {
 }
 
 func statementsTerminate(stmts []*Statement) bool {
-	if len(stmts) == 0 {
-		return false
-	}
-	last := stmts[len(stmts)-1]
-	switch last.Kind {
-	case "finish", "fail", "passFailure", "return":
-		return true
-	case "when":
-		return false // an unpaired branch can always fall through
-	default:
-		return false
-	}
+	return handlerTerminates(stmts)
 }
 
 // checkActionContracts performs the deterministic part of typed failure

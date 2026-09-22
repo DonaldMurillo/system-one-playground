@@ -55,7 +55,7 @@ var forms = []struct{ kind, pattern string }{
 	{"fail", `^fail ([A-Z][A-Za-z0-9_]*) with (.+?)(?::)?$`},
 	{"capture", `^capture ([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?)(?: with (.+?))? called ([A-Za-z_]\w*)$`},
 	{"stop", `^stop(?: with (.+))?$`},
-	{"to", `^to ([A-Za-z_]\w*)(?: with (.*?))?(?:(?: returning ((?:optional )?(?:list of )?(?:text|file|folder|timestamp|number|integer|boolean|duration|[A-Z][A-Za-z0-9_]*)))|(?: streaming (text|file|folder|timestamp|number|integer|boolean|duration|[A-Z][A-Za-z0-9_]*)))?(?: may fail with (.+?))?:$`},
+	{"to", `^to ([A-Za-z_]\w*)(?: with (.*?))?(?:(?: returning ((?:optional )?(?:list of )?(?:any|text|file|folder|timestamp|number|integer|boolean|duration|[A-Z][A-Za-z0-9_]*)))|(?: streaming (text|file|folder|timestamp|number|integer|boolean|duration|[A-Z][A-Za-z0-9_]*)))?(?: may fail with (.+?))?:$`},
 	{"call", `^call ([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?)(?: with (.+?))?(?: called (\w+))?$`},
 	{"return", `^return (.+)$`},
 	{"handler", `^on (failure|success|uncertain|existing)(?::| (.+))$`},

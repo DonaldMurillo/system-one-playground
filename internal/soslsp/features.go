@@ -2,6 +2,7 @@ package soslsp
 
 import (
 	"encoding/json"
+	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
@@ -381,6 +382,9 @@ func (s *server) completion(params json.RawMessage) any {
 				"filterText":    form.label,
 				"textEdit":      wordEdit(form.insert),
 			}
+			if strings.Contains(form.insert, "${") {
+				item["insertTextFormat"] = 2
+			}
 			if !t.Enabled && !hasImportPath(text, t.ImportPath) {
 				item["additionalTextEdits"] = []any{importEdit(text, t.ImportPath, importAliasToUse)}
 			}
@@ -398,7 +402,7 @@ func streamCompletionForm(t wordTarget, form completionForm, lineContext string)
 			if i > 0 {
 				call += ", "
 			}
-			call += param.Name
+			call += fmt.Sprintf("${%d:%s}", i+1, param.Name)
 		}
 	}
 	call += " called items"

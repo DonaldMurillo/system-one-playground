@@ -272,7 +272,7 @@ func TestParameterizedStreamCompletionIncludesReadableArgumentSlots(t *testing.T
 		Params:    []sos.VocabularyParam{{Name: "service", Type: "text"}},
 	}
 	form, offered := streamCompletionForm(target, completionForm{label: "events.follow", insert: "events.follow"}, "events.fo")
-	if !offered || form.insert != "stream events.follow with service called items" {
+	if !offered || form.insert != "stream events.follow with ${1:service} called items" {
 		t.Fatalf("parameterized stream completion=%+v offered=%v", form, offered)
 	}
 }
