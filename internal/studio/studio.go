@@ -102,6 +102,7 @@ func New(opts Options) (*Server, error) {
 	mux.HandleFunc("/api/cancel", s.guard(s.handleCancel))
 	mux.HandleFunc("/api/streams", s.guard(s.handleStreams))
 	mux.HandleFunc("/api/streams/stop", s.guard(s.handleStopStream))
+	mux.HandleFunc("/api/capabilities", s.guard(s.handleCapabilities))
 	mux.HandleFunc("/api/save", s.guard(s.handleSave))
 	mux.HandleFunc("/", s.handleAssets)
 	s.mux = mux

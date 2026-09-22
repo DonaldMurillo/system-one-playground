@@ -46,6 +46,16 @@ export function streamSummary(stream) {
     parts.push(`${Number(stream.policy.pending || 0)} pending`)
     parts.push(`${Number(stream.policy.timers || 0)} timers`)
   }
+  if (stream?.clockKind) parts.push(stream.clockKind === 'virtual' ? 'virtual clock' : 'host clock')
+  if (stream?.interval) parts.push(`every ${Number(stream.interval) / 1e9} seconds`)
+  if (stream?.schedule) parts.push(String(stream.schedule))
+  if (stream?.timeZone) parts.push(String(stream.timeZone))
+  if (stream?.nextScheduledAt) parts.push(`next ${stream.nextScheduledAt}`)
+  if (stream?.timerPolicy) parts.push(String(stream.timerPolicy))
+  if (Number(stream?.missedTicks || 0) > 0) parts.push(`${stream.missedTicks} missed`)
+  if (Number(stream?.combinedTicks || 0) > 0) parts.push(`${stream.combinedTicks} combined`)
+  if (Number(stream?.skippedTicks || 0) > 0) parts.push(`${stream.skippedTicks} skipped`)
+  if (Number(stream?.caughtUpTicks || 0) > 0) parts.push(`${stream.caughtUpTicks} caught up`)
   if (streamTerminal(stream) && stream.reason) parts.push(`reason: ${stream.reason}`)
   return parts.join(' · ')
 }

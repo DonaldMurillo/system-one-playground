@@ -128,9 +128,16 @@ func stdModule(key string) (*Module, bool) {
 	}
 	for n, op := range ops {
 		m.Exports[n] = true
+		// A std operation named like a canonical sentence word is reachable
+		// only through its qualified alias; it can never be exposed bare.
+		if reservedWords[n] {
+			continue
+		}
 		m.Words[n] = n
 		for _, s := range op.Synonyms {
-			m.Words[s] = n
+			if !reservedWords[s] {
+				m.Words[s] = n
+			}
 		}
 	}
 	m.Definitions = map[string]*RecordDef{}

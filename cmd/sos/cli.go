@@ -38,6 +38,7 @@ commands:
   module describe|doctor MODULE       inspect or preflight a registered module
   vocabulary [FILE] [--json] [--query TEXT] [--library PATH]
                                       offline dictionary of callable vocabulary
+  capabilities [--json]                 report platform timing capabilities
   debug                                 run a Debug Adapter Protocol server
   lsp                                 run the language server on stdio
   version                             print the SysOneScript version
@@ -97,6 +98,8 @@ func RunCLI(args []string, stdout, stderr io.Writer) int {
 		return cmdBuild(rest, stdout, stderr)
 	case "module":
 		return cmdModule(rest, stdout, stderr)
+	case "capabilities":
+		return cmdCapabilities(rest, stdout, stderr)
 	case "lsp":
 		return cmdLSP(rest, stdout, stderr)
 	case "debug":

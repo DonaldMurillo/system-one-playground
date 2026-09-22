@@ -279,6 +279,10 @@ func reclassifyProgram(p *Program, modules *ModuleTable) {
 // use wherever a program is rebuilt from source with imports already resolved.
 func ParseWithVocabulary(source string, modules *ModuleTable) (*Program, []Diagnostic) {
 	p, ds := Parse(source)
+	// Canonical English time statements lower to std/time calls before any
+	// analysis so checking, canonicalization, and execution share one path
+	// with the technical fallbacks.
+	lowerTimeStatements(p.Statements, stdTimeAlias(modules))
 	if modules == nil || modules.vocab == nil {
 		return p, ds
 	}

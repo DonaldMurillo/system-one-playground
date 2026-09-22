@@ -44,7 +44,7 @@ func TestBuildUsesConsistentDevelopmentSnapshot(t *testing.T) {
 	// Retain the stale archive intentionally, then make live interpreter code
 	// require a new symbol from live config code. Mixing live and archived
 	// packages fails; sourcing a coherent checkout builds and executes correctly.
-	for _, dir := range []string{"sos", "typesafe", "sosconfig", "internal/sosbuild", "internal/semcore", "internal/soslsp", "internal/sossyntax", "cmd/sos"} {
+	for _, dir := range []string{"sos", "typesafe", "sosconfig", "internal/sosbuild", "internal/timebundle", "internal/semcore", "internal/soslsp", "internal/sossyntax", "cmd/sos"} {
 		err := filepath.WalkDir(filepath.Join(root, dir), func(path string, entry fs.DirEntry, err error) error {
 			if err != nil {
 				return err

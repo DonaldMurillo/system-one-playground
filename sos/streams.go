@@ -30,6 +30,11 @@ type streamScopeSource interface {
 	streamScope() (root string, bound int, watching bool)
 }
 
+type timerSnapshotSource interface{ timerSnapshot() TimerSnapshot }
+type scheduleSnapshotSource interface {
+	scheduleSnapshot() (clock, label, zone string, next *time.Time)
+}
+
 // streamStopRequester lets a multiplexed producer request its own graceful
 // end without cancelling the process-wide read context.
 type streamStopRequester interface{ requestStreamStop() error }
@@ -133,6 +138,7 @@ type streamHandle struct {
 	stopRequested   bool
 	streamCtx       context.Context
 	cancelRead      context.CancelFunc
+	clock           Clock
 	emit            func(StreamEvent)
 	// rejected counts items a handling policy completed through its typed
 	// rejection action; reading it never consumes an item.
@@ -206,9 +212,14 @@ func newStreamHandle(itemType TypeRef, producer string, source streamSource) *st
 }
 
 func newStreamHandleWithContext(parent context.Context, itemType TypeRef, producer string, source streamSource) *streamHandle {
-	now := time.Now().UTC()
+	return newStreamHandleWithClock(parent, HostClock{}, itemType, producer, source)
+}
+
+func newStreamHandleWithClock(parent context.Context, clock Clock, itemType TypeRef, producer string, source streamSource) *streamHandle {
+	clock = clockOrDefault(clock)
+	now := clock.Now().UTC()
 	streamCtx, cancelRead := context.WithCancel(parent)
-	return &streamHandle{source: source, itemType: itemType, producer: producer, state: streamActive, lifecycle: "open", startedAt: now, updatedAt: now, streamCtx: streamCtx, cancelRead: cancelRead}
+	return &streamHandle{source: source, itemType: itemType, producer: producer, state: streamActive, lifecycle: "open", startedAt: now, updatedAt: now, streamCtx: streamCtx, cancelRead: cancelRead, clock: clock}
 }
 
 func (s *streamHandle) snapshot(event string) StreamEvent {
@@ -221,6 +232,28 @@ func (s *streamHandle) snapshot(event string) StreamEvent {
 	}
 	if scoped, ok := s.source.(streamScopeSource); ok {
 		snapshot.Root, snapshot.Bound, snapshot.Watching = scoped.streamScope()
+	}
+	if timed, ok := s.source.(timerSnapshotSource); ok {
+		value := timed.timerSnapshot()
+		snapshot.ClockKind = value.Clock
+		snapshot.Interval = value.Interval
+		snapshot.TimerPolicy = value.Policy
+		snapshot.EmittedTicks = value.Emitted
+		snapshot.MissedTicks = value.Missed
+		snapshot.CombinedTicks = value.Combined
+		snapshot.SkippedTicks = value.Skipped
+		snapshot.CaughtUpTicks = value.CaughtUp
+		if !value.Next.IsZero() {
+			next := value.Next
+			snapshot.NextScheduledAt = &next
+		}
+		if value.Clock == "virtual" {
+			now := s.clock.Now()
+			snapshot.VirtualTime = &now
+		}
+	}
+	if scheduled, ok := s.source.(scheduleSnapshotSource); ok {
+		snapshot.ClockKind, snapshot.Schedule, snapshot.TimeZone, snapshot.NextScheduledAt = scheduled.scheduleSnapshot()
 	}
 	if stats, ok := s.source.(interface{ transformStats() map[string]any }); ok {
 		snapshot.Policy = stats.transformStats()
@@ -747,6 +780,31 @@ type StreamClock interface {
 	After(time.Duration) <-chan time.Duration
 }
 
+// runtimeStreamClock adapts the language clock to stream transforms so a
+// virtual-time run advances debounce, throttle, and deadline policies too.
+type runtimeStreamClock struct {
+	clock Clock
+	epoch time.Time
+}
+
+func newRuntimeStreamClock(clock Clock) StreamClock {
+	clock = clockOrDefault(clock)
+	return runtimeStreamClock{clock: clock, epoch: clock.Now()}
+}
+
+func (c runtimeStreamClock) Now() time.Duration { return c.clock.Now().Sub(c.epoch) }
+
+func (c runtimeStreamClock) After(d time.Duration) <-chan time.Duration {
+	timer := c.clock.NewTimer(d)
+	out := make(chan time.Duration, 1)
+	go func() {
+		if firedAt, ok := <-timer.C(); ok {
+			out <- firedAt.Sub(c.epoch)
+		}
+	}()
+	return out
+}
+
 var streamClockEpoch = time.Now()
 
 // MonotonicClock is the production clock: host monotonic time, immune to
@@ -776,23 +834,23 @@ type virtualAlarm struct {
 	out chan time.Duration
 }
 
-// VirtualClock is a manually advanced clock for deterministic tests and
+// VirtualStreamClock is a manually advanced clock for deterministic tests and
 // embeddings. Advance fires due alarms in deadline order (registration order
 // on ties); nothing runs concurrently inside the clock.
-type VirtualClock struct {
+type VirtualStreamClock struct {
 	mu     sync.Mutex
 	now    time.Duration
 	seq    uint64
 	alarms []*virtualAlarm
 }
 
-func (c *VirtualClock) Now() time.Duration {
+func (c *VirtualStreamClock) Now() time.Duration {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.now
 }
 
-func (c *VirtualClock) After(d time.Duration) <-chan time.Duration {
+func (c *VirtualStreamClock) After(d time.Duration) <-chan time.Duration {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.seq++
@@ -802,7 +860,7 @@ func (c *VirtualClock) After(d time.Duration) <-chan time.Duration {
 }
 
 // Advance moves the clock forward by d and returns the new elapsed time.
-func (c *VirtualClock) Advance(d time.Duration) time.Duration {
+func (c *VirtualStreamClock) Advance(d time.Duration) time.Duration {
 	c.mu.Lock()
 	c.now += d
 	now := c.now

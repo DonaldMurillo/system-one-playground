@@ -93,25 +93,38 @@ type Debugger interface {
 // these events to present live progress without reading from the producer.
 // Failure contains only the runtime's public, structured failure value.
 type StreamEvent struct {
-	ID              string         `json:"id"`
-	Line            int            `json:"line"`
-	Event           string         `json:"event"`
-	State           string         `json:"state"`
-	Binding         string         `json:"binding"`
-	Producer        string         `json:"producer"`
-	ItemType        string         `json:"itemType"`
-	ItemsReceived   int            `json:"itemsReceived"`
-	ItemsBuffered   int            `json:"itemsBuffered"`
-	CreditAvailable int            `json:"creditAvailable"`
-	Policy          map[string]any `json:"policy,omitempty"`
-	StartedAt       time.Time      `json:"startedAt"`
-	UpdatedAt       time.Time      `json:"updatedAt"`
-	EndedAt         *time.Time     `json:"endedAt,omitempty"`
-	Failure         map[string]any `json:"failure,omitempty"`
-	Reason          string         `json:"reason,omitempty"`
-	Root            string         `json:"root,omitempty"`
-	Bound           int            `json:"bound,omitempty"`
-	Watching        bool           `json:"watching,omitempty"`
+	ID                 string         `json:"id"`
+	Line               int            `json:"line"`
+	Event              string         `json:"event"`
+	State              string         `json:"state"`
+	Binding            string         `json:"binding"`
+	Producer           string         `json:"producer"`
+	ItemType           string         `json:"itemType"`
+	ItemsReceived      int            `json:"itemsReceived"`
+	ItemsBuffered      int            `json:"itemsBuffered"`
+	CreditAvailable    int            `json:"creditAvailable"`
+	Policy             map[string]any `json:"policy,omitempty"`
+	StartedAt          time.Time      `json:"startedAt"`
+	UpdatedAt          time.Time      `json:"updatedAt"`
+	EndedAt            *time.Time     `json:"endedAt,omitempty"`
+	Failure            map[string]any `json:"failure,omitempty"`
+	Reason             string         `json:"reason,omitempty"`
+	Root               string         `json:"root,omitempty"`
+	Bound              int            `json:"bound,omitempty"`
+	Watching           bool           `json:"watching,omitempty"`
+	ClockKind          string         `json:"clockKind,omitempty"`
+	VirtualTime        *time.Time     `json:"virtualTime,omitempty"`
+	Interval           time.Duration  `json:"interval,omitempty"`
+	Schedule           string         `json:"schedule,omitempty"`
+	TimeZone           string         `json:"timeZone,omitempty"`
+	NextScheduledAt    *time.Time     `json:"nextScheduledAt,omitempty"`
+	EmittedTicks       int64          `json:"emittedTicks,omitempty"`
+	MissedTicks        int64          `json:"missedTicks,omitempty"`
+	TimerPolicy        string         `json:"timerPolicy,omitempty"`
+	CombinedTicks      int64          `json:"combinedTicks,omitempty"`
+	SkippedTicks       int64          `json:"skippedTicks,omitempty"`
+	CaughtUpTicks      int64          `json:"caughtUpTicks,omitempty"`
+	CheckpointIdentity string         `json:"checkpointIdentity,omitempty"`
 }
 
 type Options struct {
@@ -147,7 +160,9 @@ type Options struct {
 	// SourcePath gives runtime diagnostics and debugger stops a stable source
 	// identity. It is optional for embedders that execute in-memory programs.
 	SourcePath string
-	// Debugger pauses before executable statements when a debug adapter is
+	// Clock overrides the runtime's shared timing source (host by default).
+	// Test harnesses inject a deterministic virtual clock.
+	Clock Clock
 	// attached. It is nil for ordinary runs.
 	Debugger Debugger
 }

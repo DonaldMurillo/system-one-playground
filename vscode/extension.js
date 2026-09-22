@@ -7,7 +7,7 @@ const vscode = require('vscode')
 const { LspClient } = require('./lsp-client')
 const { appendScriptArguments, compareVersions, discoverEntrypoints, findProjectRoot, parseVersionLine, preferredProjectRoot, readExternalModules, readHelpers, relativeScript, resolveProjectEntrypoint } = require('./project')
 const { decisionLensTitle, analyzedLineMatches } = require('./semantic')
-const { StreamStore, canStopStream, traceLine } = require('./streams')
+const { StreamStore, canStopStream, timeSummary, traceLine } = require('./streams')
 const { StreamControlServer } = require('./streams-server')
 
 const LANGUAGE_ID = 'sos'
@@ -824,10 +824,11 @@ class StreamsTreeProvider {
     return streams.map(stream => {
       const icons = {open:'pulse', reading:'pulse', stopping:'loading~spin', stopped:'debug-stop', cancelled:'debug-stop', completed:'pass-filled', closed:'close', failed:'error', unknown:'warning'}
       const origin = stream.line > 0 ? ` · line ${stream.line}` : ''
-      const item = new SysOneScriptItem(stream.binding || stream.id, vscode.TreeItemCollapsibleState.None, 'stream', session.root, undefined, icons[stream.state] || 'question', `${stream.state} · ${stream.itemsReceived || 0} items · ${stream.itemType || 'unknown'}${origin} · ${stream.producer || ''}`)
+      const timing = timeSummary(stream)
+      const item = new SysOneScriptItem(stream.binding || stream.id, vscode.TreeItemCollapsibleState.None, 'stream', session.root, undefined, icons[stream.state] || 'question', timing ? `${stream.state} · ${timing}` : `${stream.state} · ${stream.itemsReceived || 0} items · ${stream.itemType || 'unknown'}${origin} · ${stream.producer || ''}`)
       item.stream = {...stream, session:session.session}
       const terminal = ['completed', 'failed', 'stopped'].includes(stream.state)
-      item.tooltip = new vscode.MarkdownString(`**${stream.binding || stream.id}**\n\n${stream.producer || 'unknown producer'} · stream of ${stream.itemType || 'unknown'}${origin}\n\n${stream.itemsReceived || 0} received · ${stream.itemsBuffered || 0} buffered · ${stream.creditAvailable || 0} credit${terminal && stream.reason ? `\n\n${stream.reason}` : ''}`)
+      item.tooltip = new vscode.MarkdownString(`**${stream.binding || stream.id}**\n\n${stream.producer || 'unknown producer'} · stream of ${stream.itemType || 'unknown'}${origin}\n\n${stream.itemsReceived || 0} received · ${stream.itemsBuffered || 0} buffered · ${stream.creditAvailable || 0} credit${timing ? `\n\n${timing}` : ''}${terminal && stream.reason ? `\n\n${stream.reason}` : ''}`)
       if (session.file && stream.line > 0) item.command = {command:'vscode.open', title:'Reveal stream', arguments:[vscode.Uri.file(session.file), {selection:new vscode.Range(stream.line-1, 0, stream.line-1, 0)}]}
       return item
     })

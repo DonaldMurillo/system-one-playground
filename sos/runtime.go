@@ -25,6 +25,7 @@ type runtime struct {
 	parallelDepth    int
 	activeFailure    error
 	ctx              context.Context
+	clock            Clock
 	p                *Program
 	opts             Options
 	env              map[string]any
@@ -46,6 +47,7 @@ type runtime struct {
 	debugStack       []DebugFrame
 	streamOutput     chan<- any
 	streamItemType   TypeRef
+	timers           *TimerGovernor
 }
 type returnValue struct {
 	value    any
@@ -185,7 +187,7 @@ func Run(ctx context.Context, p *Program, opts Options) (result *Result, err err
 			logicalPath = absolute
 		}
 	}
-	r := &runtime{shared: &executionState{}, logicalPath: logicalPath, ctx: ctx, p: p, opts: opts, replay: replay, env: map[string]any{}, functions: map[string]*Statement{}, schemas: map[string]*Statement{}, definitions: p.Definitions, failures: p.Failures, types: map[string]TypeRef{}, imports: map[string]*Module{}, result: &Result{Traces: []Trace{}}}
+	r := &runtime{shared: &executionState{}, logicalPath: logicalPath, ctx: ctx, clock: clockOrDefault(opts.Clock), timers: NewTimerGovernor(TimerLimits{}), p: p, opts: opts, replay: replay, env: map[string]any{}, functions: map[string]*Statement{}, schemas: map[string]*Statement{}, definitions: p.Definitions, failures: p.Failures, types: map[string]TypeRef{}, imports: map[string]*Module{}, result: &Result{Traces: []Trace{}}}
 	if p.Modules != nil {
 		r.imports = p.Modules.Aliases
 		r.vocab = p.Modules.vocab
@@ -267,6 +269,19 @@ func (r *runtime) tick() error {
 	return nil
 }
 func (r *runtime) eval(s string, item any) (any, error) {
+	if regexp.MustCompile(`\bnow\b`).MatchString(s) {
+		const name = "__runtime_now"
+		old, had := r.env[name]
+		r.env[name] = r.clock.Now().UTC()
+		defer func() {
+			if had {
+				r.env[name] = old
+			} else {
+				delete(r.env, name)
+			}
+		}()
+		s = regexp.MustCompile(`\bnow\b`).ReplaceAllString(s, name)
+	}
 	return evaluateWithTypes(s, r.env, item, r.types, r.definitions)
 }
 func (r *runtime) text(s string) (string, error) {
@@ -1016,6 +1031,149 @@ func (r *runtime) execute(s *Statement) error {
 			r.env[m[3]] = stream
 		}
 		return e
+	case "timerOneShot":
+		durationValue, e := r.eval(m[1], nil)
+		if e != nil {
+			return e
+		}
+		duration, e := durationArgument(durationValue)
+		if e != nil {
+			return e
+		}
+		timer, e := NewOneShotTimer(r.clock, duration, r.timers)
+		if e != nil {
+			return e
+		}
+		r.registerTimeStream(m[2], s.Line, "one-shot timer", &timerStreamSource{one: timer})
+		return nil
+	case "timerEvery":
+		durationValue, e := r.eval(m[2], nil)
+		if e != nil {
+			return e
+		}
+		duration, e := durationArgument(durationValue)
+		if e != nil {
+			return e
+		}
+		timer, e := NewRepeatingTimer(r.clock, duration, m[1] != "", timerPolicyFromStatement(s), r.timers)
+		if e != nil {
+			return e
+		}
+		r.registerTimeStream(m[3], s.Line, "repeating timer", &timerStreamSource{repeating: timer})
+		return nil
+	case "scheduleStream":
+		binding, zoneName := "", ""
+		for _, child := range s.Body {
+			switch child.Kind {
+			case "scheduleCalled":
+				binding = match(child.Kind, child.Text)[1]
+			case "scheduleZone":
+				value, e := r.eval(match(child.Kind, child.Text)[1], nil)
+				if e != nil {
+					return e
+				}
+				zoneName, _ = value.(string)
+			}
+		}
+		rule, label, e := scheduleFromStatement(s, zoneName)
+		if e != nil {
+			return e
+		}
+		source := &scheduleStreamSource{clock: r.clock, rule: rule, zone: zoneName, label: label}
+		r.registerTimeStream(binding, s.Line, "calendar schedule", source)
+		return nil
+	case "deadline":
+		value, e := r.eval(m[1], nil)
+		if e != nil {
+			return e
+		}
+		allowed, e := durationArgument(value)
+		if e != nil {
+			return e
+		}
+		if allowed < 0 {
+			return invalidDuration(allowed.String(), "deadline must not be negative")
+		}
+		scope := WithDeadlineScope(r.ctx, r.clock, allowed)
+		outerContext := r.ctx
+		before := make(map[string]any, len(r.env))
+		for name, item := range r.env {
+			before[name] = item
+		}
+		r.ctx = scope.Context()
+		e = r.block(s.Body)
+		r.ctx = outerContext
+		exceeded := scope.Exceeded()
+		scope.Cancel()
+		if exceeded != nil && !errors.Is(exceeded, context.Canceled) {
+			r.env = before
+			return exceeded
+		}
+		return e
+	case "findCalendar":
+		count, e := strconv.ParseInt(timeCountArgument(m[1]), 10, 64)
+		if e != nil || count < 0 {
+			return invalidSchedule("calendar count must be a non-negative integer")
+		}
+		value, e := r.eval(m[3], nil)
+		if e != nil {
+			return e
+		}
+		stamp, e := timestampArgument(value)
+		if e != nil {
+			return e
+		}
+		zoneName, binding := "", ""
+		overflow := MonthOverflowLastDay
+		for _, child := range s.Body {
+			switch child.Kind {
+			case "scheduleZone":
+				v, err := r.eval(match(child.Kind, child.Text)[1], nil)
+				if err != nil {
+					return err
+				}
+				zoneName, _ = v.(string)
+			case "scheduleCalled":
+				binding = match(child.Kind, child.Text)[1]
+			case "dayNotExist":
+				for _, choice := range child.Body {
+					if choice.Text == "fail" {
+						overflow = MonthOverflowFail
+					}
+				}
+			}
+		}
+		zone, e := LoadZone(zoneName)
+		if e != nil {
+			return e
+		}
+		units := map[string]CalendarUnit{"day": CalendarDay, "days": CalendarDay, "week": CalendarWeek, "weeks": CalendarWeek, "month": CalendarMonth, "months": CalendarMonth, "year": CalendarYear, "years": CalendarYear}
+		result, e := AddCalendar(stamp, zone, units[m[2]], int(count), overflow, SchedulePolicy{})
+		if e == nil {
+			r.env[binding] = result
+		}
+		return e
+	case "stopStream":
+		stream, ok := r.env[m[1]].(*streamHandle)
+		if !ok {
+			return fmt.Errorf("%s is not an owned stream", m[1])
+		}
+		return stream.requestStop()
+	case "advanceTime":
+		virtual, ok := r.clock.(*VirtualClock)
+		if !ok {
+			return fmt.Errorf("advance test time is available only with a virtual test clock")
+		}
+		value, e := r.eval(m[1], nil)
+		if e != nil {
+			return e
+		}
+		duration, e := durationArgument(value)
+		if e != nil {
+			return e
+		}
+		virtual.Advance(duration)
+		return nil
 	case "closeStream":
 		stream, ok := r.env[m[1]].(*streamHandle)
 		if !ok {
@@ -1759,6 +1917,9 @@ func (r *runtime) executeFileForm(s *Statement, m []string) error {
 func (r *runtime) callImported(s *Statement, m []string) error {
 	alias, action, _ := strings.Cut(m[1], ".")
 	mod := r.imports[alias]
+	if mod == nil && alias == "time" {
+		mod, _ = stdModule("std/time")
+	}
 	if mod == nil {
 		return fmt.Errorf("unknown module alias %q", alias)
 	}
@@ -2114,12 +2275,17 @@ func typeMatches(v any, t string) bool {
 		_, ok := v.(string)
 		return ok
 	case "timestamp":
-		s, ok := v.(string)
-		if !ok {
-			return false
+		switch x := v.(type) {
+		case time.Time:
+			return true
+		case string:
+			_, e := time.Parse(time.RFC3339Nano, x)
+			return e == nil
 		}
-		_, e := time.Parse(time.RFC3339Nano, s)
-		return e == nil
+		return false
+	case "duration":
+		_, ok := v.(time.Duration)
+		return ok
 	case "number":
 		_, ok := number(v)
 		return ok
@@ -2331,7 +2497,7 @@ func streamKeyOf(key string) func(item any) (any, error) {
 // executeStreamTransformation derives a new stream from the consumed source
 // using the shared transformation constructors.
 func (r *runtime) executeStreamTransformation(s *Statement, m []string) error {
-	clock := StreamClock(MonotonicClock{})
+	clock := newRuntimeStreamClock(r.clock)
 	var derived StreamHandle
 	var err error
 	sinkLine := s.Line

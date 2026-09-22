@@ -148,6 +148,11 @@ func analyze(p *Program) []Diagnostic {
 			case "true", "false", "on", "off", "null", "now", "empty", "list", "record", "not", "count", "length", "of", "words", "first", "last", "items", "and", "or", "is", "contains", "plus", "minus", "times", "millisecond", "milliseconds", "second", "seconds", "minute", "minutes", "hour", "hours", "day", "days":
 				continue
 			}
+			if i > 0 && isDurationUnit(base) {
+				if _, err := strconv.ParseFloat(tokens[i-1].text, 64); err == nil {
+					continue
+				}
+			}
 			add(s, fmt.Sprintf("unknown name %q", base))
 		}
 		if len(depth) > 0 {
@@ -398,6 +403,14 @@ func analyze(p *Program) []Diagnostic {
 				}
 				for _, expr := range httpCanonicalExprs(s, m) {
 					checkExpr(s, expr, false)
+				}
+			case "deadline":
+				checkTimeStatement(s, checkExpr, add)
+				walk(s.Body)
+			case "timerOneShot", "timerEvery", "scheduleStream", "findCalendar", "advanceTime", "stopStream":
+				if binding := checkTimeStatement(s, checkExpr, add); binding != "" {
+					names[binding] = true
+					delete(types, binding)
 				}
 			case "closeStream":
 				if !names[m[1]] {
@@ -909,6 +922,9 @@ func checkStreamOwnership(p *Program, actions map[string]*Statement) []Diagnosti
 		return false, false
 	}
 	var walk func([]*Statement, map[string]*streamOwnershipState, bool, bool)
+	// loopStream names the stream whose for-each loop is currently being
+	// walked so a handler may stop that stream from inside the loop.
+	loopStream := ""
 	walk = func(sts []*Statement, owned map[string]*streamOwnershipState, inStreamLoop, closeScope bool) {
 		initial := map[string]bool{}
 		for name := range owned {
@@ -962,6 +978,38 @@ func checkStreamOwnership(p *Program, actions map[string]*Statement) []Diagnosti
 					continue
 				}
 				owned[m[3]] = &streamOwnershipState{line: s.Line}
+			case "timerOneShot", "timerEvery":
+				name := m[2]
+				if s.Kind == "timerEvery" {
+					name = m[3]
+				}
+				if existing := owned[name]; existing != nil && !existing.consumed {
+					ds = append(ds, Diagnostic{s.Line, 1, "stream " + name + " is already active; consume or close it before reopening"})
+					continue
+				}
+				owned[name] = &streamOwnershipState{line: s.Line}
+			case "scheduleStream":
+				called := ""
+				for _, child := range s.Body {
+					if child.Kind == "scheduleCalled" {
+						called = match("scheduleCalled", child.Text)[1]
+					}
+				}
+				if called == "" {
+					continue
+				}
+				if existing := owned[called]; existing != nil && !existing.consumed {
+					ds = append(ds, Diagnostic{s.Line, 1, "stream " + called + " is already active; consume or close it before reopening"})
+					continue
+				}
+				owned[called] = &streamOwnershipState{line: s.Line}
+			case "stopStream":
+				state := owned[m[1]]
+				if state == nil {
+					ds = append(ds, Diagnostic{s.Line, 1, m[1] + " is not an owned stream"})
+				} else if state.consumed && loopStream != m[1] {
+					ds = append(ds, Diagnostic{s.Line, 1, m[1] + " was already consumed"})
+				}
 			case "streamFor":
 				name := strings.TrimSpace(m[2])
 				state := owned[name]
@@ -972,7 +1020,10 @@ func checkStreamOwnership(p *Program, actions map[string]*Statement) []Diagnosti
 				} else {
 					state.consumed = true
 				}
+				previous := loopStream
+				loopStream = name
 				walk(s.Body, owned, true, true)
+				loopStream = previous
 			case "closeStream":
 				state := owned[m[1]]
 				if state == nil {
@@ -1737,6 +1788,9 @@ func visibleFailuresFrom(local map[string]*FailureDef, modules map[string]*Modul
 	for name, definition := range reservedStreamFailureDefs() {
 		result[name] = definition
 	}
+	for name, definition := range reservedTimeFailures() {
+		result[name] = definition
+	}
 	owners := map[string]string{}
 	for name := range result {
 		owners[name] = "the SysOneScript runtime"
@@ -1850,12 +1904,23 @@ func sentTargetResolve(v *fileVocab, name string) (*Module, string) {
 	return mod, action
 }
 
-// moduleAlias resolves an import alias in the entry file's scope.
 func moduleAlias(p *Program, alias string) *Module {
-	if p == nil || p.Modules == nil {
+	if p == nil {
 		return nil
 	}
-	return p.Modules.Aliases[alias]
+	if p.Modules != nil {
+		if mod := p.Modules.Aliases[alias]; mod != nil {
+			return mod
+		}
+	}
+	// std/time is core language surface: it stays reachable under its default
+	// alias even without an explicit import, so canonical English time
+	// statements and technical fallbacks share one implementation.
+	if alias == "time" {
+		mod, _ := stdModule("std/time")
+		return mod
+	}
+	return nil
 }
 
 // checkSource parses and analyzes with an optional import graph so qualified
@@ -2780,4 +2845,170 @@ func reservedStreamFailureDefs() map[string]*FailureDef {
 		"StreamHandlerCleanupFailed":     {Name: "StreamHandlerCleanupFailed", Fields: []RecordField{{Name: "operation", Type: text()}, {Name: "reason", Type: text()}}},
 		"StreamObligationAbandoned":      {Name: "StreamObligationAbandoned", Fields: []RecordField{{Name: "operation", Type: text()}, {Name: "item", Type: optionalText()}}},
 	}
+}
+
+// checkTimeStatement validates one canonical timing statement: duration
+// literals, timer and schedule structure, required named zones, DST and
+// catch-up policy placement, and test-harness virtual-time use. It returns
+// the stream or value name the statement binds, if any.
+func checkTimeStatement(s *Statement, checkExpr func(*Statement, string, bool), add func(*Statement, string)) string {
+	m := match(s.Kind, s.Text)
+	durationExpr := func(stmt *Statement, expr string) {
+		expr = strings.TrimSpace(expr)
+		if expr == "" {
+			add(stmt, "a duration is required")
+			return
+		}
+		// A bare literal must parse strictly; names and composed expressions
+		// are validated by the ordinary expression checker.
+		if expr[0] >= '0' && expr[0] <= '9' {
+			if _, err := ParseDurationValue(expr); err != nil {
+				add(stmt, "invalid duration "+expr)
+			}
+			return
+		}
+		checkExpr(stmt, expr, false)
+	}
+	switch s.Kind {
+	case "timerOneShot":
+		durationExpr(s, m[1])
+		if len(s.Body) != 0 {
+			add(s, "a one-shot timer declaration takes no nested lines")
+		}
+		return m[2]
+	case "timerEvery":
+		durationExpr(s, m[2])
+		policies := 0
+		for _, child := range s.Body {
+			if child.Kind != "timerPolicy" {
+				add(child, strings.Fields(child.Text)[0]+" is not valid in a repeating timer declaration")
+				continue
+			}
+			policies++
+		}
+		if policies > 1 {
+			add(s, "declare at most one missed-tick policy")
+		}
+		return m[3]
+	case "scheduleStream":
+		rules, zones, called := 0, 0, ""
+		remembering := false
+		missedStartup := 0
+		dstMissing, dstTwice := false, false
+		for _, child := range s.Body {
+			switch child.Kind {
+			case "scheduleRuleHour", "scheduleRuleAt", "scheduleRuleMonth":
+				rules++
+				if cm := match(child.Kind, child.Text); len(cm) >= 3 {
+					for _, part := range cm[2:] {
+						if part == "" {
+							continue
+						}
+						if n, err := strconv.Atoi(part); err != nil || n < 0 {
+							add(child, "invalid clock time "+child.Text)
+						}
+					}
+				}
+			case "scheduleZone":
+				zones++
+				checkExpr(child, strings.TrimSpace(match("scheduleZone", child.Text)[1]), false)
+			case "scheduleRemember":
+				remembering = true
+			case "scheduleCatchup":
+				if strings.Contains(child.Text, "scheduled time was missed") || strings.Contains(child.Text, "missed scheduled times") {
+					missedStartup++
+				}
+			case "scheduleNotExist":
+				dstMissing = true
+				if len(child.Body) == 0 {
+					add(child, "declare whether a nonexistent local time is skipped or moved to the next valid time")
+				}
+				for _, grandchild := range child.Body {
+					if grandchild.Kind != "scheduleDSTChoice" {
+						add(grandchild, strings.Fields(grandchild.Text)[0]+" is not valid here")
+					}
+				}
+			case "scheduleOccursTwice":
+				dstTwice = true
+				if len(child.Body) == 0 {
+					add(child, "declare which occurrence of a repeated local time runs")
+				}
+				for _, grandchild := range child.Body {
+					if grandchild.Kind != "scheduleDSTChoice" {
+						add(grandchild, strings.Fields(grandchild.Text)[0]+" is not valid here")
+					}
+				}
+			case "scheduleCalled":
+				if called != "" {
+					add(child, "declare the schedule name once")
+				}
+				called = match("scheduleCalled", child.Text)[1]
+			default:
+				add(child, strings.Fields(child.Text)[0]+" is not valid in a scheduled times declaration")
+			}
+		}
+		if rules != 1 {
+			add(s, "a calendar schedule declares exactly one timing rule")
+		}
+		if zones != 1 {
+			add(s, "a calendar schedule requires exactly one named time zone")
+		}
+		if called == "" {
+			add(s, "a calendar schedule requires a called name")
+		}
+		if missedStartup > 0 && !remembering {
+			add(s, "startup catch-up requires remembering progress as a checkpoint identity")
+		}
+		if missedStartup > 1 {
+			add(s, "declare at most one missed-startup policy")
+		}
+		_ = dstMissing
+		_ = dstTwice
+		return called
+	case "findCalendar":
+		checkExpr(s, m[3], false)
+		policies, zones, called := 0, 0, ""
+		for _, child := range s.Body {
+			switch child.Kind {
+			case "dayNotExist":
+				policies++
+				if len(child.Body) == 0 {
+					add(child, "declare an invalid-day policy")
+				}
+				for _, grandchild := range child.Body {
+					if grandchild.Kind != "dayPolicy" {
+						add(grandchild, strings.Fields(grandchild.Text)[0]+" is not valid here")
+					}
+				}
+			case "scheduleZone":
+				zones++
+			case "scheduleCalled":
+				called = match("scheduleCalled", child.Text)[1]
+			default:
+				add(child, strings.Fields(child.Text)[0]+" is not valid in a calendar arithmetic declaration")
+			}
+		}
+		if zones > 1 {
+			add(s, "declare at most one time zone")
+		}
+		if policies > 1 {
+			add(s, "declare at most one invalid-day policy")
+		}
+		if called == "" {
+			add(s, "calendar arithmetic requires a called name")
+		}
+		return called
+	case "deadline":
+		durationExpr(s, m[1])
+		return ""
+	case "advanceTime":
+		durationExpr(s, m[1])
+		if len(s.Body) != 0 {
+			add(s, "advance test time takes no nested lines")
+		}
+		return ""
+	case "stopStream":
+		return ""
+	}
+	return ""
 }

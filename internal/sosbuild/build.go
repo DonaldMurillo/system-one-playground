@@ -265,9 +265,16 @@ func Build(ctx context.Context, opts BuildOptions) error {
 		}
 	}
 	if bundled {
+		if _, err := writeTimeZoneMetadata(bundleStage); err != nil {
+			return err
+		}
 		return publishStagedPaths([]stagedPath{{bundleStage, finalOutput}})
 	}
-	paths := []stagedPath{{output, finalOutput}}
+	tzFile, err := writeTimeZoneMetadata(stageDir)
+	if err != nil {
+		return err
+	}
+	paths := []stagedPath{{output, finalOutput}, {tzFile, finalOutput + ".timezone.json"}}
 	if target == TargetWasmBrowser {
 		for _, name := range []string{"wasm_exec.js", "index.html"} {
 			staged := filepath.Join(filepath.Dir(output), name)
@@ -699,6 +706,7 @@ import (
 	"os"
 	"strconv"
 	"time"
+	_ "time/tzdata"
 
 	"encoding/json"
  "errors"

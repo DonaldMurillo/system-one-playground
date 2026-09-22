@@ -51,3 +51,16 @@ as pending analysis; **Analyze** or **Run** performs the configured requests.
   standalone application and locked manifest.
 - `streams` demonstrates finite and failing external producers, early stop,
   explicit close, bounded collection, and sampling without unbounded buffering.
+
+## Time
+
+These examples follow the approved time specification
+(`docs/sysonescript-time-spec.md`) and run with `sos run main.sos -- COMMAND`.
+
+- `time-basics` covers clock reads, waits, one-shot and anchored repeating
+  timers, scoped deadlines, strict RFC3339 round trips, and elapsed arithmetic.
+- `time-schedules` covers calendar schedules in named zones, daylight-saving
+  policy, and calendar arithmetic with explicit month-end policy.
+- `time-service` is a scheduled CLI service: a fast single-check command plus
+  an hourly watcher with a scoped deadline around each check. Durable schedule
+  checkpoints arrive with the future state library.

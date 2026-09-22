@@ -197,6 +197,11 @@ func (s *server) sentenceHover(params json.RawMessage) any {
 	if value, is := streamAliasHover(line); is {
 		return map[string]any{"contents": map[string]any{"kind": "markdown", "value": value}}
 	}
+	if !strings.Contains(line, " to be quiet for ") {
+		if value, is := timeHover(line); is {
+			return map[string]any{"contents": map[string]any{"kind": "markdown", "value": value}}
+		}
+	}
 	if info, exists := sos.EditorMeanings(text)[pos.Line+1]; exists {
 		return map[string]any{"contents": map[string]any{"kind": "markdown", "value": "```sos\n" + strings.TrimSpace(line) + "\n```\n\n**" + info.Kind + "**\n\n" + info.Description}}
 	}
@@ -293,6 +298,7 @@ func (s *server) completion(params json.RawMessage) any {
 		}
 		items = append(items, item)
 	}
+	items = append(items, timeCompletions(lineContext, prefix, wordEdit)...)
 	semanticContext := failureCompletionContext(lineContext)
 	if !ok || replace == nil || (prefix == "" && !semanticContext) {
 		// Empty prefix keeps the canonical keyword list exactly, matching

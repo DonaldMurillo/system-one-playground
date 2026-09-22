@@ -664,7 +664,7 @@ func openTestStream(ch chan any) StreamHandle {
 }
 
 func TestDebounceEmitsLatestAtExactVirtualClockBoundary(t *testing.T) {
-	clock := &VirtualClock{}
+	clock := &VirtualStreamClock{}
 	ch := make(chan any, 8)
 	derived, err := Debounce(openTestStream(ch), 500*time.Millisecond, DebounceOptions{}, clock)
 	if err != nil {
@@ -694,7 +694,7 @@ func TestDebounceEmitsLatestAtExactVirtualClockBoundary(t *testing.T) {
 }
 
 func TestDeounceKeyedTimersAreIndependentAndKeyBoundFails(t *testing.T) {
-	clock := &VirtualClock{}
+	clock := &VirtualStreamClock{}
 	ch := make(chan any, 8)
 	item := func(key string) any { return map[string]any{"key": key, "n": 1.0} }
 	derived, err := Debounce(openTestStream(ch), 100*time.Millisecond, DebounceOptions{
@@ -723,7 +723,7 @@ func TestDeounceKeyedTimersAreIndependentAndKeyBoundFails(t *testing.T) {
 }
 
 func TestDebounceCompletionFlushesLastArrivalOrderAndFailureDiscards(t *testing.T) {
-	clock := &VirtualClock{}
+	clock := &VirtualStreamClock{}
 	ch := make(chan any, 8)
 	derived, err := Debounce(openTestStream(ch), time.Hour, DebounceOptions{}, clock)
 	if err != nil {
@@ -783,7 +783,7 @@ func TestDerivedStreamConsumesOwnership(t *testing.T) {
 }
 
 func TestThrottleKeepingFirstDropsAndNeverGrantsCatchUpCredit(t *testing.T) {
-	clock := &VirtualClock{}
+	clock := &VirtualStreamClock{}
 	ch := make(chan any, 8)
 	derived, err := Throttle(openTestStream(ch), 2, time.Second, ThrottleOptions{Keeping: "first"}, clock)
 	if err != nil {
@@ -815,7 +815,7 @@ func TestThrottleKeepingFirstDropsAndNeverGrantsCatchUpCredit(t *testing.T) {
 }
 
 func TestThrottleKeepingLatestEmitsRetainedWhenCapacityReturns(t *testing.T) {
-	clock := &VirtualClock{}
+	clock := &VirtualStreamClock{}
 	ch := make(chan any, 8)
 	derived, err := Throttle(openTestStream(ch), 1, time.Second, ThrottleOptions{Keeping: "latest"}, clock)
 	if err != nil {
@@ -839,7 +839,7 @@ func TestThrottleKeepingLatestEmitsRetainedWhenCapacityReturns(t *testing.T) {
 }
 
 func TestThrottleDroppingAnOwnedItemWithoutPolicyFails(t *testing.T) {
-	clock := &VirtualClock{}
+	clock := &VirtualStreamClock{}
 	ch := make(chan any, 8)
 	derived, err := Throttle(openTestStream(ch), 1, time.Hour, ThrottleOptions{Keeping: "first"}, clock)
 	if err != nil {
@@ -859,7 +859,7 @@ func TestThrottleDroppingAnOwnedItemWithoutPolicyFails(t *testing.T) {
 }
 
 func TestThrottleKeyedWindowsAreIndependent(t *testing.T) {
-	clock := &VirtualClock{}
+	clock := &VirtualStreamClock{}
 	ch := make(chan any, 8)
 	derived, err := Throttle(openTestStream(ch), 1, time.Second, ThrottleOptions{
 		Keeping: "first",
@@ -906,7 +906,7 @@ func TestDistinctConsecutiveKeepsOnlyChanges(t *testing.T) {
 }
 
 func TestBatchEmitsOnCountAndTimeAndFlushesPartialOnCompletion(t *testing.T) {
-	clock := &VirtualClock{}
+	clock := &VirtualStreamClock{}
 	ch := make(chan any, 8)
 	derived, err := Batch(openTestStream(ch), 2, time.Second, BatchOptions{}, clock)
 	if err != nil {
@@ -944,7 +944,7 @@ func TestBatchEmitsOnCountAndTimeAndFlushesPartialOnCompletion(t *testing.T) {
 }
 
 func TestBatchAggregateItemBoundIsATypedFailure(t *testing.T) {
-	clock := &VirtualClock{}
+	clock := &VirtualStreamClock{}
 	ch := make(chan any, 8)
 	derived, err := Batch(openTestStream(ch), 10, time.Hour, BatchOptions{AggregateItemLimit: 2}, clock)
 	if err != nil {
@@ -964,7 +964,7 @@ func TestBatchAggregateItemBoundIsATypedFailure(t *testing.T) {
 }
 
 func TestIdleTimeoutFailsWhenSourceGoesQuiet(t *testing.T) {
-	clock := &VirtualClock{}
+	clock := &VirtualStreamClock{}
 	ch := make(chan any, 8)
 	derived, err := RequireIdle(openTestStream(ch), 30*time.Second, clock)
 	if err != nil {
@@ -989,7 +989,7 @@ func TestIdleTimeoutFailsWhenSourceGoesQuiet(t *testing.T) {
 }
 
 func TestLifetimeLimitsStopNormallyOrFail(t *testing.T) {
-	clock := &VirtualClock{}
+	clock := &VirtualStreamClock{}
 	ch := make(chan any, 8)
 	bounded, err := LimitLifetime(openTestStream(ch), 10*time.Minute, clock)
 	if err != nil {
@@ -1379,7 +1379,7 @@ func TestHandleWithBoundConcurrencyBoundsSiblingCleanup(t *testing.T) {
 }
 
 func TestIdleTimeoutResetsOnArrivalAtExactBoundaryUnderBackpressure(t *testing.T) {
-	clock := &VirtualClock{}
+	clock := &VirtualStreamClock{}
 	ch := make(chan any, 8)
 	derived, err := RequireIdle(openTestStream(ch), time.Second, clock)
 	if err != nil {
@@ -1408,7 +1408,7 @@ func TestIdleTimeoutResetsOnArrivalAtExactBoundaryUnderBackpressure(t *testing.T
 }
 
 func TestRepeatedNextAfterTerminalReturnsTerminalIdempotently(t *testing.T) {
-	clock := &VirtualClock{}
+	clock := &VirtualStreamClock{}
 	ch := make(chan any, 8)
 	derived, err := RequireIdle(openTestStream(ch), 10*time.Millisecond, clock)
 	if err != nil {
@@ -1498,7 +1498,7 @@ func TestHandleLatestBoundsCleanupAfterKeyedHandlerFailure(t *testing.T) {
 }
 
 func TestDebounceSettlesOwnedPendingOnReplaceAndOnFailure(t *testing.T) {
-	clock := &VirtualClock{}
+	clock := &VirtualStreamClock{}
 	ch := make(chan any, 8)
 	derived, err := Debounce(openTestStream(ch), time.Hour, DebounceOptions{
 		Key: func(v any) (any, error) { return v.(*OwnedItem).ID, nil },
@@ -1547,7 +1547,7 @@ func TestDebounceSettlesOwnedPendingOnReplaceAndOnFailure(t *testing.T) {
 }
 
 func TestThrottleEvictsExpiredKeyStateAndBoundsTimers(t *testing.T) {
-	clock := &VirtualClock{}
+	clock := &VirtualStreamClock{}
 	ch := make(chan any, 8)
 	derived, err := Throttle(openTestStream(ch), 1, time.Second, ThrottleOptions{
 		Keeping:    "first",
@@ -1626,7 +1626,7 @@ func TestDistinctWithKeyRetainsOnlyTheImmediatelyPreviousScalarKey(t *testing.T)
 
 func TestByteAndTimerBoundsAndSnapshots(t *testing.T) {
 	t.Run("debounce bytes", func(t *testing.T) {
-		clock := &VirtualClock{}
+		clock := &VirtualStreamClock{}
 		ch := make(chan any, 8)
 		derived, err := Debounce(openTestStream(ch), time.Hour, DebounceOptions{
 			Key:       func(v any) (any, error) { return v.(string)[:1], nil },
@@ -1652,7 +1652,7 @@ func TestByteAndTimerBoundsAndSnapshots(t *testing.T) {
 		}
 	})
 	t.Run("debounce timers", func(t *testing.T) {
-		clock := &VirtualClock{}
+		clock := &VirtualStreamClock{}
 		ch := make(chan any, 8)
 		derived, err := Debounce(openTestStream(ch), time.Hour, DebounceOptions{
 			Key:        func(v any) (any, error) { return v.(string)[:1], nil },
@@ -1675,7 +1675,7 @@ func TestByteAndTimerBoundsAndSnapshots(t *testing.T) {
 		}
 	})
 	t.Run("batch bytes and timers", func(t *testing.T) {
-		clock := &VirtualClock{}
+		clock := &VirtualStreamClock{}
 		ch := make(chan any, 8)
 		derived, err := Batch(openTestStream(ch), 10, time.Hour, BatchOptions{
 			Key:        func(v any) (any, error) { return v.(string)[:1], nil },
@@ -1694,7 +1694,7 @@ func TestByteAndTimerBoundsAndSnapshots(t *testing.T) {
 		}
 	})
 	t.Run("throttle retained bytes", func(t *testing.T) {
-		clock := &VirtualClock{}
+		clock := &VirtualStreamClock{}
 		ch := make(chan any, 8)
 		derived, err := Throttle(openTestStream(ch), 1, time.Hour, ThrottleOptions{
 			Keeping:   "latest",
@@ -1722,6 +1722,31 @@ func TestByteAndTimerBoundsAndSnapshots(t *testing.T) {
 			t.Fatalf("want byte bound failure, got %v (%v)", err, FailureValue(err))
 		}
 	})
+}
+
+func TestRuntimeStreamClockUsesInjectedVirtualClock(t *testing.T) {
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	virtual := NewVirtualClock(start)
+	clock := newRuntimeStreamClock(virtual)
+	ready := clock.After(5 * time.Second)
+	virtual.Advance(4 * time.Second)
+	if got := clock.Now(); got != 4*time.Second {
+		t.Fatalf("elapsed = %s", got)
+	}
+	select {
+	case <-ready:
+		t.Fatal("stream timer fired early")
+	default:
+	}
+	virtual.Advance(time.Second)
+	select {
+	case got := <-ready:
+		if got != 5*time.Second {
+			t.Fatalf("timer fired at %s", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("stream timer did not follow virtual time")
+	}
 }
 
 func TestExclusiveRejectionIncrementsRejectedStat(t *testing.T) {
@@ -1763,7 +1788,7 @@ func TestExclusiveRejectionIncrementsRejectedStat(t *testing.T) {
 }
 
 func TestConcurrentNextStatsAndSnapshotsAreRaceSafe(t *testing.T) {
-	clock := &VirtualClock{}
+	clock := &VirtualStreamClock{}
 	ch := make(chan any, 64)
 	source := openTestStream(ch)
 	derived, err := Debounce(source, 5*time.Millisecond, DebounceOptions{}, clock)
@@ -1824,7 +1849,7 @@ func TestDistinctConsecutiveRecordsRequireADeclaredScalarKey(t *testing.T) {
 }
 
 func TestSimultaneousDerivedStreamsKeepIndependentTimersAndState(t *testing.T) {
-	clock := &VirtualClock{}
+	clock := &VirtualStreamClock{}
 	leftInput := make(chan any, 1)
 	rightInput := make(chan any, 1)
 	left, err := Debounce(openTestStream(leftInput), time.Second, DebounceOptions{}, clock)
@@ -1925,7 +1950,7 @@ func TestHandleLatestReplacementSettlesSupersededOwnedItem(t *testing.T) {
 }
 
 func TestThrottleExpiryEmitsRetainedBeforeNewArrival(t *testing.T) {
-	clock := &VirtualClock{}
+	clock := &VirtualStreamClock{}
 	counters := &transformCounters{byteLimit: -1, timerLimit: -1}
 	policy := &throttlePolicy{clock: clock, allowance: 1, window: time.Second, keeping: "latest", keyOf: keyExtractor(nil), counters: counters, states: map[any]*throttleState{}}
 	var emitted []any
@@ -1946,7 +1971,7 @@ func TestThrottleExpiryEmitsRetainedBeforeNewArrival(t *testing.T) {
 }
 
 func TestThrottleWindowBeginsWithFirstItem(t *testing.T) {
-	clock := &VirtualClock{}
+	clock := &VirtualStreamClock{}
 	counters := &transformCounters{byteLimit: -1, timerLimit: -1}
 	policy := &throttlePolicy{clock: clock, allowance: 1, window: 5 * time.Second, keeping: "first", keyOf: keyExtractor(nil), counters: counters, states: map[any]*throttleState{}}
 	var emitted []any
@@ -2006,7 +2031,7 @@ func TestNaNStreamKeysAreRejectedAndKeyHighWaterIsObservable(t *testing.T) {
 	if _, err := scalarKey(math.NaN()); err == nil {
 		t.Fatal("NaN key accepted")
 	}
-	clock := &VirtualClock{}
+	clock := &VirtualStreamClock{}
 	ch := make(chan any, 2)
 	derived, err := Debounce(openTestStream(ch), time.Hour, DebounceOptions{Key: func(value any) (any, error) { return value, nil }, KeyLimit: 2}, clock)
 	if err != nil {
@@ -2086,7 +2111,7 @@ func TestHandleLatestCompletionCannotSwallowHandlerFailure(t *testing.T) {
 
 func TestPoliciesSettleOwnedItemsWhenEmissionIsCanceled(t *testing.T) {
 	t.Run("throttle", func(t *testing.T) {
-		clock := &VirtualClock{}
+		clock := &VirtualStreamClock{}
 		counters := &transformCounters{byteLimit: -1, timerLimit: -1}
 		policy := &throttlePolicy{clock: clock, allowance: 1, window: time.Second, keeping: "latest", keyOf: keyExtractor(nil), counters: counters, states: map[any]*throttleState{}}
 		owned := NewOwnedItem("retained", func(string) error { return nil })
@@ -2106,7 +2131,7 @@ func TestPoliciesSettleOwnedItemsWhenEmissionIsCanceled(t *testing.T) {
 	})
 	t.Run("throttle in allowance", func(t *testing.T) {
 		counters := &transformCounters{byteLimit: -1, timerLimit: -1}
-		policy := &throttlePolicy{clock: &VirtualClock{}, allowance: 1, window: time.Second, keeping: "first", keyOf: keyExtractor(nil), counters: counters, states: map[any]*throttleState{}}
+		policy := &throttlePolicy{clock: &VirtualStreamClock{}, allowance: 1, window: time.Second, keeping: "first", keyOf: keyExtractor(nil), counters: counters, states: map[any]*throttleState{}}
 		owned := NewOwnedItem("admitted", func(string) error { return nil })
 		if err := policy.onItem(owned, func(any) bool { return false }); err != nil {
 			t.Fatal(err)
@@ -2117,7 +2142,7 @@ func TestPoliciesSettleOwnedItemsWhenEmissionIsCanceled(t *testing.T) {
 	})
 	t.Run("batch", func(t *testing.T) {
 		counters := &transformCounters{byteLimit: -1, timerLimit: -1}
-		policy := &batchPolicy{clock: &VirtualClock{}, count: 1, window: time.Second, keyOf: keyExtractor(nil), counters: counters, batches: map[any]*batchState{}}
+		policy := &batchPolicy{clock: &VirtualStreamClock{}, count: 1, window: time.Second, keyOf: keyExtractor(nil), counters: counters, batches: map[any]*batchState{}}
 		owned := NewOwnedItem("batched", func(string) error { return nil })
 		if err := policy.onItem(owned, func(any) bool { return false }); err != nil {
 			t.Fatal(err)
@@ -2128,7 +2153,7 @@ func TestPoliciesSettleOwnedItemsWhenEmissionIsCanceled(t *testing.T) {
 	})
 	t.Run("relay", func(t *testing.T) {
 		owned := NewOwnedItem("relayed", func(string) error { return nil })
-		policy := &relayPolicy{clock: &VirtualClock{}, idle: time.Second}
+		policy := &relayPolicy{clock: &VirtualStreamClock{}, idle: time.Second}
 		if err := policy.onItem(owned, func(any) bool { return false }); err != nil {
 			t.Fatal(err)
 		}

@@ -216,7 +216,9 @@ type dapServer struct {
 	launch      *debugLaunch
 	started     bool
 	cancel      context.CancelFunc
+	streamMu    sync.Mutex
 	processDone chan struct{}
+	streamCtl   *sos.StreamController
 }
 
 func runDebugServer(input io.Reader, output, errOutput io.Writer) int {
@@ -340,6 +342,45 @@ func (s *dapServer) handle(request dapRequest) error {
 	case "exceptionInfo":
 		s.respond(request.Seq, request.Command, map[string]any{"exceptionId": "runtime", "description": "SysOneScript runtime exception"}, nil)
 		return nil
+	case "sos/streams":
+		// Read-only snapshot inspection: never consumes a tick or advances a
+		// virtual clock. Timer and schedule observability fields flow through
+		// StreamEvent as the runtime adds them.
+		s.streamMu.Lock()
+		controller := s.streamCtl
+		s.streamMu.Unlock()
+		streams := []sos.StreamEvent{}
+		if controller != nil {
+			streams = controller.Snapshots()
+		}
+		s.respond(request.Seq, request.Command, map[string]any{"streams": streams}, nil)
+		return nil
+	case "sos/stopStream":
+		// Stop Stream targets one stream (timer or schedule included) without
+		// stopping the debugged run.
+		var args struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(request.Arguments, &args); err != nil {
+			return fmt.Errorf("invalid sos/stopStream arguments: %w", err)
+		}
+		if strings.TrimSpace(args.ID) == "" {
+			return errors.New("sos/stopStream requires a stream id")
+		}
+		s.streamMu.Lock()
+		controller := s.streamCtl
+		s.streamMu.Unlock()
+		if controller == nil {
+			return errors.New("no run is active")
+		}
+		if err := controller.Stop(context.Background(), args.ID); err != nil {
+			return err
+		}
+		s.respond(request.Seq, request.Command, map[string]any{"stopped": args.ID}, nil)
+		return nil
+	case "sos/capabilities":
+		s.respond(request.Seq, request.Command, timeCapabilities(), nil)
+		return nil
 	default:
 		// VS Code sends a few optional requests (for example cancel). A clean
 		// empty response keeps the adapter compatible without pretending to
@@ -413,7 +454,10 @@ func (s *dapServer) start() error {
 	s.started = true
 	s.session.stopOnEntry = s.launch.StopOnEntry
 	s.session.firstStop = false
-	s.processDone = make(chan struct{})
+	streamController := sos.NewStreamController()
+	s.streamMu.Lock()
+	s.streamCtl = streamController
+	s.streamMu.Unlock()
 	go func() {
 		defer close(s.processDone)
 		streamController := sos.NewStreamController()

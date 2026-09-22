@@ -245,8 +245,15 @@ func parseRecordDefinition(statement *Statement) (*RecordDef, []Diagnostic) {
 	return definition, diagnostics
 }
 
+var timeTickDefinition = &RecordDef{Name: "TimeTick", Fields: []RecordField{
+	{Name: "sequence", Type: TypeRef{Name: "integer"}},
+	{Name: "scheduled_for", Type: TypeRef{Name: "timestamp"}},
+	{Name: "observed_at", Type: TypeRef{Name: "timestamp"}},
+	{Name: "missed", Type: TypeRef{Name: "integer"}},
+}}
+
 func visibleDefinitions(local map[string]*RecordDef, modules map[string]*Module) (map[string]*RecordDef, []string) {
-	result := map[string]*RecordDef{}
+	result := map[string]*RecordDef{"TimeTick": timeTickDefinition}
 	for name, definition := range builtInFileDefinitions() {
 		result[name] = definition
 	}

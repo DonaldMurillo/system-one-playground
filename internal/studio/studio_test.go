@@ -505,3 +505,31 @@ func TestNewNormalizesNestedFolderToProjectRoot(t *testing.T) {
 		t.Fatalf("server root = %q, want %q", server.Dir(), root)
 	}
 }
+
+func TestCapabilitiesEndpointReportsTimingDiagnostics(t *testing.T) {
+	s, ts := newTestServer(t)
+	defer ts.Close()
+	resp, body, _ := get(t, ts, s.Token(), "/api/capabilities")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d body=%v", resp.StatusCode, body)
+	}
+	if body["os"] == "" || body["arch"] == "" {
+		t.Fatalf("platform missing: %#v", body)
+	}
+	clocks, _ := body["clocks"].([]any)
+	kinds := map[string]bool{}
+	for _, raw := range clocks {
+		clock, _ := raw.(map[string]any)
+		kinds[clock["kind"].(string)] = true
+	}
+	if !kinds["host"] || !kinds["virtual"] {
+		t.Fatalf("host and virtual clock kinds required: %#v", body["clocks"])
+	}
+	zones, _ := body["timeZoneDatabase"].(map[string]any)
+	if zones["available"] != true {
+		t.Fatalf("sample zone must resolve on the test host: %#v", zones)
+	}
+	if body["calendarSchedules"] != true {
+		t.Fatalf("calendar schedules must be supported when zones resolve: %#v", body)
+	}
+}
