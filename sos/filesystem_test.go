@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	stdruntime "runtime"
 	"strings"
 	"testing"
 	"time"
@@ -215,7 +216,7 @@ func TestWriteTextAtomically(t *testing.T) {
 		t.Fatalf("existing file damaged by failed create: %q", data)
 	}
 
-	if os.Geteuid() != 0 {
+	if stdruntime.GOOS != "windows" && os.Geteuid() != 0 {
 		nested := filepath.Join(dir, "nested")
 		if err := os.Mkdir(nested, 0o755); err != nil {
 			t.Fatal(err)

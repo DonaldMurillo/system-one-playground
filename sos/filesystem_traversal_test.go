@@ -3,6 +3,7 @@ package sos
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	stdruntime "runtime"
@@ -235,7 +236,7 @@ func TestFileStreamIsPullBasedWithIndependentOwnership(t *testing.T) {
 func TestFileStreamCancellationStopsTheWalkPromptly(t *testing.T) {
 	root := t.TempDir()
 	for i := 0; i < 500; i++ {
-		if err := os.WriteFile(filepath.Join(root, "f"+string(rune('a'+i%26))+string(rune('0'+i/26))+".txt"), []byte("x"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(root, fmt.Sprintf("f%03d.txt", i)), []byte("x"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}

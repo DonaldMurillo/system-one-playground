@@ -31,7 +31,7 @@ func TestRepoAssistantProjectWorkflow(t *testing.T) {
 	if _, stderr, code := runCLI(t, sourceDir, "check", source); code != 0 {
 		t.Fatalf("check: %s", stderr)
 	}
-	binary := filepath.Join(t.TempDir(), "repo")
+	binary := hostExecutablePath(filepath.Join(t.TempDir(), "repo"))
 	if _, stderr, code := runCLI(t, sourceDir, "build", source, "--output", binary); code != 0 {
 		t.Fatalf("build: %s", stderr)
 	}

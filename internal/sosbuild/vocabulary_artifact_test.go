@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -31,6 +32,9 @@ func TestArtifactCarriesVocabulary(t *testing.T) {
 		t.Fatal(ds)
 	}
 	out := filepath.Join(dir, "artifact")
+	if runtime.GOOS == "windows" {
+		out += ".exe"
+	}
 	if err := Build(context.Background(), BuildOptions{Program: p, Output: out, Target: TargetNative, Name: "vocab-artifact"}); err != nil {
 		t.Fatalf("build: %v", err)
 	}

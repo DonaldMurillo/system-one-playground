@@ -2,6 +2,7 @@ package semcore
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -76,7 +77,8 @@ func TestDiffNewSideRanges(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if !c.Touches("/repo/a.go", 3, 4) || c.Touches("/repo/a.go", 1, 2) {
+	path := filepath.Join(string(filepath.Separator), "repo", "a.go")
+	if !c.Touches(path, 3, 4) || c.Touches(path, 1, 2) {
 		t.Fatalf("wrong changes: %#v", c)
 	}
 }

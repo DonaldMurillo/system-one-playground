@@ -587,7 +587,7 @@ func TestBuildNativeKeepsFileBudgetZero(t *testing.T) {
 	zeroBudget := "version = 1\n\n[budget.run]\nrequests = 0\n"
 
 	probe := writeScript(t, dir, "probe.sos", frontmatter(zeroBudget)+judgeScript)
-	probeBin := filepath.Join(dir, "bin", "probe")
+	probeBin := hostExecutablePath(filepath.Join(dir, "bin", "probe"))
 	_, stderr, code := runCLI(t, dir, "build", probe, "--output", probeBin)
 	if code != 0 {
 		t.Fatalf("build exit = %d, want 0; stderr:\n%s", code, stderr)
@@ -607,7 +607,7 @@ func TestBuildNativeKeepsFileBudgetZero(t *testing.T) {
 
 	// Canonical arithmetic under the same zero budget still works.
 	canonical := writeScript(t, dir, "canonical.sos", frontmatter(zeroBudget)+simpleScript)
-	canonicalBin := filepath.Join(dir, "bin", "canonical")
+	canonicalBin := hostExecutablePath(filepath.Join(dir, "bin", "canonical"))
 	_, stderr, code = runCLI(t, dir, "build", canonical, "--output", canonicalBin)
 	if code != 0 {
 		t.Fatalf("build exit = %d, want 0; stderr:\n%s", code, stderr)

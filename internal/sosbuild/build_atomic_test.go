@@ -101,7 +101,14 @@ func TestPublishStagedBundleReplacesDirectoryAsAUnit(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := publishStagedPaths([]stagedPath{{staged, destination}}); err != nil {
-		t.Fatal(err)
+		if runtime.GOOS != "windows" {
+			t.Fatal(err)
+		}
+		manifest, readErr := os.ReadFile(filepath.Join(destination, "manifest.json"))
+		if readErr != nil || string(manifest) != "old" {
+			t.Fatalf("unsupported replacement damaged existing bundle: %q %v", manifest, readErr)
+		}
+		return
 	}
 	manifest, err := os.ReadFile(filepath.Join(destination, "manifest.json"))
 	if err != nil || string(manifest) != "new" {

@@ -87,10 +87,10 @@ func (b *windowsBackend) read() {
 				return
 			}
 			if err != watchNotifyEnumDir {
-				// A terminal read failure is one last trigger; the
-				// reconciliation scan decides whether the watch can continue.
+				// Preserve the Windows error for the stream's terminal
+				// failure; a scan cannot repair a failed native handle.
 				select {
-				case b.triggers <- nativeWatchEvent{}:
+				case b.triggers <- nativeWatchEvent{failure: err}:
 				case <-b.done:
 				}
 				return

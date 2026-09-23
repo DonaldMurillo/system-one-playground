@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -152,7 +153,7 @@ func TestProjectWorkspaceEnvironmentAndProviderIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if st.Mode().Perm() != 0600 {
+	if runtime.GOOS != "windows" && st.Mode().Perm() != 0600 {
 		t.Fatalf(".env permissions: %v", st.Mode().Perm())
 	}
 	run := a.call("/api/run", map[string]any{"source": "judge \"blocked\" by jev \"Urgent\" called answer\nshow answer.p_yes\n"}, 200)
@@ -236,6 +237,9 @@ func TestProjectWorkspaceNestedSourceContext(t *testing.T) {
 }
 
 func TestProjectWorkspaceRejectsNamedPipes(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX FIFO fixture does not represent Windows named pipes")
+	}
 	mkfifo, err := exec.LookPath("mkfifo")
 	if err != nil {
 		t.Skip("named-pipe fixture requires mkfifo")

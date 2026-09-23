@@ -43,7 +43,7 @@ show body of response
 	if runnerCode != 0 || !strings.Contains(runnerOut, "Ada") || !strings.HasPrefix(runnerOut, "200\n") {
 		t.Fatalf("runner exit=%d stdout=%q stderr=%q", runnerCode, runnerOut, runnerErr)
 	}
-	artifact := filepath.Join(dir, "http-app")
+	artifact := hostExecutablePath(filepath.Join(dir, "http-app"))
 	_, buildErr, buildCode := runCLI(t, dir, "build", script, "--output", artifact)
 	if buildCode != 0 {
 		t.Fatalf("build exit=%d stderr=%q", buildCode, buildErr)

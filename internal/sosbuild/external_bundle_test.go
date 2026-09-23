@@ -56,7 +56,8 @@ func TestPrepareExternalBundleRejectsMissingTargetAndWrongChecksum(t *testing.T)
 }
 
 func TestNormalizeGraphForDistributionRemovesSourceRoots(t *testing.T) {
-	for _, root := range []string{filepath.Join(string(filepath.Separator), "one", "project"), filepath.Join(string(filepath.Separator), "other", "project")} {
+	for range 2 {
+		root := filepath.Join(t.TempDir(), "project")
 		key := filepath.Join(root, "lib")
 		graph := &sos.ModuleGraph{
 			Entry:     map[string]sos.ModuleEdge{"lib": {Key: key, Alias: "lib"}},

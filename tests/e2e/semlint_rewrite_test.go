@@ -223,7 +223,7 @@ func TestSemlintSOSNativeWorkflow(t *testing.T) {
 		t.Fatal(err)
 	}
 	temporary := writeScript(t, t.TempDir(), "scan.sos", string(contents))
-	binary := filepath.Join(t.TempDir(), "semlint-sos")
+	binary := hostExecutablePath(filepath.Join(t.TempDir(), "semlint-sos"))
 	if out, stderr, code := runCLI(t, dir, "build", temporary, "--output", binary); code != 0 {
 		t.Fatalf("native build: %d %s %s", code, out, stderr)
 	}

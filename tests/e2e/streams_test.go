@@ -121,7 +121,7 @@ show "continued"
 	if runnerCode != 0 {
 		t.Fatalf("runner exit=%d stderr=%s", runnerCode, runnerErr)
 	}
-	artifact := filepath.Join(dir, "stream-app")
+	artifact := hostExecutablePath(filepath.Join(dir, "stream-app"))
 	_, buildErr, buildCode := runCLI(t, dir, "build", script, "--output", artifact)
 	if buildCode != 0 {
 		t.Fatalf("build exit=%d stderr=%s", buildCode, buildErr)

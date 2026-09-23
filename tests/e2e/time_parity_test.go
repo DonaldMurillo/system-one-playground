@@ -90,7 +90,7 @@ func TestTimeConstructsMatchBetweenInterpreterAndNativeArtifact(t *testing.T) {
 		t.Fatalf("interpreted run exit %d:\n%s", code, interpErr)
 	}
 
-	bin := filepath.Join(dir, "parity-bin")
+	bin := hostExecutablePath(filepath.Join(dir, "parity-bin"))
 	_, buildErr, code := runCLIWithEnv(t, dir, env, "build", script, "--output", bin)
 	if code != 0 {
 		t.Fatalf("sos build exit %d:\n%s", code, buildErr)

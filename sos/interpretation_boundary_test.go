@@ -141,10 +141,12 @@ func TestSentenceVariantsResolveSingleVisibleCollection(t *testing.T) {
 	}
 }
 
-func TestAnalyzeHonorsConfiguredDeadline(t *testing.T) {
+func TestAnalyzeHonorsExpiredParentDeadline(t *testing.T) {
 	cfg := boundaryPolicy(t, "assisted", "explicit", 1)
-	cfg.Timeout = time.Nanosecond
-	a, err := Analyze(context.Background(), "show 1\n", AnalyzeOptions{Config: cfg})
+	cfg.Timeout = time.Second
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	a, err := Analyze(ctx, "show 1\n", AnalyzeOptions{Config: cfg})
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("configured deadline ignored: %v", err)
 	}

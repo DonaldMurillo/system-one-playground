@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -220,9 +221,7 @@ func TestRejectUnsupportedImports(t *testing.T) {
 		{"network", `import "https://example.com/pkg"
 show 1
 `, "network imports are not supported"},
-		{"absolute", `import "/etc/passwd"
-show 1
-`, "absolute import paths are not supported"},
+		{"absolute", "import " + strconv.Quote(filepath.ToSlash(filepath.Join(t.TempDir(), "outside.sos"))) + "\nshow 1\n", "absolute import paths are not supported"},
 		{"unknown std", `import "std/regex"
 show 1
 `, "unknown standard package"},

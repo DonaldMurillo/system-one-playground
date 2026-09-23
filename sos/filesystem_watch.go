@@ -221,7 +221,8 @@ func toPortablePath(host, rel string) string {
 // discarded: the scan diff, not the raw event, defines the delivered change
 // records, which is what keeps the semantics identical across platforms.
 type nativeWatchEvent struct {
-	overflow bool // the kernel dropped notifications; consumers must rescan
+	overflow bool  // the kernel dropped notifications; consumers must rescan
+	failure  error // a terminal native read failure; preserve its host cause
 }
 
 // nativeWatchBackend is the platform trigger for one watched tree. Events
@@ -347,7 +348,21 @@ func (s *fileWatchSource) watch(ctx context.Context, backend nativeWatchBackend,
 			}
 			trigger = event
 		}
-		overflow := s.coalesce(backend, trigger)
+		if trigger.failure != nil {
+			s.mu.Lock()
+			s.terminalErr = fileOpError(trigger.failure, s.spec.rootDisplay, traverseOp)
+			s.mu.Unlock()
+			s.signalEnd()
+			return
+		}
+		overflow, readErr := s.coalesce(backend, trigger)
+		if readErr != nil {
+			s.mu.Lock()
+			s.terminalErr = fileOpError(readErr, s.spec.rootDisplay, traverseOp)
+			s.mu.Unlock()
+			s.signalEnd()
+			return
+		}
 		current, err := scanWatchSnapshot(ctx, s.spec)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -394,20 +409,26 @@ func (s *fileWatchSource) watch(ctx context.Context, backend nativeWatchBackend,
 // change into several events — and one rename into a from/to pair — so the
 // driver waits the settle window and drains whatever else arrived before
 // scanning once.
-func (s *fileWatchSource) coalesce(backend nativeWatchBackend, first nativeWatchEvent) bool {
+func (s *fileWatchSource) coalesce(backend nativeWatchBackend, first nativeWatchEvent) (bool, error) {
 	overflow := first.overflow
 	timer := time.NewTimer(s.settle)
 	defer timer.Stop()
 	<-timer.C
 	for range watchSettleBurst {
 		select {
-		case next := <-backend.events():
+		case next, ok := <-backend.events():
+			if !ok {
+				return overflow, fmt.Errorf("native watcher stopped unexpectedly")
+			}
+			if next.failure != nil {
+				return overflow, next.failure
+			}
 			overflow = overflow || next.overflow
 		default:
-			return overflow
+			return overflow, nil
 		}
 	}
-	return overflow
+	return overflow, nil
 }
 
 func (s *fileWatchSource) next(ctx context.Context) (any, bool, error) {
@@ -423,18 +444,26 @@ func (s *fileWatchSource) next(ctx context.Context) (any, bool, error) {
 			s.mu.Unlock()
 			return nil, false, err
 		}
+		if s.overflow {
+			// An overflow invalidates every earlier observation, including a
+			// batch still occupying the queue. The consumer must rescan, and
+			// freeing the queue lets future changes arrive after that rescan.
+			s.overflow = false
+			s.pending = nil
+			for len(s.queue) > 0 {
+				<-s.queue
+			}
+			s.queuedItems = 0
+			s.mu.Unlock()
+			return watchChange{path: s.spec.rootDisplay, rel: ".", kind: changeOverflowed, entryKind: otherKind, observed: time.Now()}.value(), true, nil
+		}
 		if len(s.pending) > 0 {
 			change := s.pending[0]
 			s.pending = s.pending[1:]
 			s.mu.Unlock()
 			return change.value(), true, nil
 		}
-		overflow := s.overflow
-		s.overflow = false
 		s.mu.Unlock()
-		if overflow {
-			return watchChange{path: s.spec.rootDisplay, rel: ".", kind: changeOverflowed, entryKind: otherKind, observed: time.Now()}.value(), true, nil
-		}
 		select {
 		case batch := <-s.queue:
 			s.mu.Lock()

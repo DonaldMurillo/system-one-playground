@@ -24,6 +24,30 @@ func TestFileWatchMetricsDoNotConsumeQueuedChanges(t *testing.T) {
 	}
 }
 
+func TestFileWatchOverflowDiscardsStaleQueueAndAllowsFutureChanges(t *testing.T) {
+	source := &fileWatchSource{
+		spec:        traversalSpec{rootDisplay: "watched"},
+		queue:       make(chan []watchChange, 1),
+		pending:     []watchChange{{rel: "stale-pending"}},
+		queuedItems: 1,
+		overflow:    true,
+	}
+	source.queue <- []watchChange{{rel: "stale-queued"}}
+	item, more, err := source.next(context.Background())
+	if err != nil || !more || item.(map[string]any)["kind"] != changeOverflowed {
+		t.Fatalf("overflow = %#v, %v, %v", item, more, err)
+	}
+	if len(source.queue) != 0 || len(source.pending) != 0 || source.queuedItems != 0 {
+		t.Fatalf("stale queue remained after overflow: queued=%d pending=%d items=%d", len(source.queue), len(source.pending), source.queuedItems)
+	}
+	source.queue <- []watchChange{{rel: "fresh", kind: changeCreated}}
+	source.queuedItems = 1
+	item, more, err = source.next(context.Background())
+	if err != nil || !more || item.(map[string]any)["relative_path"] != "fresh" {
+		t.Fatalf("future change = %#v, %v, %v", item, more, err)
+	}
+}
+
 // watchFor drains the watcher until keep returns true or the deadline passes.
 func watchFor(t *testing.T, source *fileWatchSource, deadline time.Duration, keep func([]map[string]any) bool) ([]map[string]any, error) {
 	t.Helper()

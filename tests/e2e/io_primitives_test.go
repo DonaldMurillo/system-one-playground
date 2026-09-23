@@ -4,13 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/DonaldMurillo/system-one-playground/sos"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
-	"github.com/DonaldMurillo/system-one-playground/sos"
 )
 
 func TestHostIOPrimitives(t *testing.T) {
@@ -132,7 +132,7 @@ func TestHostIOBuildTargets(t *testing.T) {
 call io.error with "native artifact" called logged
 call io.exit with 9 called unused
 `)
-	binary := filepath.Join(t.TempDir(), "io-app")
+	binary := hostExecutablePath(filepath.Join(t.TempDir(), "io-app"))
 	if _, stderr, code := runCLI(t, dir, "build", script, "--output", binary); code != 0 {
 		t.Fatalf("build: %s", stderr)
 	}
