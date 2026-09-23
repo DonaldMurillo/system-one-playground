@@ -264,6 +264,7 @@ func watchTargets(spec traversalSpec, snapshot map[string]watchEntry) map[string
 type fileWatchSource struct {
 	spec   traversalSpec
 	settle time.Duration
+	scanMu sync.Mutex // an overflow receipt waits for any in-flight reconciliation
 
 	mu          sync.Mutex
 	queue       chan []watchChange
@@ -355,8 +356,10 @@ func (s *fileWatchSource) watch(ctx context.Context, backend nativeWatchBackend,
 			s.signalEnd()
 			return
 		}
+		s.scanMu.Lock()
 		overflow, readErr := s.coalesce(backend, trigger)
 		if readErr != nil {
+			s.scanMu.Unlock()
 			s.mu.Lock()
 			s.terminalErr = fileOpError(readErr, s.spec.rootDisplay, traverseOp)
 			s.mu.Unlock()
@@ -365,6 +368,7 @@ func (s *fileWatchSource) watch(ctx context.Context, backend nativeWatchBackend,
 		}
 		current, err := scanWatchSnapshot(ctx, s.spec)
 		if err != nil {
+			s.scanMu.Unlock()
 			if ctx.Err() != nil {
 				return // canceled mid-scan: a clean stop, not a failure
 			}
@@ -387,6 +391,7 @@ func (s *fileWatchSource) watch(ctx context.Context, backend nativeWatchBackend,
 			s.mu.Unlock()
 		}
 		if len(changes) == 0 {
+			s.scanMu.Unlock()
 			continue
 		}
 		s.mu.Lock()
@@ -395,6 +400,7 @@ func (s *fileWatchSource) watch(ctx context.Context, backend nativeWatchBackend,
 			s.queuedItems += len(changes)
 		case <-ctx.Done():
 			s.mu.Unlock()
+			s.scanMu.Unlock()
 			return
 		default:
 			// The consumer is behind. Drop the observation and require a
@@ -402,6 +408,7 @@ func (s *fileWatchSource) watch(ctx context.Context, backend nativeWatchBackend,
 			s.overflow = true
 		}
 		s.mu.Unlock()
+		s.scanMu.Unlock()
 	}
 }
 
@@ -445,6 +452,14 @@ func (s *fileWatchSource) next(ctx context.Context) (any, bool, error) {
 			return nil, false, err
 		}
 		if s.overflow {
+			s.mu.Unlock()
+			s.scanMu.Lock()
+			s.mu.Lock()
+			if !s.overflow {
+				s.mu.Unlock()
+				s.scanMu.Unlock()
+				continue
+			}
 			// An overflow invalidates every earlier observation, including a
 			// batch still occupying the queue. The consumer must rescan, and
 			// freeing the queue lets future changes arrive after that rescan.
@@ -455,6 +470,7 @@ func (s *fileWatchSource) next(ctx context.Context) (any, bool, error) {
 			}
 			s.queuedItems = 0
 			s.mu.Unlock()
+			s.scanMu.Unlock()
 			return watchChange{path: s.spec.rootDisplay, rel: ".", kind: changeOverflowed, entryKind: otherKind, observed: time.Now()}.value(), true, nil
 		}
 		if len(s.pending) > 0 {

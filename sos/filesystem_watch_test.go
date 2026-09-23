@@ -48,6 +48,28 @@ func TestFileWatchOverflowDiscardsStaleQueueAndAllowsFutureChanges(t *testing.T)
 	}
 }
 
+func TestFileWatchOverflowWaitsForInFlightReconciliation(t *testing.T) {
+	source := &fileWatchSource{spec: traversalSpec{rootDisplay: "watched"}, queue: make(chan []watchChange, 1), overflow: true}
+	source.scanMu.Lock()
+	delivered := make(chan struct{})
+	go func() {
+		_, _, _ = source.next(context.Background())
+		close(delivered)
+	}()
+	select {
+	case <-delivered:
+		source.scanMu.Unlock()
+		t.Fatal("overflow was delivered while reconciliation was still in flight")
+	case <-time.After(10 * time.Millisecond):
+	}
+	source.scanMu.Unlock()
+	select {
+	case <-delivered:
+	case <-time.After(time.Second):
+		t.Fatal("overflow did not arrive after reconciliation completed")
+	}
+}
+
 // watchFor drains the watcher until keep returns true or the deadline passes.
 func watchFor(t *testing.T, source *fileWatchSource, deadline time.Duration, keep func([]map[string]any) bool) ([]map[string]any, error) {
 	t.Helper()
