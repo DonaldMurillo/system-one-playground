@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -108,6 +109,15 @@ func TestFileWatchOverflowRebasesProducerBeforeReturning(t *testing.T) {
 	changes := diffWatchSnapshots(spec, source.previous, current, time.Now())
 	if len(changes) != 1 || changes[0].kind != changeCreated || changes[0].rel != "after.txt" {
 		t.Fatalf("post-overflow diff = %#v", changes)
+	}
+}
+
+func TestWatchFailureReportsRemovedRootAsNotFound(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "removed")
+	source := &fileWatchSource{spec: traversalSpec{root: root, rootDisplay: root}}
+	var failure *typedFailure
+	if err := source.watchFailure(syscall.EACCES); !errors.As(err, &failure) || failure.kind != "FileNotFound" {
+		t.Fatalf("removed-root failure = %#v", err)
 	}
 }
 

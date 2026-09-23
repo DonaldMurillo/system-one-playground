@@ -3,42 +3,37 @@
 package sos
 
 import (
-	goruntime "runtime"
+	"fmt"
+	"os"
 	"sync"
 	"syscall"
 	"time"
 	"unsafe"
 )
 
-// The Windows backend turns ReadDirectoryChangesW notifications into
-// reconciliation triggers. One recursive handle on the root reports the whole
-// subtree — including per-file writes — so there is no per-entry registration
-// and sync is a no-op. The read is issued synchronously on a locked OS thread;
-// close cancels that thread's I/O before closing the directory handle.
+// A recursive change-notification handle is armed synchronously before the
+// watcher is returned. This avoids losing a change made immediately after
+// startup (a blocked ReadDirectoryChangesW goroutine cannot promise that).
+// The handle only triggers reconciliation; snapshot diffs define the records.
+// WaitForSingleObject uses a short bounded wait so close never depends on
+// canceling a synchronous kernel read.
+
+const watchNotifyFilter = 0x0001 | 0x0002 | 0x0004 | 0x0008 | 0x0010 | 0x0040
+const watchWaitMilliseconds = 100
 
 var (
-	watchGetCurrentThread    = syscall.NewLazyDLL("kernel32.dll").NewProc("GetCurrentThread")
-	watchCancelSynchronousIO = syscall.NewLazyDLL("kernel32.dll").NewProc("CancelSynchronousIo")
-)
-
-const (
-	// FILE_LIST_DIRECTORY: the access required for directory-change reads.
-	watchFileListDirectory = 0x0001
-	// FILE_NOTIFY_CHANGE_FILE_NAME | DIR_NAME | ATTRIBUTES | SIZE |
-	// LAST_WRITE | CREATION: everything a snapshot diff can observe.
-	watchNotifyFilter = 0x0001 | 0x0002 | 0x0004 | 0x0008 | 0x0010 | 0x0040
-	// ERROR_NOTIFY_ENUM_DIR: the kernel's notify buffer overflowed and the
-	// reported change list is incomplete.
-	watchNotifyEnumDir = syscall.Errno(1022)
+	watchFirstChange = syscall.NewLazyDLL("kernel32.dll").NewProc("FindFirstChangeNotificationW")
+	watchNextChange  = syscall.NewLazyDLL("kernel32.dll").NewProc("FindNextChangeNotification")
+	watchCloseChange = syscall.NewLazyDLL("kernel32.dll").NewProc("FindCloseChangeNotification")
 )
 
 type windowsBackend struct {
-	handle       syscall.Handle
-	triggers     chan nativeWatchEvent
-	done         chan struct{}
-	readerDone   chan struct{}
-	readerThread chan syscall.Handle
-	closeOnce    sync.Once
+	root       string
+	handle     syscall.Handle
+	triggers   chan nativeWatchEvent
+	done       chan struct{}
+	readerDone chan struct{}
+	closeOnce  sync.Once
 }
 
 func newNativeWatchBackend(spec traversalSpec, _ time.Duration, _ map[string]watchEntry) (nativeWatchBackend, error) {
@@ -46,18 +41,16 @@ func newNativeWatchBackend(spec traversalSpec, _ time.Duration, _ map[string]wat
 	if err != nil {
 		return nil, fileOpError(err, spec.rootDisplay, traverseOp)
 	}
-	handle, err := syscall.CreateFile(root, watchFileListDirectory,
-		syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE|syscall.FILE_SHARE_DELETE,
-		nil, syscall.OPEN_EXISTING, syscall.FILE_FLAG_BACKUP_SEMANTICS, 0)
-	if err != nil {
-		return nil, fileOpError(err, spec.rootDisplay, traverseOp)
+	raw, _, callErr := watchFirstChange.Call(uintptr(unsafe.Pointer(root)), 1, watchNotifyFilter)
+	if syscall.Handle(raw) == syscall.InvalidHandle {
+		return nil, fileOpError(callErr, spec.rootDisplay, traverseOp)
 	}
 	backend := &windowsBackend{
-		handle:       handle,
-		triggers:     make(chan nativeWatchEvent, 64),
-		done:         make(chan struct{}),
-		readerDone:   make(chan struct{}),
-		readerThread: make(chan syscall.Handle, 1),
+		root:       spec.root,
+		handle:     syscall.Handle(raw),
+		triggers:   make(chan nativeWatchEvent, 64),
+		done:       make(chan struct{}),
+		readerDone: make(chan struct{}),
 	}
 	go backend.read()
 	return backend, nil
@@ -65,33 +58,14 @@ func newNativeWatchBackend(spec traversalSpec, _ time.Duration, _ map[string]wat
 
 func (b *windowsBackend) events() <-chan nativeWatchEvent { return b.triggers }
 
-// sync is a no-op: the recursive root handle already reports the whole tree.
+// One recursive notification handle already covers entries created later.
 func (b *windowsBackend) sync(traversalSpec, map[string]watchEntry) error { return nil }
 
 func (b *windowsBackend) close() error {
 	b.closeOnce.Do(func() {
 		close(b.done)
-		thread := <-b.readerThread
-		if thread != 0 {
-			// A shutdown can race the next synchronous read beginning. Keep
-			// canceling until the reader confirms exit, including that window.
-			ticker := time.NewTicker(10 * time.Millisecond)
-			defer ticker.Stop()
-			for {
-				_, _, _ = watchCancelSynchronousIO.Call(uintptr(thread))
-				select {
-				case <-b.readerDone:
-					goto stopped
-				case <-ticker.C:
-				}
-			}
-		}
 		<-b.readerDone
-	stopped:
-		if thread != 0 {
-			_ = syscall.CloseHandle(thread)
-		}
-		_ = syscall.CloseHandle(b.handle)
+		_, _, _ = watchCloseChange.Call(uintptr(b.handle))
 	})
 	return nil
 }
@@ -99,72 +73,49 @@ func (b *windowsBackend) close() error {
 func (b *windowsBackend) read() {
 	defer close(b.readerDone)
 	defer close(b.triggers)
-	goruntime.LockOSThread()
-	defer goruntime.UnlockOSThread()
-	process, err := syscall.GetCurrentProcess()
-	if err != nil {
-		b.readerThread <- 0
-		b.triggers <- nativeWatchEvent{failure: err}
-		return
-	}
-	pseudoThread, _, _ := watchGetCurrentThread.Call()
-	var thread syscall.Handle
-	if err := syscall.DuplicateHandle(process, syscall.Handle(pseudoThread), process, &thread, 0, false, syscall.DUPLICATE_SAME_ACCESS); err != nil {
-		b.readerThread <- 0
-		b.triggers <- nativeWatchEvent{failure: err}
-		return
-	}
-	b.readerThread <- thread
-	// ReadDirectoryChangesW requires a DWORD-aligned buffer (otherwise it
-	// fails with ERROR_NOACCESS). A byte array has no such alignment promise.
-	var buffer [64 * 1024 / 4]uint32
 	for {
 		select {
 		case <-b.done:
 			return
 		default:
 		}
-		var filled uint32
-		err := syscall.ReadDirectoryChanges(b.handle, (*byte)(unsafe.Pointer(&buffer[0])), uint32(unsafe.Sizeof(buffer)), true, watchNotifyFilter, &filled, nil, 0)
-		select {
-		case <-b.done:
-			return
-		default:
-		}
+		state, err := syscall.WaitForSingleObject(b.handle, watchWaitMilliseconds)
 		if err != nil {
-			if err == syscall.ERROR_OPERATION_ABORTED {
-				return
-			}
-			if err != watchNotifyEnumDir {
-				// Preserve the Windows error for the stream's terminal
-				// failure; a scan cannot repair a failed native handle.
-				select {
-				case b.triggers <- nativeWatchEvent{failure: err}:
-				case <-b.done:
-				}
-				return
-			}
-			select {
-			case b.triggers <- nativeWatchEvent{overflow: true}:
-			case <-b.done:
-				return
-			}
-			continue
-		}
-		if filled == 0 {
-			// Windows can report an overflowing notification buffer as a
-			// successful read with zero bytes. A rescan is mandatory.
-			select {
-			case b.triggers <- nativeWatchEvent{overflow: true}:
-			case <-b.done:
-				return
-			}
-			continue
-		}
-		select {
-		case b.triggers <- nativeWatchEvent{}:
-		case <-b.done:
+			b.fail(err)
 			return
 		}
+		switch state {
+		case syscall.WAIT_TIMEOUT:
+			// The API does not report removal of the watched directory itself.
+			// A bounded root check makes that a terminal stream failure.
+			if _, err := os.Stat(b.root); err != nil {
+				b.fail(err)
+				return
+			}
+			continue
+		case syscall.WAIT_OBJECT_0:
+			// Rearm before handing the trigger to the scanner. Windows retains
+			// changes between the signal and this call, so none are lost there.
+			ok, _, callErr := watchNextChange.Call(uintptr(b.handle))
+			if ok == 0 {
+				b.fail(callErr)
+				return
+			}
+			select {
+			case b.triggers <- nativeWatchEvent{}:
+			case <-b.done:
+				return
+			}
+		default:
+			b.fail(fmt.Errorf("unexpected directory notification wait state %d", state))
+			return
+		}
+	}
+}
+
+func (b *windowsBackend) fail(err error) {
+	select {
+	case b.triggers <- nativeWatchEvent{failure: err}:
+	case <-b.done:
 	}
 }

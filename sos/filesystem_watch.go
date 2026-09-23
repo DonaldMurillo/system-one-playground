@@ -2,6 +2,7 @@ package sos
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -328,6 +329,20 @@ func (s *fileWatchSource) signalEnd() {
 	s.endOnce.Do(func() { close(s.endCh) })
 }
 
+func (s *fileWatchSource) watchFailure(err error) error {
+	// Windows can return access denied from a still-open directory handle
+	// after the watched root has been removed. Its path is gone, so report
+	// the portable FileNotFound failure promised by the watch contract.
+	if _, statErr := os.Stat(s.spec.root); errors.Is(statErr, os.ErrNotExist) {
+		return fileOpError(statErr, s.spec.rootDisplay, traverseOp)
+	}
+	var typed *typedFailure
+	if errors.As(err, &typed) {
+		return err
+	}
+	return fileOpError(err, s.spec.rootDisplay, traverseOp)
+}
+
 // watch drives one opened watcher. Platform notifications are the primary
 // trigger: each burst is settled and answered with one bounded
 // reconciliation scan whose diff becomes the next batch, then the backend is
@@ -359,7 +374,7 @@ func (s *fileWatchSource) watch(ctx context.Context, backend nativeWatchBackend)
 		}
 		if trigger.failure != nil {
 			s.mu.Lock()
-			s.terminalErr = fileOpError(trigger.failure, s.spec.rootDisplay, traverseOp)
+			s.terminalErr = s.watchFailure(trigger.failure)
 			s.mu.Unlock()
 			s.signalEnd()
 			return
@@ -369,7 +384,7 @@ func (s *fileWatchSource) watch(ctx context.Context, backend nativeWatchBackend)
 		if readErr != nil {
 			s.scanMu.Unlock()
 			s.mu.Lock()
-			s.terminalErr = fileOpError(readErr, s.spec.rootDisplay, traverseOp)
+			s.terminalErr = s.watchFailure(readErr)
 			s.mu.Unlock()
 			s.signalEnd()
 			return
@@ -381,7 +396,7 @@ func (s *fileWatchSource) watch(ctx context.Context, backend nativeWatchBackend)
 				return // canceled mid-scan: a clean stop, not a failure
 			}
 			s.mu.Lock()
-			s.terminalErr = err
+			s.terminalErr = s.watchFailure(err)
 			s.mu.Unlock()
 			s.signalEnd()
 			return
