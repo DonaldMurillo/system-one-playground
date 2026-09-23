@@ -6,6 +6,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unsafe"
 )
 
 // The Windows backend turns ReadDirectoryChangesW notifications into
@@ -73,10 +74,12 @@ func (b *windowsBackend) close() error {
 func (b *windowsBackend) read() {
 	defer close(b.readerDone)
 	defer close(b.triggers)
-	var buffer [64 * 1024]byte
+	// ReadDirectoryChangesW requires a DWORD-aligned buffer (otherwise it
+	// fails with ERROR_NOACCESS). A byte array has no such alignment promise.
+	var buffer [64 * 1024 / 4]uint32
 	for {
 		var filled uint32
-		err := syscall.ReadDirectoryChanges(b.handle, &buffer[0], uint32(len(buffer)), true, watchNotifyFilter, &filled, nil, 0)
+		err := syscall.ReadDirectoryChanges(b.handle, (*byte)(unsafe.Pointer(&buffer[0])), uint32(unsafe.Sizeof(buffer)), true, watchNotifyFilter, &filled, nil, 0)
 		select {
 		case <-b.done:
 			return
