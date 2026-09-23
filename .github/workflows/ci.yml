@@ -42,7 +42,9 @@ jobs:
         run: pnpm --dir vscode check
       - if: runner.os == 'Linux'
         run: pnpm --dir vscode test
-      - run: go generate ./internal/sosbuild
+      - run: go generate ./sos ./internal/sosbuild
+      - if: runner.os == 'Linux'
+        run: git diff --exit-code -- sos/semantic_lexicon_generated.go internal/sosbuild/sources.zip
       - run: go test ./...
       - run: go vet ./...
       - run: go test -race ./sos ./tests/e2e -count=1 -timeout=300s
