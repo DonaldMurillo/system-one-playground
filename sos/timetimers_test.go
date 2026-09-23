@@ -24,6 +24,22 @@ func consumeTick(t *testing.T, timer interface {
 	}()
 	advanced := time.Duration(0)
 	deadline := time.Now().Add(3 * time.Second)
+	if wait > 0 {
+		// Next arms a virtual timer on its own goroutine. Advancing before
+		// that registration can move virtual time past the requested instant,
+		// making the test depend on scheduler speed rather than timer behavior.
+		for clock.timerCount() == 0 && time.Now().Before(deadline) {
+			select {
+			case r := <-out:
+				if r.err != nil {
+					t.Fatalf("Next: %v", r.err)
+				}
+				return r.tick
+			default:
+				time.Sleep(time.Millisecond)
+			}
+		}
+	}
 	for time.Now().Before(deadline) {
 		select {
 		case r := <-out:

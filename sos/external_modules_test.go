@@ -1021,7 +1021,9 @@ func TestStdioStreamDeadlineStopsUnconsumedProducer(t *testing.T) {
 			action = candidate
 		}
 	}
-	action.Timeout = "150ms"
+	// The deadline should exercise an already-running producer, not race
+	// Python process startup on a loaded Windows CI runner.
+	action.Timeout = "1s"
 	policy := sosconfig.Effective{ExternalProcess: true}
 	session := newExternalSessionKey()
 	defer definition.closeSession(session)
@@ -1030,7 +1032,7 @@ func TestStdioStreamDeadlineStopsUnconsumedProducer(t *testing.T) {
 		t.Fatal(err)
 	}
 	stream := source.(*stdioProtocolStream)
-	deadline := time.Now().Add(time.Second)
+	deadline := time.Now().Add(3 * time.Second)
 	for !stream.done.Load() && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
 	}
