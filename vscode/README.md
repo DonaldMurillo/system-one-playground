@@ -17,7 +17,7 @@ go build -o vscode/bin/sos ./cmd/sos
 pnpm --dir vscode check
 pnpm --dir vscode test
 pnpm --dir vscode package
-code --install-extension vscode/sysonescript-vscode-0.5.0.vsix
+code --install-extension vscode/sysonescript-vscode-0.5.1.vsix
 ```
 
 Marketplace releases include a platform-matched `sos` language-server binary,
@@ -181,11 +181,15 @@ The repository has a release workflow at
    reviewers. The secret is not available until that approval is granted.
 
 For each release, update `version` and `CHANGELOG.md`, commit the changes, and
-push a tag such as `vscode-v0.5.0`:
+regenerate the standalone compiler bundle with
+`go generate ./sos ./internal/sosbuild`. Commit any generated changes before
+tagging. Check that regeneration leaves no diff and that
+`node vscode/test/release-contract.js` passes, then push a tag such as
+`vscode-v0.5.1`:
 
 ```sh
-git tag vscode-v0.5.0
-git push origin vscode-v0.5.0
+git tag vscode-v0.5.1
+git push origin vscode-v0.5.1
 ```
 
 The workflow checks and tests the extension, builds platform-matched `sos`

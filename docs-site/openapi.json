@@ -2,7 +2,7 @@
   "openapi": "3.0.3",
   "info": {
     "title": "SysOneScript documentation",
-    "version": "0.5.0",
+    "version": "0.5.1",
     "description": "Reserved for a future HTTP API reference. Studio agent interfaces are documented under /docs/agent-interface."
   },
   "paths": {}

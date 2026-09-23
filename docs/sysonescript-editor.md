@@ -29,7 +29,7 @@ go generate ./internal/sosbuild
 mkdir -p vscode/bin
 go build -o vscode/bin/sos ./cmd/sos
 pnpm --dir vscode package
-code --install-extension vscode/sysonescript-vscode-0.5.0.vsix
+code --install-extension vscode/sysonescript-vscode-0.5.1.vsix
 ```
 
 Marketplace releases bundle a platform-matched `sos` language-server binary,
@@ -193,7 +193,7 @@ Access Token with Marketplace **Manage** scope saved as `VSCE_PAT` on a
 protected GitHub environment named `marketplace`; without it, CI produces the
 same platform VSIX files for manual Marketplace upload. Then
 bump `vscode/package.json` and `vscode/CHANGELOG.md` together. Pushing a tag
-like `vscode-v0.5.0` runs the checks, builds the platform bundles, waits for
+like `vscode-v0.5.1` runs the checks, builds the platform bundles, waits for
 approval, and publishes the matching version. The first publisher, token, and
 GitHub environment setup are account-level actions; they cannot be completed
 from the repository alone.

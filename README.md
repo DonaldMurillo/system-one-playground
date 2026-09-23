@@ -14,13 +14,13 @@ CLI or VS Code extension.
 Install the latest standalone CLI on macOS or Linux:
 
 ```sh
-curl -fsSL https://github.com/DonaldMurillo/system-one-playground/releases/download/vscode-v0.5.0/install.sh | sh
+curl -fsSL https://github.com/DonaldMurillo/system-one-playground/releases/download/vscode-v0.5.1/install.sh | sh
 ```
 
 On Windows PowerShell:
 
 ```powershell
-irm https://github.com/DonaldMurillo/system-one-playground/releases/download/vscode-v0.5.0/install.ps1 | iex
+irm https://github.com/DonaldMurillo/system-one-playground/releases/download/vscode-v0.5.1/install.ps1 | iex
 ```
 
 Both installers detect the platform, verify the release checksum, and install

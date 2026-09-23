@@ -2,8 +2,9 @@
 
 ## Unreleased
 
-## 0.5.0
+## 0.5.1
 
+- First published 0.5-line build; the protected 0.5.0 tag failed release verification before any packages were published.
 - Adds a live Streams view, per-stream stop controls, and a dedicated lifecycle output channel for run and debug sessions.
 - Keeps stream inspection non-consuming and reports runtime-owned counters, credit, producer identity, terminal state, and failures.
 - Adds the initial filesystem, HTTP, and time standard-library surfaces with runnable examples, shared runtime support, and editor integration. The broader specifications remain in progress.
