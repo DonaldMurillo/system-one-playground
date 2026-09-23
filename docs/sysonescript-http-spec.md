@@ -1,6 +1,6 @@
 # HTTP clients and services
 
-Status: approved design; implementation pending
+Status: core HTTP client/server behavior integrated for 0.5; streaming responses, SSE, WebSockets, and full acceptance remain planned.
 
 This specification defines HTTP client requests, server listeners, routing,
 request and response ownership, bounded bodies, graceful shutdown, and the

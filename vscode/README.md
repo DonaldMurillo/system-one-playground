@@ -17,7 +17,7 @@ go build -o vscode/bin/sos ./cmd/sos
 pnpm --dir vscode check
 pnpm --dir vscode test
 pnpm --dir vscode package
-code --install-extension vscode/sysonescript-vscode-0.4.0.vsix
+code --install-extension vscode/sysonescript-vscode-0.5.0.vsix
 ```
 
 Marketplace releases include a platform-matched `sos` language-server binary,
@@ -85,7 +85,10 @@ Long-running runs remain cancellable from **Stop processes**, which also closes
 their owned streams. Inspecting a stream in Variables never advances its
 producer. The **Streams** view shows live runtime snapshots and offers an
 individual **Stop stream** action; **SysOneScript Streams** records lifecycle
-events without logging program-visible stream items.
+events without logging program-visible stream items. The view places **Refresh
+streams** and **Show lifecycle log** below its title. Finished run sessions
+disappear from the live view automatically; while a run continues, **Clear
+finished streams** dismisses terminal rows without stopping live producers.
 The `.sos` mark is contributed as a language-default icon, allowing compatible
 file-icon packs to display it without replacing the active pack. A pack's own
 `.sos` mapping takes precedence, and packs can disable language-mode icons. The
@@ -101,7 +104,8 @@ workspace settings or shown in output. The runtime-facing environment name is
 `TYPESAFE_API_KEY`; existing process and project `.env` configuration remains
 supported. The panel row shows the credential source and performs setup
 directly; **Clear Jev Token** appears there when VS Code owns the stored secret.
-Only Refresh remains in the panel title bar, avoiding duplicate action buttons.
+**Refresh project** is a row below the active project status, leaving the
+Project heading unobstructed.
 The panel also links to the optional standalone CLI downloads; the extension
 does not silently modify the user's PATH.
 It compares the bundled runtime with `sysone` on `PATH`, shows both versions in
@@ -177,11 +181,11 @@ The repository has a release workflow at
    reviewers. The secret is not available until that approval is granted.
 
 For each release, update `version` and `CHANGELOG.md`, commit the changes, and
-push a tag such as `vscode-v0.4.0`:
+push a tag such as `vscode-v0.5.0`:
 
 ```sh
-git tag vscode-v0.4.0
-git push origin vscode-v0.4.0
+git tag vscode-v0.5.0
+git push origin vscode-v0.5.0
 ```
 
 The workflow checks and tests the extension, builds platform-matched `sos`

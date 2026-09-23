@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"github.com/DonaldMurillo/system-one-playground/sos"
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
@@ -27,7 +28,7 @@ func TestSysoneUpdateCheckUsesPublishedCLIReleases(t *testing.T) {
 		t.Fatalf("update --check: %v %s", err, output)
 	}
 	text := string(output)
-	if !strings.Contains(text, "0.6.1 is available") || !strings.Contains(text, "you have 0.4.0") {
+	if !strings.Contains(text, "0.6.1 is available") || !strings.Contains(text, "you have "+sos.Version) {
 		t.Fatalf("unexpected update output: %s", text)
 	}
 }

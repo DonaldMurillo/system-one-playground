@@ -29,7 +29,7 @@ go generate ./internal/sosbuild
 mkdir -p vscode/bin
 go build -o vscode/bin/sos ./cmd/sos
 pnpm --dir vscode package
-code --install-extension vscode/sysonescript-vscode-0.4.0.vsix
+code --install-extension vscode/sysonescript-vscode-0.5.0.vsix
 ```
 
 Marketplace releases bundle a platform-matched `sos` language-server binary,
@@ -90,6 +90,8 @@ breakpoints, logpoints, continue/pause/stop/restart controls, stepping,
 call-stack frames, locals, read-only expression evaluation, and runtime/trace
 output. The runtime supplies source locations and snapshots; the extension is
 not simulating a debugger from terminal text.
+Stopping a debug session intentionally cancels its run and reports a clean
+stopped session, without a spurious `context canceled` application error.
 
 Use **SysOneScript: Set Jev Token** to store `TYPESAFE_API_KEY` in VS Code's
 encrypted SecretStorage. The value is injected into the language server,
@@ -98,8 +100,9 @@ extension output or Variables view. Existing process and project `.env`
 configuration remains valid. The project panel's **Set Jev token** row performs
 the same setup directly and displays whether the credential comes from VS Code
 or the environment. **Clear Jev Token** appears in the panel for a VS
-Code-managed token and removes only the extension's stored secret. The view
-title bar contains Refresh only; Run and Jev are not duplicated there.
+Code-managed token and removes only the extension's stored secret. The Project
+heading stays clear; **Refresh project** is a row below the active project
+status, alongside the other actions.
 
 Registered external modules appear in a separate project-control group. Each
 module offers **Open definition**, an offline **Check definition**, and an
@@ -118,8 +121,13 @@ item. Studio's **Streams** tab and VS Code's **Streams** view update live from
 the same non-consuming runtime snapshots. Each stream exposes **Stop stream**,
 which gracefully ends that stream and continues the program below its loop.
 The lifecycle view/output records open, reading, completion, stop, cancellation,
-and failure events. Use **Stop processes** to cancel the whole run and all of
-its producers.
+and failure events. In VS Code, finished runs leave the live **Streams** view
+automatically; their lifecycle history remains in the **SysOneScript Streams**
+Output channel. **Refresh streams** and **Show lifecycle log** are rows directly
+below the Streams heading, with **Clear finished streams** available when a
+running session contains terminal streams. Clearing only dismisses those rows
+for that run; it does not stop live producers. Use **Stop processes** to cancel
+the whole run and all of its producers.
 
 Project helpers and generators are configured in `.vscode/sysonescript.json`:
 
@@ -185,7 +193,7 @@ Access Token with Marketplace **Manage** scope saved as `VSCE_PAT` on a
 protected GitHub environment named `marketplace`; without it, CI produces the
 same platform VSIX files for manual Marketplace upload. Then
 bump `vscode/package.json` and `vscode/CHANGELOG.md` together. Pushing a tag
-like `vscode-v0.4.0` runs the checks, builds the platform bundles, waits for
+like `vscode-v0.5.0` runs the checks, builds the platform bundles, waits for
 approval, and publishes the matching version. The first publisher, token, and
 GitHub environment setup are account-level actions; they cannot be completed
 from the repository alone.

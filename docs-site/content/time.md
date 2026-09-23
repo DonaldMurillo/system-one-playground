@@ -2,7 +2,7 @@
 
 Canonical, checked wording for reading the clock, waiting, repeating work,
 calendar schedules, and deadlines. The full design is
-[full time specification](https://github.com/DonaldMurillo/system-one-playground/blob/main/docs/sysonescript-time-spec.md); this page is the user
+[time design specification](https://github.com/DonaldMurillo/system-one-playground/blob/main/docs/sysonescript-time-spec.md); this page is the user
 guide. Use `sos capabilities` to inspect clock and time-zone support on the
 current target.
 
@@ -124,7 +124,10 @@ date order, no two-digit years. Custom layouts exist only through technical
 
 Test harnesses may `advance test time by 10 minutes` on a deterministic virtual
 clock instead of sleeping. Advancing runs due timers in scheduled-time order
-and drives waits, timers, deadlines, and calendar schedules. Virtual time never
+and drives waits, timer streams, stream transformations, deadlines, and calendar
+schedules through the same runtime clock. Embedders inject `VirtualClock` into
+the run; `VirtualStreamClock` is a separate low-level helper for testing a
+stream transformation without starting a language run. Virtual time never
 covers uncontrolled processes, file watchers, DNS, or sockets; tests use
 adapters at those boundaries.
 

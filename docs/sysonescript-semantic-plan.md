@@ -101,6 +101,47 @@ adapter may target the existing canonical program; validate the adapter and
 retain original source spans. Do not turn cached text fragments into unchecked
 executable source.
 
+## Readable failure sentences (proposed)
+
+Exact aliases alone will not make SysOneScript approachable to someone who does
+not know its grammar. In particular, a beginner should not have to name a
+failure type merely to handle any failure from the preceding operation. The
+implemented catch-all is `on failure:`; a typed `on failure InvalidHttpBody:`
+is an optional narrowing, not the default requirement. Neither `on error:` nor
+`with failure ...` is currently accepted syntax.
+
+The semantic writing layer should consider phrasing such as the following
+**proposed, non-executable example**:
+
+```text
+read the JSON body of request as Incoming and call it incoming
+if that fails, tell the client the body was invalid
+```
+
+Resolution must use the immediately preceding operation, its possible failure
+kinds, visible bindings, and the surrounding HTTP request context to retrieve
+bounded, registered constructions. `if that fails` can refer to a catch-all
+handler without inventing a failure type. `on error:` may be added as a
+deterministic synonym for `on failure:`, but that alias alone is not the
+semantic-matching feature. Other unfamiliar sentence shapes may need a bounded
+Jev choice or acceptance check under the configured interpretation policy.
+
+The resolver must distinguish **displaying a message in run output** from
+**sending an HTTP response**. It must also make the handler outcome explicit:
+recover with a valid replacement result, pass the failure onward, or terminate
+the action. It must never lower a bare `show` and then continue into code that
+uses a result the failed operation did not produce. If intent, response status,
+or control flow is unclear, report alternatives and ask for a choice; do not
+silently guess. In an HTTP request handler, an unhandled invalid-body failure
+already receives the server's bounded 4xx fallback and the listener continues.
+
+Editor analysis should show the chosen canonical form, bindings, confidence,
+provenance, and request usage before a user applies the precise form. Exact
+registered wording should resolve locally at zero provider cost; unfamiliar
+wording or ambiguity follows the bounded semantic pipeline above. The final
+lowered program must pass the canonical checker, and a saved or packaged
+interpretation must remain pinned to that reviewed meaning.
+
 ## Budget authority and usage ledger
 
 Track editor, interpretation, and runtime spending separately and against an

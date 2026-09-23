@@ -2,8 +2,13 @@
 
 ## Unreleased
 
+## 0.5.0
+
 - Adds a live Streams view, per-stream stop controls, and a dedicated lifecycle output channel for run and debug sessions.
 - Keeps stream inspection non-consuming and reports runtime-owned counters, credit, producer identity, terminal state, and failures.
+- Adds the initial filesystem, HTTP, and time standard-library surfaces with runnable examples, shared runtime support, and editor integration. The broader specifications remain in progress.
+- Keeps long-running project runs and HTTP services visible and stoppable from VS Code; isolates malformed HTTP requests so the listener can continue.
+- Moves Project and Streams actions below their headings, and removes finished run sessions from the live Streams view while retaining lifecycle output.
 
 ## 0.4.0
 

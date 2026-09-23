@@ -2,7 +2,7 @@
   "name": "sysonescript-vscode",
   "displayName": "SysOneScript",
   "description": "Language support for SysOneScript (.sos) with the native SysOneScript language server.",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "publisher": "donaldmurillo",
   "packageManager": "pnpm@9.15.9",
   "icon": "icon.png",
@@ -43,6 +43,7 @@
     "onCommand:sysonescript.stopStream",
     "onCommand:sysonescript.refreshStreams",
     "onCommand:sysonescript.showStreamsOutput",
+    "onCommand:sysonescript.clearFinishedStreams",
     "onCommand:sysonescript.checkProject",
     "onCommand:sysonescript.buildProject",
     "onCommand:sysonescript.explainFile",
@@ -313,6 +314,11 @@
         "category": "SysOneScript"
       },
       {
+        "command": "sysonescript.clearFinishedStreams",
+        "title": "SysOneScript: Clear Finished Streams",
+        "category": "SysOneScript"
+      },
+      {
         "command": "sysonescript.setJevToken",
         "title": "SysOneScript: Set Jev Token",
         "category": "SysOneScript"
@@ -443,23 +449,6 @@
           "command": "sysonescript.runProject",
           "when": "resourceFilename == sos.toml",
           "group": "navigation@3"
-        }
-      ],
-      "view/title": [
-        {
-          "command": "sysonescript.refresh",
-          "when": "view == sysonescript.project",
-          "group": "navigation@2"
-        },
-        {
-          "command": "sysonescript.refreshStreams",
-          "when": "view == sysonescript.streams",
-          "group": "navigation@1"
-        },
-        {
-          "command": "sysonescript.showStreamsOutput",
-          "when": "view == sysonescript.streams",
-          "group": "navigation@2"
         }
       ],
       "view/item/context": [

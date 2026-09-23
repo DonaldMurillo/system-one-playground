@@ -1,6 +1,6 @@
 # Public preview release
 
-System One Playground is prepared as a **0.6 source preview** under MIT.
+System One Playground is prepared as a **0.5 SysOneScript preview** under MIT.
 Repository: `https://github.com/DonaldMurillo/system-one-playground`.
 Documentation: `https://donaldmurillo.github.io/system-one-playground/`.
 
@@ -15,8 +15,10 @@ Documentation: `https://donaldmurillo.github.io/system-one-playground/`.
 
 ## Preview boundaries
 
-No cross-platform binary installers are published. Desktop packaging has been
-checked locally on macOS; other target platforms still need native validation.
+GitHub Releases provide checksummed cross-platform CLI archives and installer
+scripts; the VS Code Marketplace provides platform-specific extensions with a
+bundled runtime. Native desktop installers are not published. Desktop packaging
+has been checked locally on macOS; other target platforms still need native validation.
 Do not present this preview as a stable 1.0 release. Paid live API tests are
 opt-in and do not run in CI. Request/time limits are not monetary spending caps.
 

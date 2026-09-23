@@ -753,6 +753,7 @@ class SysOneScriptTreeProvider {
 		if (!element) {
 			const items = [
         new SysOneScriptItem(`Project · ${path.basename(root)}`, vscode.TreeItemCollapsibleState.None, 'projectStatus', root, undefined, 'rocket', `${entrypointDescription(root)} · ${root}`),
+        new SysOneScriptItem('Refresh project', vscode.TreeItemCollapsibleState.None, 'projectAction', root, { command: 'sysonescript.refresh', title: 'Refresh Project' }, 'refresh'),
         new SysOneScriptItem('Welcome & setup', vscode.TreeItemCollapsibleState.None, 'projectAction', root, { command: 'sysonescript.openWelcome', title: 'Open SysOneScript Welcome' }, 'sparkle'),
 			]
 			if (!vscode.workspace.isTrusted) {
@@ -812,19 +813,33 @@ class StreamsTreeProvider {
   getTreeItem(element) { return element }
   getChildren(element) {
     const state = extensionState
-    if (!vscode.workspace.workspaceFolders?.length) return [this.message('Open a folder to see SysOneScript streams', 'info')]
-    if (!vscode.workspace.isTrusted) return [this.message('Trust the workspace to run and inspect streams', 'lock')]
-    const sessions = state.streamStore.sessionsList()
-    if (!sessions.length) return [this.message('No active streams', 'circle-slash', 'Run or debug a project to watch streams live')]
-    if (!element && sessions.length > 1) return sessions.map(session => {
-      const item = new SysOneScriptItem(session.label || session.session, vscode.TreeItemCollapsibleState.Expanded, 'streamSession', session.root, undefined, session.status === 'running' ? 'pulse' : 'history', path.basename(session.root || ''))
-      item.session = session.session
-      return item
-    })
-    const session = element?.kind === 'streamSession' ? sessions.find(item => item.session === element.session) : sessions[0]
+    if (element && element.kind !== 'streamSession') return []
+    if (!element && !vscode.workspace.workspaceFolders?.length) return [this.message('Open a folder to see SysOneScript streams', 'info')]
+    if (!element && !vscode.workspace.isTrusted) return [this.message('Trust the workspace to run and inspect streams', 'lock')]
+    const sessions = state.streamStore.activeSessions()
+    if (!element) {
+      const actions = [
+        new SysOneScriptItem('Refresh streams', vscode.TreeItemCollapsibleState.None, 'streamAction', undefined, {command:'sysonescript.refreshStreams', title:'Refresh Streams'}, 'refresh'),
+        new SysOneScriptItem('Show lifecycle log', vscode.TreeItemCollapsibleState.None, 'streamAction', undefined, {command:'sysonescript.showStreamsOutput', title:'Show Stream Lifecycle'}, 'output'),
+      ]
+      if (state.streamStore.hasFinished()) {
+        actions.push(new SysOneScriptItem('Clear finished streams', vscode.TreeItemCollapsibleState.None, 'streamAction', undefined, {command:'sysonescript.clearFinishedStreams', title:'Clear Finished Streams'}, 'clear-all'))
+      }
+      if (!sessions.length) return [...actions, this.message('No active streams', 'circle-slash', 'Run or debug a project to watch streams live')]
+      if (sessions.length === 1) return [...actions, ...this.streamItems(sessions[0])]
+      return [...actions, ...sessions.map(session => {
+        const item = new SysOneScriptItem(session.label || session.session, vscode.TreeItemCollapsibleState.Expanded, 'streamSession', session.root, undefined, 'pulse', path.basename(session.root || ''))
+        item.session = session.session
+        return item
+      })]
+    }
+    const session = sessions.find(item => item.session === element.session)
     if (!session) return []
+    return this.streamItems(session)
+  }
+  streamItems(session) {
     const streams = [...session.streams.values()]
-    if (!streams.length) return [this.message(session.status === 'running' ? 'No streams opened yet' : 'No streams were opened', 'circle-outline', session.label)]
+    if (!streams.length) return [this.message(session.dismissedStreams.size ? 'Finished streams cleared' : 'No streams opened yet', 'circle-outline', session.label)]
     return streams.map(stream => {
       const icons = {open:'pulse', reading:'pulse', stopping:'loading~spin', stopped:'debug-stop', cancelled:'debug-stop', completed:'pass-filled', closed:'close', failed:'error', unknown:'warning'}
       const origin = stream.line > 0 ? ` · line ${stream.line}` : ''
@@ -853,8 +868,8 @@ async function stopStream(item) {
 
 async function refreshStreams(session) {
 	if (extensionState.streamRefreshActive) return
-  const sessions = session ? [session] : extensionState.streamStore.sessionsList().filter(item => item.status === 'running').map(item => item.session)
-  if (sessions.length === 0) return
+  const sessions = session ? [session] : extensionState.streamStore.activeSessions().map(item => item.session)
+  if (sessions.length === 0) { extensionState.streamsTree.refresh(); return }
 	extensionState.streamRefreshActive = true
   try {
 	await Promise.allSettled(sessions.map(async key => {
@@ -866,6 +881,11 @@ async function refreshStreams(session) {
 }
 
 function showStreamsOutput() { extensionState.streamsOutput.show(true) }
+
+function clearFinishedStreams() {
+  extensionState.streamStore.clearFinished()
+  extensionState.streamsTree.refresh()
+}
 
 function initializeParams() {
   const root = workspaceRoot()
@@ -1411,9 +1431,9 @@ function activate(context) {
   state.streamControlReady = streamsServer.start().then(address => { if (!state.disposed) state.streamControlAddress = address }).catch(error => output.appendLine(`Stream inspector unavailable: ${error.message}`))
   state.streamRefreshTimer = setInterval(() => refreshStreams().catch(() => {}), 250)
 
-  extensionState.treeView = vscode.window.createTreeView('sysonescript.project', { treeDataProvider: tree, showCollapseAll: true })
+  extensionState.treeView = vscode.window.createTreeView('sysonescript.project', { treeDataProvider: tree, showCollapseAll: false })
   context.subscriptions.push(extensionState.treeView)
-  state.streamsTreeView = vscode.window.createTreeView('sysonescript.streams', {treeDataProvider:streamsTree, showCollapseAll:true})
+  state.streamsTreeView = vscode.window.createTreeView('sysonescript.streams', {treeDataProvider:streamsTree, showCollapseAll:false})
   context.subscriptions.push(state.streamsTreeView)
   context.subscriptions.push(vscode.debug.registerDebugConfigurationProvider('sysonescript', new SysOneScriptDebugConfigurationProvider()))
 	context.subscriptions.push(vscode.debug.registerDebugAdapterDescriptorFactory('sysonescript', new SysOneScriptDebugAdapterFactory()))
@@ -1461,6 +1481,7 @@ function activate(context) {
   context.subscriptions.push(vscode.commands.registerCommand('sysonescript.stopStream', stopStream))
   context.subscriptions.push(vscode.commands.registerCommand('sysonescript.refreshStreams', () => refreshStreams()))
   context.subscriptions.push(vscode.commands.registerCommand('sysonescript.showStreamsOutput', showStreamsOutput))
+  context.subscriptions.push(vscode.commands.registerCommand('sysonescript.clearFinishedStreams', clearFinishedStreams))
   context.subscriptions.push(vscode.commands.registerCommand('sysonescript.setJevToken', setJevToken))
   context.subscriptions.push(vscode.commands.registerCommand('sysonescript.clearJevToken', clearJevToken))
   context.subscriptions.push(vscode.commands.registerCommand('sysonescript.showJevStatus', showJevStatus))

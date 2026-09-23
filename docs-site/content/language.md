@@ -256,7 +256,7 @@ and timeout ceilings. See [configuration](/docs/configuration) for strict
 validation, inheritance, explicit zero, and `sos config FILE`. Frontmatter is
 configuration, never a semantic model call. Body diagnostics retain source lines.
 
-Default limits: 100,000 execution steps, 100 Jev requests, 128 action calls deep, 16 MiB per input file/value, 100,000 nodes per evaluated value, and 64 value nesting levels. Studio adds a 30-second default deadline, 32-call ceiling, and 1 MiB output cap. These are operational limits, not an OS sandbox; run trusted scripts.
+Default limits: 100,000 execution steps, 100 Jev requests, 128 action calls deep, 16 MiB per input file/value, 100,000 nodes per evaluated value, and 64 value nesting levels. Studio adds a 30-second default deadline, 32-call ceiling, and 1 MiB output cap. The editor stream-inspection control channel is bounded to 8 MiB per frame, 16 connections, and a 2048-event lifecycle queue; overflow drops events (counted and reported) instead of blocking runs, and snapshots remain authoritative. These are operational limits, not an OS sandbox; run trusted scripts.
 
 `--record answers.json` records judgment answers and metadata with source/state/question/model hashes. `--replay answers.json` uses that ordered record without contacting Jev; changed source, state, or call order fails. It does not replay filesystem writes safely or freeze time: external inputs must still match, and writes still execute. Model questions/answers can contain sensitive content; the API key is not recorded.
 

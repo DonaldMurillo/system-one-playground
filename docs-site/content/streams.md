@@ -129,7 +129,8 @@ an item. **Stop stream** ends only that producer and lets execution continue
 below its stream loop; the ordinary run Stop action still cancels the whole run.
 Editor inspection travels a loopback control channel whose failure policy —
 environment-only authentication, bounded frames and connections, and counted
-lifecycle-event drops — is documented in [editor language services](/docs/editor).
+lifecycle-event drops — is documented in [editor language
+services](/docs/editor).
 
 Lazy stream filters/maps, merge, and stream parameters/ownership transfer are
 reserved future syntax. The shipped surface is direct sequential consumption,
@@ -148,7 +149,7 @@ canonical English wording, and a searchable technical name in `std/streams`
 (`debounce`, `throttle`, `merge`, `concat`, `switch_latest`, `exhaust`,
 `conflate`, `batch`, `distinct_consecutive`, `idle_timeout`, `take_for`).
 Technical aliases are deterministic, never create a paid interpretation request,
-and editors offer a canonical rewrite. Documentation, completion, generators, and
+and editors offer a canonical rewrite. Documentation, completion, and
 canonicalization emit the canonical form. Handler operations (`merge`,
 `concat`, `switch_latest`, `exhaust`, and `conflate`) require their canonical
 block form so the checker can inspect effects and obligation completion; a
@@ -182,6 +183,9 @@ bound with `HandleWithBoundConcurrencyCleanup`; the simpler helper uses five
 seconds and reports `StreamHandlerCleanupFailed` on expiry. `handle each ... one at a time`
 (concat-map) is the ordered, capacity-one form; the checker may recommend a
 plain `for each` loop when no owned obligation or handler lifecycle is needed.
+For HTTP request streams, cancellation also completes the failed request and
+every active sibling with a bounded service-unavailable response, even when a
+handler ignores its canceled context until the cleanup deadline.
 
 ### Canceling, finishing, and rejecting while busy
 

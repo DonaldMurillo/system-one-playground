@@ -1,15 +1,18 @@
 'use strict'
 
+const FINISHED_STREAM_STATES = new Set(['completed', 'failed', 'stopped', 'cancelled', 'closed', 'unknown'])
+
 class StreamStore {
   constructor() { this.sessions = new Map() }
   begin(session, details = {}) {
-    this.sessions.set(session, { session, ...details, status:'running', streams:new Map() })
+    this.sessions.set(session, { session, ...details, status:'running', streams:new Map(), dismissedStreams:new Set() })
     const ended = [...this.sessions.values()].filter(item => item.status === 'ended')
     for (const stale of ended.slice(0, Math.max(0, ended.length - 10))) this.sessions.delete(stale.session)
   }
   apply(session, event) {
     let current = this.sessions.get(session)
     if (!current) { this.begin(session); current = this.sessions.get(session) }
+    if (current.dismissedStreams.has(event.id)) return
     const previous = current.streams.get(event.id)
     if (previous?.updatedAt && event.updatedAt && Date.parse(event.updatedAt) < Date.parse(previous.updatedAt)) return
     current.streams.set(event.id, {...(previous || {}), ...event})
@@ -27,6 +30,20 @@ class StreamStore {
   }
   list() { return [...this.sessions.values()].flatMap(session => [...session.streams.values()].map(stream => ({...stream, session:session.session, sessionLabel:session.label, workspaceRoot:session.root, sessionStatus:session.status}))) }
   sessionsList() { return [...this.sessions.values()] }
+  activeSessions() { return this.sessionsList().filter(session => session.status === 'running') }
+  hasFinished() { return this.activeSessions().some(session => [...session.streams.values()].some(stream => FINISHED_STREAM_STATES.has(stream.state))) }
+  clearFinished() {
+    let cleared = 0
+    for (const session of this.activeSessions()) {
+      for (const [id, stream] of session.streams) {
+        if (!FINISHED_STREAM_STATES.has(stream.state)) continue
+        session.dismissedStreams.add(id)
+        session.streams.delete(id)
+        cleared++
+      }
+    }
+    return cleared
+  }
 }
 
 function canStopStream(stream) { return ['open','reading'].includes(stream?.state) }

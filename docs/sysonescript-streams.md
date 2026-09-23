@@ -141,7 +141,7 @@ command-adapter JSON-lines streams.
 
 Bounded stream transformations and concurrent handling policies are specified in
 the approved [readable stream handling and flow-control
-design](sysonescript-stream-handling-spec.md). This section documents the
+design](https://github.com/DonaldMurillo/system-one-playground/blob/main/docs/sysonescript-stream-handling-spec.md). This section documents the
 implemented runtime and editor behavior.
 
 Every policy has two surfaces with one meaning and one runtime implementation:

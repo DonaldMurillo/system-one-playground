@@ -23,5 +23,6 @@ python3 scripts/verify_export.py tmp/release /system-one-playground
 ```
 
 The fastr-docs dependency is pinned to a revision including its MIT license. The project
-is a 0.6 source preview; do not advertise cross-platform installers until those
-artifacts have been built and tested on their target platforms.
+is a 0.5 SysOneScript preview. Release CI builds and verifies cross-platform CLI
+archives and VSIX packages; native desktop installers still require separate
+target-platform validation.

@@ -91,5 +91,6 @@ under any import alias; `respond_status`, `respond_text`, `respond_json`, and
 `respond` complete it when called with the request binding. A latest-request
 cancellation leaves an already-sent response intact.
 
-See [`examples/sos/http`](../examples/sos/http) for a runnable service and
-[`sysonescript-http-spec.md`](sysonescript-http-spec.md) for the full contract.
+See the [runnable HTTP example](https://github.com/DonaldMurillo/system-one-playground/tree/main/examples/sos/http)
+and the [HTTP design specification](https://github.com/DonaldMurillo/system-one-playground/blob/main/docs/sysonescript-http-spec.md)
+for the full contract.

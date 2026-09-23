@@ -32,6 +32,23 @@ test('stream store bounds ended session history without removing active sessions
   store.begin('new-active')
   assert.equal(store.sessionsList().filter(item => item.status === 'ended').length, 10)
   assert.deepEqual(store.sessionsList().filter(item => item.status === 'running').map(item => item.session), ['active', 'new-active'])
+  assert.deepEqual(store.activeSessions().map(item => item.session), ['active', 'new-active'])
+})
+
+test('finished streams can be dismissed without returning on the next snapshot', () => {
+  const store = new StreamStore(); store.begin('run-1')
+  store.apply('run-1', {id:'finished', state:'completed', updatedAt:'2026-01-01T00:00:02Z'})
+  store.apply('run-1', {id:'live', state:'reading', updatedAt:'2026-01-01T00:00:02Z'})
+  assert.equal(store.hasFinished(), true)
+  assert.equal(store.clearFinished(), 1)
+  assert.equal(store.hasFinished(), false)
+  store.replace('run-1', [{id:'finished', state:'completed', updatedAt:'2026-01-01T00:00:03Z'}, {id:'live', state:'reading', updatedAt:'2026-01-01T00:00:03Z'}])
+  assert.deepEqual([...store.activeSessions()[0].streams.keys()], ['live'])
+  store.end('run-1', 0)
+  assert.deepEqual(store.activeSessions(), [])
+  store.begin('run-1')
+  store.apply('run-1', {id:'finished', state:'reading'})
+  assert.deepEqual([...store.activeSessions()[0].streams.keys()], ['finished'])
 })
 
 test('control server authenticates events and correlates requests', async () => {

@@ -1,6 +1,6 @@
 # Filesystem standard library
 
-Status: approved design; implementation pending
+Status: core filesystem operations integrated for 0.5; full specification and cross-platform acceptance remain in progress.
 
 This specification defines the complete filesystem surface for useful
 SysOneScript command-line programs and long-running automations. It extends the

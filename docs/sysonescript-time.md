@@ -2,7 +2,7 @@
 
 Canonical, checked wording for reading the clock, waiting, repeating work,
 calendar schedules, and deadlines. The full design is
-[sysonescript-time-spec.md](sysonescript-time-spec.md); this page is the user
+[time design specification](https://github.com/DonaldMurillo/system-one-playground/blob/main/docs/sysonescript-time-spec.md); this page is the user
 guide. Use `sos capabilities` to inspect clock and time-zone support on the
 current target.
 

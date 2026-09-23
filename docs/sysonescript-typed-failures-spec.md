@@ -22,6 +22,11 @@ recover with VALUE
 
 Existing `return VALUE` and `rethrow` forms remain valid compatibility syntax.
 Documentation, completion, and generated source prefer the idiomatic forms.
+The untyped `on failure:` handler already catches any catchable failure from
+its operation; specifying a failure kind is optional. Broader English phrasing
+and a possible `on error:` alias are design proposals in the
+[semantic toolchain plan](sysonescript-semantic-plan.md#readable-failure-sentences-proposed),
+not implemented handler syntax.
 
 ## Goals
 

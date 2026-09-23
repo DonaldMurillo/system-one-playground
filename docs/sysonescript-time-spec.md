@@ -1,6 +1,6 @@
 # Time, timers, schedules, and deadlines
 
-Status: approved design; implementation pending
+Status: core clock, timers, schedules, and deadlines integrated for 0.5; full specification and cross-platform acceptance remain in progress.
 
 This specification defines instants, durations, calendar values, waiting,
 repeating timer streams, calendar schedules, deadlines, time zones, formatting,

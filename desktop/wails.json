@@ -7,7 +7,7 @@
   "frontend:devserverWatchDir": "",
   "info": {
     "productName": "SysOneScript Studio",
-    "productVersion": "0.4.0",
+    "productVersion": "0.5.0",
     "comments": "SysOneScript editor workbench"
   }
 }
