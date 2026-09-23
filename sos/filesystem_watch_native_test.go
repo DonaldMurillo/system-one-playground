@@ -107,6 +107,33 @@ func TestWatchInfersMovesFromSnapshotIdentity(t *testing.T) {
 	}
 }
 
+func TestWatchSnapshotRetainsIdentityAfterRename(t *testing.T) {
+	root := t.TempDir()
+	from := filepath.Join(root, "origin.txt")
+	if err := os.WriteFile(from, []byte("stable identity"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	spec, err := parseTraversalSpec(Options{Dir: root}, traversalOptions{root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := scanWatchSnapshot(context.Background(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(from, filepath.Join(root, "renamed.txt")); err != nil {
+		t.Fatal(err)
+	}
+	after, err := scanWatchSnapshot(context.Background(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changes := diffWatchSnapshots(spec, before, after, time.Now())
+	if len(changes) != 1 || changes[0].kind != changeMoved || changes[0].rel != "renamed.txt" || changes[0].previous != "origin.txt" {
+		t.Fatalf("rename changes = %#v", changes)
+	}
+}
+
 // TestDiffWatchSnapshotsPairsOnlyIdenticalFiles pins the move-inference rule:
 // only a removed/created pair of regular files with identical size and
 // modification time collapses into one moved change; everything else stays a

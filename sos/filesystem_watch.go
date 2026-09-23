@@ -103,6 +103,12 @@ func scanWatchSnapshot(ctx context.Context, spec traversalSpec) (map[string]watc
 		if len(out) >= maxListEntries {
 			return nil, fileFailure("FileTraversalLimitExceeded", fmt.Sprintf("watch snapshot exceeds %d entries", maxListEntries), map[string]any{"root": spec.rootDisplay, "limit": float64(maxListEntries)})
 		}
+		// On Windows, os.FileInfo may resolve its file ID lazily from the
+		// pathname. Prime it while the old name still exists so a later
+		// rename can be paired with the new name by os.SameFile.
+		if item.kind == fileKind && item.identity != nil {
+			_ = os.SameFile(item.identity, item.identity)
+		}
 		out[item.rel] = watchEntry{kind: item.kind, size: item.size, modified: item.modified, mode: item.identity.Mode(), identity: item.identity}
 	}
 }
