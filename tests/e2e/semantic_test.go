@@ -1430,7 +1430,7 @@ func TestSemanticBuildOfflineReuse(t *testing.T) {
 	semRequireCode(t, code, 0, semOutput(stdout, stderr), "explain for build")
 
 	canary := semCanary(t)
-	bin := filepath.Join(dir, "app")
+	bin := hostExecutablePath(filepath.Join(dir, "app"))
 	buildOut, buildErr, buildCode := runCLI(t, dir, "build", script, "--output", bin, "--resolution", saved)
 	semRequireCode(t, buildCode, 0, semOutput(buildOut, buildErr), "build --resolution")
 	assertArtifact(t, bin)
@@ -1473,7 +1473,7 @@ func TestSemanticBuildResolutionMismatchWritesNothing(t *testing.T) {
 	script = semWrite(t, dir, "script.sos", changed)
 
 	canary := semCanary(t)
-	bin := filepath.Join(dir, "app")
+	bin := hostExecutablePath(filepath.Join(dir, "app"))
 	buildOut, buildErr, buildCode := runCLI(t, dir, "build", script, "--output", bin, "--resolution", saved)
 	semRequireCode(t, buildCode, 1, semOutput(buildOut, buildErr), "build --resolution mismatch")
 	semRequireDiagnosis(t, buildOut, buildErr, "build mismatch")

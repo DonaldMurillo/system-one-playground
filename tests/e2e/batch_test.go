@@ -63,7 +63,7 @@ show answers.team.value
 	if code != 0 || calls.Load() != 1 {
 		t.Fatalf("replay: %d %s %s", code, out, stderr)
 	}
-	binary := filepath.Join(dir, "batch-cli")
+	binary := hostExecutablePath(filepath.Join(dir, "batch-cli"))
 	if out, stderr, code := runCLI(t, dir, "build", script, "--output", binary); code != 0 {
 		t.Fatalf("build: %s %s", out, stderr)
 	}

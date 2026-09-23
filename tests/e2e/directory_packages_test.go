@@ -41,7 +41,7 @@ show summary
 	if code != 0 || strings.TrimSpace(out) != `"hello"` {
 		t.Fatalf("directory package and file-local aliases: exit=%d out=%q err=%s", code, out, errOut)
 	}
-	bin := filepath.Join(t.TempDir(), "report")
+	bin := hostExecutablePath(filepath.Join(t.TempDir(), "report"))
 	_, errOut, code = runCLI(t, dir, "build", entry, "-o", bin)
 	if code != 0 {
 		t.Fatalf("package build: %s", errOut)

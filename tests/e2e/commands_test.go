@@ -151,7 +151,7 @@ func ticketsAppBin(t *testing.T) string {
 			ticketsErr = err
 			return
 		}
-		ticketsBin = filepath.Join(dir, "tickets-app")
+		ticketsBin = hostExecutablePath(filepath.Join(dir, "tickets-app"))
 		_, stderr, code := runCLI(t, dir, "build", script, "--output", ticketsBin)
 		if code != 0 {
 			ticketsErr = fmt.Errorf("sos build exit %d:\n%s", code, stderr)

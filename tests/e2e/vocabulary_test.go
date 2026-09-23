@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/DonaldMurillo/system-one-playground/sos"
 	"net/url"
 	"os"
 	"os/exec"
@@ -11,7 +12,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-	"github.com/DonaldMurillo/system-one-playground/sos"
 )
 
 func TestVocabularyConfiguredImportsAndStandalone(t *testing.T) {
@@ -38,7 +38,7 @@ show payload
 			t.Fatalf("unexpected output %q", out)
 		}
 	}
-	binary := filepath.Join(t.TempDir(), "vocabulary")
+	binary := hostExecutablePath(filepath.Join(t.TempDir(), "vocabulary"))
 	if _, stderr, code := runCLI(t, dir, "build", script, "-o", binary); code != 0 {
 		t.Fatalf("build: %s", stderr)
 	}

@@ -1,13 +1,14 @@
 package e2e
 
 import (
-	"github.com/DonaldMurillo/system-one-playground/sos"
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/DonaldMurillo/system-one-playground/sos"
 )
 
 func TestSysoneUpdateCheckUsesPublishedCLIReleases(t *testing.T) {
@@ -17,7 +18,7 @@ func TestSysoneUpdateCheckUsesPublishedCLIReleases(t *testing.T) {
 	}))
 	defer server.Close()
 
-	bin := filepath.Join(t.TempDir(), "sysone")
+	bin := hostExecutablePath(filepath.Join(t.TempDir(), "sysone"))
 	if output, err := exec.Command("go", "build", "-o", bin, "github.com/DonaldMurillo/system-one-playground/cmd/sysone").CombinedOutput(); err != nil {
 		t.Fatalf("build sysone: %v %s", err, output)
 	}

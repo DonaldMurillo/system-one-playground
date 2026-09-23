@@ -18,13 +18,20 @@ import (
 
 var sosBin string
 
+func hostExecutablePath(path string) string {
+	if runtime.GOOS == "windows" {
+		return path + ".exe"
+	}
+	return path
+}
+
 func TestMain(m *testing.M) {
 	tmp, err := os.MkdirTemp("", "sos-e2e-*")
 	if err != nil {
 		os.Stderr.WriteString("e2e: " + err.Error() + "\n")
 		os.Exit(1)
 	}
-	sosBin = filepath.Join(tmp, "sos")
+	sosBin = hostExecutablePath(filepath.Join(tmp, "sos"))
 	if out, err := exec.Command("go", "build", "-o", sosBin, "github.com/DonaldMurillo/system-one-playground/cmd/sos").CombinedOutput(); err != nil {
 		os.Stderr.WriteString("e2e: building CLI:\n" + string(out))
 		os.RemoveAll(tmp)
@@ -199,7 +206,7 @@ definition = "modules/echo/module.sos.toml"
 	if strings.Contains(stderr, "sos: trace") {
 		t.Fatalf("external run leaked structured trace telemetry into stderr: %q", stderr)
 	}
-	built := filepath.Join(dir, "dist", "external-app")
+	built := hostExecutablePath(filepath.Join(dir, "dist", "external-app"))
 	_, stderr, code = runCLI(t, dir, "build", script, "--output", built)
 	if code != 0 {
 		t.Fatalf("external build exit=%d stderr=%q", code, stderr)
@@ -442,6 +449,9 @@ type="text"
 }
 
 func TestExternalBundledDistributionIsLockedAndRelocatable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the bundled Python fixture uses a POSIX executable wrapper")
+	}
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 is required for the bundled fixture")
 	}
@@ -507,7 +517,7 @@ type="number"
 		if code != 0 {
 			t.Fatalf("bundle build %s exit=%d stderr=%q", name, code, stderr)
 		}
-		output, err := exec.Command(filepath.Join(bundle, "app")).CombinedOutput()
+		output, err := exec.Command(hostExecutablePath(filepath.Join(bundle, "app"))).CombinedOutput()
 		if err != nil || strings.TrimSpace(string(output)) == "" {
 			t.Fatalf("bundle run output=%q err=%v", output, err)
 		}
@@ -523,11 +533,11 @@ type="number"
 	if string(first) != string(second) {
 		t.Fatalf("bundle manifests differ:\n%s\n%s", first, second)
 	}
-	firstExecutable, err := os.ReadFile(filepath.Join(dir, "bundle-a", "app", "app"))
+	firstExecutable, err := os.ReadFile(hostExecutablePath(filepath.Join(dir, "bundle-a", "app", "app")))
 	if err != nil {
 		t.Fatal(err)
 	}
-	secondExecutable, err := os.ReadFile(filepath.Join(dir, "bundle-b", "app", "app"))
+	secondExecutable, err := os.ReadFile(hostExecutablePath(filepath.Join(dir, "bundle-b", "app", "app")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -537,7 +547,7 @@ type="number"
 	if !strings.Contains(string(first), `"sha256": "sha256:`+digest+`"`) {
 		t.Fatalf("manifest missing checksum: %s", first)
 	}
-	for _, required := range []string{`"schema": 1`, `"entrypoint": "app"`, `"pluginProtocol": "sos-plugin/1"`, `"distribution": "bundled"`, `"capabilities"`} {
+	for _, required := range []string{`"schema": 1`, `"entrypoint": "` + filepath.Base(hostExecutablePath("app")) + `"`, `"pluginProtocol": "sos-plugin/1"`, `"distribution": "bundled"`, `"capabilities"`} {
 		if !strings.Contains(string(first), required) {
 			t.Fatalf("manifest missing %s: %s", required, first)
 		}
@@ -548,7 +558,7 @@ type="number"
 	if err := os.WriteFile(manifestPath, bytes.Replace(first, lockedChecksum, brokenChecksum, 1), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	output, err := exec.Command(filepath.Join(dir, "bundle-a", "app", "app")).CombinedOutput()
+	output, err := exec.Command(hostExecutablePath(filepath.Join(dir, "bundle-a", "app", "app"))).CombinedOutput()
 	if err == nil || !strings.Contains(string(output), "not locked by manifest") {
 		t.Fatalf("modified manifest output=%q err=%v", output, err)
 	}
@@ -560,7 +570,7 @@ type="number"
 	if err := os.WriteFile(tampered, append(fixture, []byte("\n# tampered\n")...), 0755); err != nil {
 		t.Fatal(err)
 	}
-	output, err = exec.Command(filepath.Join(dir, "bundle-a", "app", "app")).CombinedOutput()
+	output, err = exec.Command(hostExecutablePath(filepath.Join(dir, "bundle-a", "app", "app"))).CombinedOutput()
 	if err == nil || !strings.Contains(string(output), "bundled artifact checksum mismatch") {
 		t.Fatalf("tampered bundle output=%q err=%v", output, err)
 	}
@@ -655,7 +665,7 @@ func TestRunScriptUnknownOption(t *testing.T) {
 func TestBuildNativeStandalone(t *testing.T) {
 	dir := t.TempDir()
 	script := writeScript(t, dir, "total.sos", simpleScript)
-	output := filepath.Join(dir, "build", "total")
+	output := hostExecutablePath(filepath.Join(dir, "build", "total"))
 	_, stderr, code := runCLI(t, dir, "build", script, "--output", output)
 	if code != 0 {
 		t.Fatalf("build exit = %d; stderr:\n%s", code, stderr)
@@ -684,7 +694,7 @@ to fetch with city as text returning text may fail with InvalidCity:
     city from city
 call fetch with "" called value
 `)
-	output := filepath.Join(dir, "build", "failure")
+	output := hostExecutablePath(filepath.Join(dir, "build", "failure"))
 	_, stderr, code := runCLI(t, dir, "build", script, "--output", output)
 	if code != 0 {
 		t.Fatalf("build exit = %d; stderr:\n%s", code, stderr)

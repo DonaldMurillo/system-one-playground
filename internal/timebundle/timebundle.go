@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -129,7 +130,7 @@ func acceptZone(name string) bool {
 }
 
 // Default locates a time-zone database in this order: $SOS_TZDATA (a
-// zoneinfo.zip or a zoneinfo directory), $GOROOT/lib/time/zoneinfo.zip,
+// zoneinfo.zip or a zoneinfo directory), the Go toolchain's zoneinfo.zip,
 // /usr/share/zoneinfo, /usr/lib/timezone/zoneinfo, then /etc/zoneinfo. When
 // none is present it falls back to the Go toolchain's embedded database,
 // which can be described but not digested.
@@ -141,7 +142,11 @@ func Default() (*Bundle, error) {
 			return nil, err
 		}
 	}
-	if root := os.Getenv("GOROOT"); root != "" {
+	root := os.Getenv("GOROOT")
+	if root == "" {
+		root = runtime.GOROOT()
+	}
+	if root != "" {
 		if b, err := FromPath(filepath.Join(root, "lib", "time", "zoneinfo.zip")); err == nil {
 			// The toolchain's zoneinfo.zip carries no version marker but is
 			// built from the same tzdata as the embedded database.

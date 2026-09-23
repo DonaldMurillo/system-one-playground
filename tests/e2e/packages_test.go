@@ -270,7 +270,7 @@ call json.encode with result called encoded
 show encoded
 `,
 	})
-	output := filepath.Join(dir, "dist", "greeter")
+	output := hostExecutablePath(filepath.Join(dir, "dist", "greeter"))
 	if _, stderr, code := runCLI(t, dir, "build", filepath.Join(dir, "main.sos"), "--output", output); code != 0 {
 		t.Fatalf("build exit = %d; stderr:\n%s", code, stderr)
 	}

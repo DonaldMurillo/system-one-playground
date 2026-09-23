@@ -13,7 +13,7 @@ import (
 
 func TestSysoneProjectCLIAndMCP(t *testing.T) {
 	t.Setenv("SOS_CONFIG_HOME", t.TempDir())
-	bin := filepath.Join(filepath.Dir(sosBin), "sysone")
+	bin := hostExecutablePath(filepath.Join(filepath.Dir(sosBin), "sysone"))
 	if output, err := exec.Command("go", "build", "-o", bin, "github.com/DonaldMurillo/system-one-playground/cmd/sysone").CombinedOutput(); err != nil {
 		t.Fatalf("build sysone: %v %s", err, output)
 	}
@@ -68,7 +68,7 @@ func TestSysoneProjectCLIAndMCP(t *testing.T) {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("language check: %v %s", err, out)
 	}
-	built := filepath.Join(t.TempDir(), "sysone-program")
+	built := hostExecutablePath(filepath.Join(t.TempDir(), "sysone-program"))
 	cmd = exec.Command(bin, "--project", root, "build", "src/main.sos", "--output", built)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("language build: %v %s", err, out)
@@ -168,15 +168,16 @@ func TestSysoneProjectCLIAndMCP(t *testing.T) {
 	// Exercise saved nested source + relative imports through the real MCP build.
 	call(16, "project_write", map[string]any{"path": "src/lib.sos", "revision": "", "source": "package words\nexport clean\nto clean with value:\n  return value\n"}, false)
 	call(17, "project_write", map[string]any{"path": "src/cli.sos", "revision": "", "source": "import \"./lib.sos\" as words\nwords.clean \"compiled project\" called result\nshow result\n"}, false)
-	r = call(18, "build", map[string]any{"path": "src/cli.sos", "output": "mcp-built"}, false)
+	mcpOutput := filepath.Base(hostExecutablePath("mcp-built"))
+	r = call(18, "build", map[string]any{"path": "src/cli.sos", "output": mcpOutput}, false)
 	if r["ok"] != true {
 		t.Fatal(r)
 	}
-	call(19, "build", map[string]any{"path": "src/cli.sos", "output": "mcp-built"}, true)
+	call(19, "build", map[string]any{"path": "src/cli.sos", "output": mcpOutput}, true)
 	if err := os.Remove(filepath.Join(root, "src/lib.sos")); err != nil {
 		t.Fatal(err)
 	}
-	builtCommand := exec.Command(filepath.Join(root, "mcp-built"))
+	builtCommand := exec.Command(hostExecutablePath(filepath.Join(root, "mcp-built")))
 	builtCommand.Dir = t.TempDir()
 	if out, err := builtCommand.CombinedOutput(); err != nil || strings.TrimSpace(string(out)) != "compiled project" {
 		t.Fatalf("MCP standalone graph: %v %s", err, out)

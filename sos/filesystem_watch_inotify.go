@@ -48,6 +48,11 @@ func newNativeWatchBackend(spec traversalSpec, _ time.Duration, snapshot map[str
 		_ = syscall.Close(fd)
 		return nil, fileOpError(err, spec.rootDisplay, traverseOp)
 	}
+	if err := syscall.EpollCtl(epoll, syscall.EPOLL_CTL_ADD, fd, &syscall.EpollEvent{Events: syscall.EPOLLIN, Fd: int32(fd)}); err != nil {
+		_ = syscall.Close(epoll)
+		_ = syscall.Close(fd)
+		return nil, fileOpError(err, spec.rootDisplay, traverseOp)
+	}
 	backend := &inotifyBackend{
 		fd:         fd,
 		epoll:      epoll,

@@ -92,14 +92,14 @@ func TestBuildUsesConsistentDevelopmentSnapshot(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	cli := filepath.Join(clone, "cli")
+	cli := hostExecutablePath(filepath.Join(clone, "cli"))
 	build := exec.Command("go", "build", "-o", cli, "./cmd/sos")
 	build.Dir = clone
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("CLI build: %v %s", err, out)
 	}
 	script := writeScript(t, clone, "test.sos", "show 5\n")
-	binary := filepath.Join(clone, "app")
+	binary := hostExecutablePath(filepath.Join(clone, "app"))
 	build = exec.Command(cli, "build", script, "--output", binary)
 	build.Dir = clone
 	if out, err := build.CombinedOutput(); err != nil {

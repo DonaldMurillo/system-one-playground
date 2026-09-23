@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -18,7 +19,7 @@ func realZones(t *testing.T, names ...string) []byte {
 	t.Helper()
 	root := os.Getenv("GOROOT")
 	if root == "" {
-		t.Skip("GOROOT not set")
+		root = runtime.GOROOT()
 	}
 	src, err := os.ReadFile(filepath.Join(root, "lib", "time", "zoneinfo.zip"))
 	if err != nil {
@@ -61,6 +62,22 @@ func realZones(t *testing.T, names ...string) []byte {
 		t.Fatal(err)
 	}
 	return out.Bytes()
+}
+
+func TestDefaultUsesToolchainZoneInfoWithoutGOROOTEnv(t *testing.T) {
+	path := filepath.Join(runtime.GOROOT(), "lib", "time", "zoneinfo.zip")
+	if _, err := os.Stat(path); err != nil {
+		t.Skip("toolchain zoneinfo.zip unavailable")
+	}
+	t.Setenv("GOROOT", "")
+	t.Setenv("SOS_TZDATA", "")
+	b, err := Default()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !b.Manifest().Complete || b.Source != path {
+		t.Fatalf("toolchain zoneinfo not selected: %+v", b.Manifest())
+	}
 }
 
 func bundleFromZones(t *testing.T, names ...string) *Bundle {

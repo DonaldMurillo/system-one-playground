@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -146,6 +147,9 @@ func TestExternalStdioExampleCoversProjectWorkflow(t *testing.T) {
 }
 
 func TestExternalBundledExampleBuildsAndRuns(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the checked-in portable shell artifact targets macOS and Linux")
+	}
 	dir := filepath.Join(examplesRoot(t), "external-bundled")
 	stdout, stderr, code := runCLI(t, dir, "run", "main.sos")
 	if code != 0 || !strings.Contains(stdout, "hello from a checksummed bundle") {
@@ -157,7 +161,7 @@ func TestExternalBundledExampleBuildsAndRuns(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("bundle build exit=%d stderr=%q", code, stderr)
 	}
-	result, err := exec.Command(filepath.Join(output, "example-app")).CombinedOutput()
+	result, err := exec.Command(hostExecutablePath(filepath.Join(output, "example-app"))).CombinedOutput()
 	if err != nil || !strings.Contains(string(result), "hello from a checksummed bundle") {
 		t.Fatalf("bundle output=%q err=%v", result, err)
 	}

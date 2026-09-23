@@ -628,7 +628,7 @@ func TestBuildNativeKeepsHostCeilings(t *testing.T) {
 	// build working directory's ancestors, so callers pass the directory whose
 	// project config must be captured.
 	buildAway := func(t *testing.T, cwd, script string) string {
-		bin := filepath.Join(t.TempDir(), "app")
+		bin := hostExecutablePath(filepath.Join(t.TempDir(), "app"))
 		_, stderr, code := runCLI(t, cwd, "build", script, "--output", bin)
 		if code != 0 {
 			t.Fatalf("build exit = %d, want 0; stderr:\n%s", code, stderr)

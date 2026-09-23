@@ -28,7 +28,7 @@ func TestNativeEnvironmentBudgetBounds(t *testing.T) {
 	t.Setenv("TYPESAFE_API_KEY", "")
 	dir := t.TempDir()
 	script := writeScript(t, dir, "bounded.sos", "judge \"hello\" by jev \"Urgent\" called answer\n")
-	binary := filepath.Join(dir, "bounded")
+	binary := hostExecutablePath(filepath.Join(dir, "bounded"))
 	_, err, code := runCLI(t, dir, "build", script, "--output", binary)
 	if code != 0 {
 		t.Fatal(err)
