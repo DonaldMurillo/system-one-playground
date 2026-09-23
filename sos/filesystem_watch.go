@@ -262,9 +262,11 @@ func watchTargets(spec traversalSpec, snapshot map[string]watchEntry) map[string
 
 // fileWatchSource is one independently owned recursive watcher stream.
 type fileWatchSource struct {
-	spec   traversalSpec
-	settle time.Duration
-	scanMu sync.Mutex // an overflow receipt waits for any in-flight reconciliation
+	spec     traversalSpec
+	settle   time.Duration
+	scanMu   sync.Mutex // serializes reconciliation and an overflow baseline refresh
+	backend  nativeWatchBackend
+	previous map[string]watchEntry
 
 	mu          sync.Mutex
 	queue       chan []watchChange
@@ -311,12 +313,14 @@ func newFileWatchSource(parent context.Context, spec traversalSpec, interval tim
 	source := &fileWatchSource{
 		spec:      spec,
 		settle:    settle,
+		backend:   backend,
+		previous:  previous,
 		queue:     make(chan []watchChange, queueBatches),
 		stop:      cancel,
 		stoppedCh: make(chan struct{}),
 		endCh:     make(chan struct{}),
 	}
-	go source.watch(ctx, backend, previous)
+	go source.watch(ctx, backend)
 	return source, nil
 }
 
@@ -331,9 +335,13 @@ func (s *fileWatchSource) signalEnd() {
 // their own. A scan that fails terminally ends the stream with that typed
 // failure; an overflowing kernel queue is reported through the same
 // overflowed change a slow consumer produces.
-func (s *fileWatchSource) watch(ctx context.Context, backend nativeWatchBackend, previous map[string]watchEntry) {
+func (s *fileWatchSource) watch(ctx context.Context, backend nativeWatchBackend) {
 	defer close(s.stoppedCh)
-	defer backend.close()
+	defer func() {
+		s.scanMu.Lock()
+		defer s.scanMu.Unlock()
+		_ = backend.close()
+	}()
 	for {
 		var trigger nativeWatchEvent
 		select {
@@ -378,8 +386,8 @@ func (s *fileWatchSource) watch(ctx context.Context, backend nativeWatchBackend,
 			s.signalEnd()
 			return
 		}
-		changes := diffWatchSnapshots(s.spec, previous, current, time.Now())
-		previous = current
+		changes := diffWatchSnapshots(s.spec, s.previous, current, time.Now())
+		s.previous = current
 		if err := backend.sync(s.spec, current); err != nil {
 			s.mu.Lock()
 			s.overflow = true
@@ -460,6 +468,23 @@ func (s *fileWatchSource) next(ctx context.Context) (any, bool, error) {
 				s.scanMu.Unlock()
 				continue
 			}
+			s.mu.Unlock()
+			// A reported overflow is a new observation boundary. Rebase the
+			// producer before returning it: notifications already in flight may
+			// describe pre-overflow changes, and a tiny queue can otherwise fill
+			// with those stale changes before the caller creates its next file.
+			if s.backend != nil {
+				current, err := scanWatchSnapshot(ctx, s.spec)
+				if err == nil {
+					err = s.backend.sync(s.spec, current)
+				}
+				if err != nil {
+					s.scanMu.Unlock()
+					return nil, false, err
+				}
+				s.previous = current
+			}
+			s.mu.Lock()
 			// An overflow invalidates every earlier observation, including a
 			// batch still occupying the queue. The consumer must rescan, and
 			// freeing the queue lets future changes arrive after that rescan.

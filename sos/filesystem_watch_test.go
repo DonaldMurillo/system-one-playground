@@ -12,6 +12,15 @@ import (
 
 const watchTestInterval = 12 * time.Millisecond
 
+type recordingWatchBackend struct{ synced map[string]watchEntry }
+
+func (b *recordingWatchBackend) events() <-chan nativeWatchEvent { return nil }
+func (b *recordingWatchBackend) sync(_ traversalSpec, snapshot map[string]watchEntry) error {
+	b.synced = snapshot
+	return nil
+}
+func (b *recordingWatchBackend) close() error { return nil }
+
 func TestFileWatchMetricsDoNotConsumeQueuedChanges(t *testing.T) {
 	source := &fileWatchSource{queue: make(chan []watchChange, 2), queuedItems: 3, pending: []watchChange{{rel: "pending"}}}
 	source.queue <- []watchChange{{rel: "one"}, {rel: "two"}}
@@ -67,6 +76,38 @@ func TestFileWatchOverflowWaitsForInFlightReconciliation(t *testing.T) {
 	case <-delivered:
 	case <-time.After(time.Second):
 		t.Fatal("overflow did not arrive after reconciliation completed")
+	}
+}
+
+func TestFileWatchOverflowRebasesProducerBeforeReturning(t *testing.T) {
+	root := t.TempDir()
+	spec, err := parseTraversalSpec(Options{Dir: root}, traversalOptions{root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := &recordingWatchBackend{}
+	source := &fileWatchSource{
+		spec: spec, backend: backend, previous: map[string]watchEntry{"removed.txt": {kind: fileKind}},
+		queue: make(chan []watchChange, 1), overflow: true, queuedItems: 1,
+	}
+	source.queue <- []watchChange{{rel: "stale", kind: changeRemoved}}
+	item, more, err := source.next(context.Background())
+	if err != nil || !more || item.(map[string]any)["kind"] != changeOverflowed {
+		t.Fatalf("overflow = %#v, %v, %v", item, more, err)
+	}
+	if len(source.previous) != 0 || backend.synced == nil || len(source.queue) != 0 {
+		t.Fatalf("overflow retained stale state: previous=%v synced=%v queued=%d", source.previous, backend.synced, len(source.queue))
+	}
+	if err := os.WriteFile(filepath.Join(root, "after.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	current, err := scanWatchSnapshot(context.Background(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changes := diffWatchSnapshots(spec, source.previous, current, time.Now())
+	if len(changes) != 1 || changes[0].kind != changeCreated || changes[0].rel != "after.txt" {
+		t.Fatalf("post-overflow diff = %#v", changes)
 	}
 }
 
