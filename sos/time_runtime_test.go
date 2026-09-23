@@ -25,13 +25,26 @@ func runWithVirtualClock(t *testing.T, source string, clock *VirtualClock) (<-ch
 
 func advanceUntilDone(t *testing.T, clock *VirtualClock, done <-chan error, step time.Duration, attempts int) error {
 	t.Helper()
+	// The interpreter starts on another goroutine. Do not advance past its
+	// deadline before it has actually registered the first timer: race builds
+	// on shared CI runners can take longer than the old 10 ms total allowance.
+	ready := time.NewTimer(2 * time.Second)
+	defer ready.Stop()
+	for clock.timerCount() == 0 {
+		select {
+		case err := <-done:
+			return err
+		case <-ready.C:
+			t.Fatal("virtual-time run did not register a timer")
+		case <-time.After(time.Millisecond):
+		}
+	}
 	for range attempts {
 		clock.Advance(step)
 		select {
 		case err := <-done:
 			return err
-		default:
-			time.Sleep(time.Millisecond)
+		case <-time.After(50 * time.Millisecond):
 		}
 	}
 	t.Fatal("virtual-time run did not complete")
