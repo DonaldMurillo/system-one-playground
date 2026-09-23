@@ -31,6 +31,8 @@ jobs:
       - if: runner.os == 'Linux'
         run: pnpm --dir studio install --frozen-lockfile
       - if: runner.os == 'Linux'
+        run: pnpm --dir vscode install --frozen-lockfile
+      - if: runner.os == 'Linux'
         run: pnpm --dir studio test
       - if: runner.os == 'Linux'
         run: pnpm --dir studio run lint
